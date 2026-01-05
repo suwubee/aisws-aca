@@ -1,0 +1,130 @@
+package main
+
+import (
+	"embed"
+	"io/fs"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/ai-coding-assistant/api"
+	"github.com/ai-coding-assistant/config"
+	"github.com/ai-coding-assistant/middleware"
+	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/terminal"
+	"github.com/ai-coding-assistant/utils"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/websocket/v2"
+	"go.uber.org/zap"
+)
+
+//go:embed static/*
+var staticFiles embed.FS
+
+func main() {
+	// 加载配置
+	cfg := config.Load()
+
+	// 初始化日志
+	if err := utils.InitLogger(cfg.Log.Level, cfg.Log.File); err != nil {
+		log.Fatal("Failed to initialize logger:", err)
+	}
+
+	// 确保数据目录存在
+	dataDir := filepath.Dir(cfg.Database.DSN)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		utils.Error("Failed to create data directory", zap.Error(err))
+		log.Fatal(err)
+	}
+
+	// 初始化数据库
+	if err := model.InitDB(cfg.Database.DSN); err != nil {
+		utils.Error("Failed to initialize database", zap.Error(err))
+		log.Fatal(err)
+	}
+	utils.Info("Database initialized", zap.String("dsn", cfg.Database.DSN))
+
+	// 创建终端管理器
+	terminalManager := terminal.NewManager(&cfg.Terminal)
+
+	// 创建Fiber应用
+	app := fiber.New(fiber.Config{
+		AppName:      "AI Coding Assistant",
+		ServerHeader: "ACA",
+	})
+
+	// 中间件
+	app.Use(recover.New())
+	app.Use(logger.New(logger.Config{
+		Format: "${time} ${status} ${method} ${path} ${latency}\n",
+	}))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
+	}))
+
+	// WebSocket升级检查
+	app.Use("/api/terminal/ws", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			c.Locals("allowed", true)
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	})
+
+	// API路由组
+	apiGroup := app.Group("/api")
+
+	// 认证API（不需要认证）
+	authController := api.NewAuthController(&cfg.Auth)
+	authController.RegisterRoutes(app)
+
+	// 需要认证的API
+	apiGroup.Use(middleware.AuthMiddleware(&cfg.Auth))
+
+	// 终端API
+	terminalController := api.NewTerminalController(terminalManager)
+	terminalController.RegisterRoutes(app)
+
+	// 任务API
+	taskController := api.NewTaskController()
+	taskController.RegisterRoutes(app)
+
+	// 自动化API（预留）
+	automationController := api.NewAutomationController()
+	automationController.RegisterRoutes(app)
+
+	// 健康检查
+	app.Get("/api/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"version": "1.0.0",
+		})
+	})
+
+	// 静态文件服务
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err == nil {
+		app.Use("/", filesystem.New(filesystem.Config{
+			Root:         http.FS(staticFS),
+			Index:        "index.html",
+			NotFoundFile: "index.html",
+		}))
+	}
+
+	// 启动服务器
+	addr := cfg.Server.Host + ":" + cfg.Server.Port
+	utils.Info("Starting server", zap.String("address", addr))
+	log.Printf("Server starting at http://%s\n", addr)
+
+	if err := app.Listen(addr); err != nil {
+		utils.Error("Server error", zap.Error(err))
+		log.Fatal(err)
+	}
+}

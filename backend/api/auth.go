@@ -1,0 +1,116 @@
+package api
+
+import (
+	"time"
+
+	"github.com/ai-coding-assistant/config"
+	"github.com/ai-coding-assistant/model"
+	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type AuthController struct {
+	config *config.AuthConfig
+}
+
+func NewAuthController(cfg *config.AuthConfig) *AuthController {
+	return &AuthController{config: cfg}
+}
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
+	User      struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	} `json:"user"`
+}
+
+// Login 用户登录
+func (ctrl *AuthController) Login(c *fiber.Ctx) error {
+	var req LoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// 验证用户名密码（单用户模式）
+	if req.Username != ctrl.config.Username || req.Password != ctrl.config.Password {
+		return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
+	}
+
+	// 查找或创建用户
+	var user model.User
+	result := model.DB.Where("username = ?", req.Username).First(&user)
+	if result.Error != nil {
+		// 创建用户
+		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		user = model.User{
+			ID:           uuid.New().String(),
+			Username:     req.Username,
+			PasswordHash: string(hashedPassword),
+		}
+		model.DB.Create(&user)
+	}
+
+	// 生成JWT Token
+	expiresAt := time.Now().Add(ctrl.config.JWTExpiration)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":      user.ID,
+		"username": user.Username,
+		"exp":      expiresAt.Unix(),
+		"iat":      time.Now().Unix(),
+	})
+
+	tokenString, err := token.SignedString([]byte(ctrl.config.JWTSecret))
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate token"})
+	}
+
+	return c.JSON(LoginResponse{
+		Token:     tokenString,
+		ExpiresAt: expiresAt.Unix(),
+		User: struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+		}{
+			ID:       user.ID,
+			Username: user.Username,
+		},
+	})
+}
+
+// Logout 用户登出
+func (ctrl *AuthController) Logout(c *fiber.Ctx) error {
+	// JWT是无状态的，客户端只需删除token即可
+	return c.JSON(fiber.Map{"message": "Logged out successfully"})
+}
+
+// Me 获取当前用户
+func (ctrl *AuthController) Me(c *fiber.Ctx) error {
+	userID := c.Locals("userID")
+	username := c.Locals("username")
+
+	if userID == nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
+	}
+
+	return c.JSON(fiber.Map{
+		"id":       userID,
+		"username": username,
+	})
+}
+
+// RegisterRoutes 注册路由
+func (ctrl *AuthController) RegisterRoutes(app *fiber.App) {
+	auth := app.Group("/api/auth")
+	auth.Post("/login", ctrl.Login)
+	auth.Post("/logout", ctrl.Logout)
+	auth.Get("/me", ctrl.Me)
+}

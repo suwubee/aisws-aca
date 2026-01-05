@@ -1,0 +1,393 @@
+package terminal
+
+import (
+	"encoding/base64"
+	"io"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+	"unsafe"
+
+	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/utils"
+	"github.com/creack/pty"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+)
+
+// StreamEventType 流事件类型
+type StreamEventType string
+
+const (
+	StreamEventData     StreamEventType = "data"
+	StreamEventMetadata StreamEventType = "metadata"
+	StreamEventExit     StreamEventType = "exit"
+)
+
+// StreamEvent 流事件
+type StreamEvent struct {
+	Type     StreamEventType        `json:"type"`
+	Data     string                 `json:"data,omitempty"`
+	Metadata *SessionMetadata       `json:"metadata,omitempty"`
+	ExitCode int                    `json:"exit_code,omitempty"`
+	Message  string                 `json:"message,omitempty"`
+}
+
+// SessionMetadata 会话元数据
+type SessionMetadata struct {
+	Title          string       `json:"title"`
+	PID            int          `json:"pid"`
+	Status         string       `json:"status"`
+	RunningCommand string       `json:"running_command,omitempty"`
+	TaskID         *string      `json:"task_id,omitempty"`
+	AIAssistant    *AIAssistant `json:"ai_assistant,omitempty"`
+}
+
+// AIAssistant AI助手信息
+type AIAssistant struct {
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name"`
+	State          string    `json:"state"` // unknown, waiting_input, working, waiting_approval
+	StateUpdatedAt time.Time `json:"state_updated_at"`
+	Detected       bool      `json:"detected"`
+}
+
+// Session 终端会话
+type Session struct {
+	id          string
+	title       string
+	taskID      *string
+	shell       string
+	pty         *os.File
+	cmd         *exec.Cmd
+	status      string
+	subscribers map[string]chan StreamEvent
+	subMutex    sync.RWMutex
+	scrollback  *ScrollbackBuffer
+	metadata    *SessionMetadata
+	metaMutex   sync.RWMutex
+	aiAssistant *AIAssistant
+	createdAt   time.Time
+	closedAt    *time.Time
+	done        chan struct{}
+}
+
+// ScrollbackBuffer 滚动缓冲区
+type ScrollbackBuffer struct {
+	data     []byte
+	maxSize  int
+	mutex    sync.RWMutex
+}
+
+func NewScrollbackBuffer(maxSize int) *ScrollbackBuffer {
+	return &ScrollbackBuffer{
+		data:    make([]byte, 0, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+func (b *ScrollbackBuffer) Write(p []byte) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	b.data = append(b.data, p...)
+	if len(b.data) > b.maxSize {
+		// 截断前面的数据
+		b.data = b.data[len(b.data)-b.maxSize:]
+	}
+}
+
+func (b *ScrollbackBuffer) Read() []byte {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	result := make([]byte, len(b.data))
+	copy(result, b.data)
+	return result
+}
+
+// NewSession 创建新会话
+func NewSession(id, shell string, scrollbackSize int) *Session {
+	return &Session{
+		id:          id,
+		shell:       shell,
+		status:      "running",
+		subscribers: make(map[string]chan StreamEvent),
+		scrollback:  NewScrollbackBuffer(scrollbackSize),
+		createdAt:   time.Now(),
+		done:        make(chan struct{}),
+		metadata: &SessionMetadata{
+			Title:  "Terminal",
+			Status: "running",
+		},
+	}
+}
+
+// Start 启动会话
+func (s *Session) Start() error {
+	cmd := exec.Command(s.shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return err
+	}
+
+	s.pty = ptmx
+	s.cmd = cmd
+	s.metadata.PID = cmd.Process.Pid
+
+	// 启动PTY读取goroutine
+	go s.readPTY()
+
+	// 启动进程等待goroutine
+	go s.wait()
+
+	return nil
+}
+
+// readPTY 读取PTY输出
+func (s *Session) readPTY() {
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-s.done:
+			return
+		default:
+			n, err := s.pty.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					utils.Debug("PTY read error", zap.Error(err))
+				}
+				return
+			}
+
+			if n > 0 {
+				data := buf[:n]
+				s.scrollback.Write(data)
+
+				// 广播数据事件
+				s.broadcast(StreamEvent{
+					Type: StreamEventData,
+					Data: base64.StdEncoding.EncodeToString(data),
+				})
+
+				// 检测AI助手状态（简化实现）
+				s.detectAIAssistant(data)
+			}
+		}
+	}
+}
+
+// wait 等待进程退出
+func (s *Session) wait() {
+	if s.cmd != nil && s.cmd.Process != nil {
+		state, _ := s.cmd.Process.Wait()
+		exitCode := 0
+		if state != nil {
+			exitCode = state.ExitCode()
+		}
+
+		s.metaMutex.Lock()
+		s.status = "exited"
+		s.metadata.Status = "exited"
+		now := time.Now()
+		s.closedAt = &now
+		s.metaMutex.Unlock()
+
+		s.broadcast(StreamEvent{
+			Type:     StreamEventExit,
+			ExitCode: exitCode,
+			Message:  "Process exited",
+		})
+
+		close(s.done)
+	}
+}
+
+// detectAIAssistant 检测AI助手状态（简化实现）
+func (s *Session) detectAIAssistant(data []byte) {
+	output := string(data)
+
+	// 简单检测Claude Code
+	if containsAny(output, []string{"claude", "Claude Code", "anthropic"}) {
+		s.metaMutex.Lock()
+		if s.aiAssistant == nil {
+			s.aiAssistant = &AIAssistant{
+				Type:        "claude-code",
+				DisplayName: "Claude Code",
+				State:       "working",
+				Detected:    true,
+			}
+		}
+		s.aiAssistant.StateUpdatedAt = time.Now()
+
+		// 检测状态
+		if containsAny(output, []string{"(yes/no)", "(y/n)", "Allow?", "Approve?"}) {
+			s.aiAssistant.State = "waiting_approval"
+		} else if containsAny(output, []string{"> ", "? ", "Enter"}) {
+			s.aiAssistant.State = "waiting_input"
+		} else {
+			s.aiAssistant.State = "working"
+		}
+
+		s.metadata.AIAssistant = s.aiAssistant
+		s.metaMutex.Unlock()
+
+		// 广播元数据更新
+		s.broadcastMetadata()
+	}
+}
+
+func containsAny(s string, substrs []string) bool {
+	for _, substr := range substrs {
+		if len(s) >= len(substr) {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Subscribe 订阅会话事件
+func (s *Session) Subscribe() (string, chan StreamEvent) {
+	s.subMutex.Lock()
+	defer s.subMutex.Unlock()
+
+	id := uuid.New().String()
+	ch := make(chan StreamEvent, 256)
+	s.subscribers[id] = ch
+	return id, ch
+}
+
+// Unsubscribe 取消订阅
+func (s *Session) Unsubscribe(id string) {
+	s.subMutex.Lock()
+	defer s.subMutex.Unlock()
+
+	if ch, ok := s.subscribers[id]; ok {
+		close(ch)
+		delete(s.subscribers, id)
+	}
+}
+
+// broadcast 广播事件
+func (s *Session) broadcast(event StreamEvent) {
+	s.subMutex.RLock()
+	defer s.subMutex.RUnlock()
+
+	for _, ch := range s.subscribers {
+		select {
+		case ch <- event:
+		default:
+			// 通道已满，丢弃事件
+		}
+	}
+}
+
+// broadcastMetadata 广播元数据
+func (s *Session) broadcastMetadata() {
+	s.metaMutex.RLock()
+	metadata := *s.metadata
+	s.metaMutex.RUnlock()
+
+	s.broadcast(StreamEvent{
+		Type:     StreamEventMetadata,
+		Metadata: &metadata,
+	})
+}
+
+// Write 写入数据到PTY
+func (s *Session) Write(data []byte) error {
+	if s.pty == nil {
+		return nil
+	}
+	_, err := s.pty.Write(data)
+	return err
+}
+
+// Resize 调整PTY大小
+func (s *Session) Resize(cols, rows uint16) error {
+	if s.pty == nil {
+		return nil
+	}
+	ws := &struct {
+		Row    uint16
+		Col    uint16
+		Xpixel uint16
+		Ypixel uint16
+	}{Row: rows, Col: cols}
+
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_IOCTL,
+		s.pty.Fd(),
+		syscall.TIOCSWINSZ,
+		uintptr(unsafe.Pointer(ws)),
+	)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// Close 关闭会话
+func (s *Session) Close() error {
+	if s.cmd != nil && s.cmd.Process != nil {
+		s.cmd.Process.Signal(syscall.SIGTERM)
+		time.Sleep(100 * time.Millisecond)
+		s.cmd.Process.Kill()
+	}
+	if s.pty != nil {
+		s.pty.Close()
+	}
+	return nil
+}
+
+// Getters
+func (s *Session) ID() string                  { return s.id }
+func (s *Session) Title() string               { return s.title }
+func (s *Session) TaskID() *string             { return s.taskID }
+func (s *Session) Status() string              { return s.status }
+func (s *Session) CreatedAt() time.Time        { return s.createdAt }
+func (s *Session) ClosedAt() *time.Time        { return s.closedAt }
+func (s *Session) Scrollback() []byte          { return s.scrollback.Read() }
+func (s *Session) Metadata() *SessionMetadata  {
+	s.metaMutex.RLock()
+	defer s.metaMutex.RUnlock()
+	meta := *s.metadata
+	return &meta
+}
+
+// Setters
+func (s *Session) SetTitle(title string) {
+	s.metaMutex.Lock()
+	s.title = title
+	s.metadata.Title = title
+	s.metaMutex.Unlock()
+}
+
+func (s *Session) SetTaskID(taskID *string) {
+	s.metaMutex.Lock()
+	s.taskID = taskID
+	s.metadata.TaskID = taskID
+	s.metaMutex.Unlock()
+}
+
+// ToDBModel 转换为数据库模型
+func (s *Session) ToDBModel() *model.TerminalSession {
+	return &model.TerminalSession{
+		ID:        s.id,
+		Title:     s.title,
+		TaskID:    s.taskID,
+		Shell:     s.shell,
+		Status:    s.status,
+		PID:       s.metadata.PID,
+		CreatedAt: s.createdAt,
+		ClosedAt:  s.closedAt,
+	}
+}
