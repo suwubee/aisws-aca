@@ -46,6 +46,8 @@ type Engine struct {
 	onMessage func(msg *model.Message)
 }
 
+var yesNoPromptRegex = regexp.MustCompile(`(?i)(\(y/n\)|\[y/n\]|\(yes/no\)|\[yes/no\]|y/n|yes/no|continue\s*\?|proceed\s*\?|confirm\s*\?)`)
+
 // NewEngine 创建审批引擎
 func NewEngine() *Engine {
 	return &Engine{
@@ -299,8 +301,24 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 			if err != nil {
 				utils.Warn("AI analysis failed", zap.Error(err))
 			} else {
+				action := strings.TrimSpace(strings.ToLower(decision.Action))
+				if action == "" {
+					action = "wait"
+				}
+				// AI 返回 input 但没有输入内容，降级为等待人工
+				if action == "input" && strings.TrimSpace(decision.Input) == "" {
+					action = "wait"
+					if strings.TrimSpace(decision.Reasoning) == "" {
+						decision.Reasoning = "AI返回input但未提供input内容"
+					}
+				}
+				// AI 批准但未给出输入时，若为常见 y/n 确认提示则补全默认输入
+				if action == "approve" && strings.TrimSpace(decision.Input) == "" && yesNoPromptRegex.MatchString(output) {
+					decision.Input = getAutoInput(config.AutoInputType)
+				}
+
 				result := &ApprovalResult{
-					Action:     ApprovalAction(decision.Action),
+					Action:     ApprovalAction(action),
 					Input:      decision.Input,
 					Confidence: decision.Confidence,
 					Reasoning:  decision.Reasoning,
@@ -308,9 +326,9 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 				}
 
 				// 根据AI决策发送通知
-				if decision.Action == "reject" && config.NotifyOnBlock {
+				if action == "reject" && config.NotifyOnBlock {
 					e.sendNotification(config.TerminalID, "blocked", "AI建议拒绝", decision.Reasoning, output)
-				} else if decision.Action == "approve" && config.NotifyOnApprove {
+				} else if action == "approve" && config.NotifyOnApprove {
 					e.sendNotification(config.TerminalID, "info", "AI自动通过", decision.Reasoning, output)
 				}
 

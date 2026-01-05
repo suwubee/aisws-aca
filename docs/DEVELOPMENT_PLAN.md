@@ -559,6 +559,7 @@ func (e *OpenAIApprovalEngine) Analyze(ctx context.Context, req *ApprovalRequest
 ### v1.1.3 - AI审批闭环 & 热更新 ✅ 已完成 (2026-01-05)
 - AI审批提示词框架：兼容不支持 JSON 输出的模型（支持 JSON / 键值对两种格式）
 - AI输出字段提取：从响应中提取 `action/input/confidence/reasoning`，并做动作/置信度归一化
+- 闭环执行修复：支持 `action=input` 与 `action=approve` 的自动输入；approve 未给 input 时对常见 y/n 提示补全默认输入
 - 规则热更新：修改系统/终端/规则集后，运行中的终端会话立刻刷新配置；若处于等待审批状态则按新规则重新评估一次
 - 避免无效审批记录：当判定为“不是审批提示”时不落库/不推送审批事件
 

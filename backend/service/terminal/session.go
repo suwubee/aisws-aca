@@ -374,14 +374,15 @@ func (s *Session) handleApproval(output string) {
 		AutoHandled: false,
 	}
 
-	// 如果是自动通过，执行输入
-	if result.Action == approval.ActionApprove && result.Input != "" {
+	// 如果是自动通过/自动输入，执行输入
+	if (result.Action == approval.ActionApprove || result.Action == approval.ActionInput) && result.Input != "" {
 		if err := s.Write([]byte(result.Input)); err != nil {
 			utils.Error("Failed to write approval input", zap.Error(err))
 		} else {
 			approvalEvent.AutoHandled = true
-			utils.Info("Auto-approved",
+			utils.Info("Auto-handled approval",
 				zap.String("terminal", s.id),
+				zap.String("action", string(result.Action)),
 				zap.String("input", result.Input),
 				zap.String("reasoning", result.Reasoning))
 		}
