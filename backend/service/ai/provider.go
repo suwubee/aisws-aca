@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
@@ -16,7 +19,7 @@ import (
 
 // ChatMessage OpenAI兼容的消息格式
 type ChatMessage struct {
-	Role    string `json:"role"`    // system, user, assistant
+	Role    string `json:"role"` // system, user, assistant
 	Content string `json:"content"`
 }
 
@@ -199,75 +202,251 @@ type DecisionResult struct {
 }
 
 // DefaultApprovalPrompt 默认的审批判断提示词
-const DefaultApprovalPrompt = `你是一个终端自动化助手。分析以下终端输出，判断是否需要用户审批或输入。
+const DefaultApprovalPrompt = `你是一个终端自动化审批助手。分析以下终端输出，只做安全判断与需要的输入建议。
 
-请根据以下规则判断：
-1. 如果是常规的文件读写、创建目录等安全操作，返回 approve
-2. 如果涉及删除文件（rm）、强制操作（-f）、root权限等危险操作，返回 reject
-3. 如果是简单的确认提示（y/n, yes/no），且操作安全，返回 approve 并设置 input 为 "yes" 或 "y"
-4. 如果需要用户选择多个选项，返回 wait 等待用户处理
-5. 如果不确定，返回 wait
+判定规则（从上到下匹配）：
+1) 安全且明确的操作：action=approve
+2) 明确危险操作（如 rm -rf、覆盖写入敏感路径、sudo/root 权限、不可逆删除等）：action=reject
+3) 需要确认 (y/n, yes/no, continue/proceed/confirm)：若操作安全，action=approve 并给出 input（如 "y\n" / "yes\n" / "\n"）
+4) 需要用户选择多个选项：action=wait
+5) 不确定：action=wait
 
-请以JSON格式返回结果：
-{
-  "action": "approve|reject|wait|input",
-  "input": "如果action是input，这里填写需要输入的内容",
-  "confidence": 0.0-1.0,
-  "reasoning": "简短说明决策理由"
-}`
+输出字段（必须齐全）：
+- action: approve | reject | wait | input
+- input: string（可为空；如需要自动输入必须包含换行符）
+- confidence: 0~1 的数字（允许用百分比，如 92%）
+- reasoning: 简短说明
 
-// AnalyzeForApproval 分析终端输出并返回决策
-func (p *AIProvider) AnalyzeForApproval(ctx context.Context, config *model.AIProviderConfig, prompt, terminalOutput string) (*DecisionResult, error) {
-	if prompt == "" {
-		prompt = DefaultApprovalPrompt
+输出格式要求（优先级从高到低）：
+1) 仅输出一个 JSON 对象（不要 Markdown、不要代码块、不要额外文字）
+2) 如果无法稳定输出 JSON，则输出 4 行键值对（不要其它内容）：
+ACTION: ...
+INPUT: ...
+CONFIDENCE: ...
+REASONING: ...
+`
+
+func buildApprovalPrompt(userPrompt string) string {
+	userPrompt = strings.TrimSpace(userPrompt)
+	if userPrompt == "" {
+		return DefaultApprovalPrompt
+	}
+	return DefaultApprovalPrompt + "\n\n额外规则（高优先级）：\n" + userPrompt + "\n"
+}
+
+func normalizeDecisionKey(key string) string {
+	k := strings.TrimSpace(strings.ToLower(key))
+	switch k {
+	case "action", "动作", "决策", "结论", "decision":
+		return "action"
+	case "input", "输入":
+		return "input"
+	case "confidence", "置信度":
+		return "confidence"
+	case "reasoning", "原因", "理由", "说明", "explanation":
+		return "reasoning"
+	default:
+		return ""
+	}
+}
+
+func normalizeDecisionAction(action string) string {
+	a := strings.TrimSpace(strings.ToLower(action))
+	switch a {
+	case "approve", "allow", "yes", "y", "pass", "ok", "safe":
+		return "approve"
+	case "reject", "deny", "no", "n", "block", "danger":
+		return "reject"
+	case "wait", "manual", "ask", "unknown":
+		return "wait"
+	case "input", "enter":
+		return "input"
 	}
 
-	response, err := p.ChatSimple(ctx, config, prompt, terminalOutput)
-	if err != nil {
-		return nil, err
+	// 中文兼容
+	switch {
+	case strings.Contains(a, "通过") || strings.Contains(a, "允许") || strings.Contains(a, "同意"):
+		return "approve"
+	case strings.Contains(a, "拒绝") || strings.Contains(a, "禁止") || strings.Contains(a, "阻止"):
+		return "reject"
+	case strings.Contains(a, "等待") || strings.Contains(a, "人工") || strings.Contains(a, "手动"):
+		return "wait"
+	case strings.Contains(a, "输入"):
+		return "input"
 	}
 
-	// 尝试从响应中提取JSON
-	var result DecisionResult
+	return ""
+}
 
-	// 查找JSON开始和结束位置
+func normalizeDecisionConfidence(v float64) float64 {
+	if v > 1 && v <= 100 {
+		v = v / 100
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+var kvDecisionLineRe = regexp.MustCompile(`(?i)^\s*(action|input|confidence|reasoning|动作|输入|置信度|原因|理由|说明|decision|explanation)\s*[:=：]\s*(.*?)\s*$`)
+var percentRe = regexp.MustCompile(`^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*$`)
+
+func parseDecisionFromResponse(response string) *DecisionResult {
+	text := strings.ReplaceAll(response, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimSpace(text)
+
+	// 1) 尝试解析响应中的 JSON（取最后一个可解析且 action 合法的对象）
+	var best *DecisionResult
+	for _, obj := range extractJSONObjectCandidates(text) {
+		var parsed DecisionResult
+		if err := json.Unmarshal([]byte(obj), &parsed); err != nil {
+			continue
+		}
+		normalizedAction := normalizeDecisionAction(parsed.Action)
+		if normalizedAction == "" {
+			continue
+		}
+		parsed.Action = normalizedAction
+		parsed.Confidence = normalizeDecisionConfidence(parsed.Confidence)
+		if strings.TrimSpace(parsed.Reasoning) == "" {
+			parsed.Reasoning = "parsed_from_json"
+		}
+		best = &parsed
+	}
+	if best != nil {
+		return best
+	}
+
+	// 2) 解析键值对（支持 action: / ACTION: 等）
+	kv := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(line, "-*• \t"))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "```") {
+			continue
+		}
+		if m := kvDecisionLineRe.FindStringSubmatch(line); len(m) == 3 {
+			key := normalizeDecisionKey(m[1])
+			if key == "" {
+				continue
+			}
+			kv[key] = strings.TrimSpace(m[2])
+			continue
+		}
+	}
+	if len(kv) > 0 {
+		action := normalizeDecisionAction(kv["action"])
+		if action != "" {
+			conf := 0.0
+			if s := strings.TrimSpace(kv["confidence"]); s != "" {
+				if m := percentRe.FindStringSubmatch(s); len(m) == 2 {
+					if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+						conf = f
+					}
+				} else if f, err := strconv.ParseFloat(s, 64); err == nil {
+					conf = f
+				}
+				conf = normalizeDecisionConfidence(conf)
+			}
+			return &DecisionResult{
+				Action:     action,
+				Input:      kv["input"],
+				Confidence: conf,
+				Reasoning:  strings.TrimSpace(kv["reasoning"]),
+			}
+		}
+	}
+
+	// 3) 兜底：基于关键词猜测 action
+	action := normalizeDecisionAction(text)
+	if action != "" {
+		return &DecisionResult{
+			Action:     action,
+			Confidence: 0.3,
+			Reasoning:  "parsed_from_keywords",
+		}
+	}
+
+	// 4) 无法解析
+	preview := text
+	if len(preview) > 800 {
+		preview = preview[:800] + "…"
+	}
+	return &DecisionResult{
+		Action:     "wait",
+		Confidence: 0,
+		Reasoning:  "无法解析AI响应: " + preview,
+	}
+}
+
+func extractJSONObjectCandidates(text string) []string {
+	candidates := make([]string, 0, 4)
 	start := -1
-	end := -1
 	depth := 0
-	for i, c := range response {
-		if c == '{' {
+	inString := false
+	escape := false
+
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+
+		if inString {
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
 			if depth == 0 {
 				start = i
 			}
 			depth++
-		} else if c == '}' {
-			depth--
+		case '}':
 			if depth == 0 {
-				end = i + 1
-				break
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				candidates = append(candidates, text[start:i+1])
+				start = -1
 			}
 		}
 	}
+	return candidates
+}
 
-	if start >= 0 && end > start {
-		jsonStr := response[start:end]
-		if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-			utils.Warn("Failed to parse AI response as JSON", zap.Error(err), zap.String("response", response))
-			// 默认返回等待
-			return &DecisionResult{
-				Action:     "wait",
-				Confidence: 0,
-				Reasoning:  "无法解析AI响应: " + response,
-			}, nil
-		}
-	} else {
-		// 无法找到JSON，返回等待
-		return &DecisionResult{
-			Action:     "wait",
-			Confidence: 0,
-			Reasoning:  "AI响应格式不正确: " + response,
-		}, nil
+// AnalyzeForApproval 分析终端输出并返回决策
+func (p *AIProvider) AnalyzeForApproval(ctx context.Context, config *model.AIProviderConfig, prompt, terminalOutput string) (*DecisionResult, error) {
+	systemPrompt := buildApprovalPrompt(prompt)
+	response, err := p.ChatSimple(ctx, config, systemPrompt, terminalOutput)
+	if err != nil {
+		return nil, err
 	}
 
-	return &result, nil
+	decision := parseDecisionFromResponse(response)
+	if decision.Action != "" {
+		decision.Action = normalizeDecisionAction(decision.Action)
+	}
+	decision.Confidence = normalizeDecisionConfidence(decision.Confidence)
+	if decision.Action == "" {
+		decision.Action = "wait"
+	}
+	return decision, nil
 }

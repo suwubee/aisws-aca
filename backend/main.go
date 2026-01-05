@@ -104,7 +104,7 @@ func main() {
 	taskController.RegisterRoutes(apiGroup)
 
 	// 自动化API
-	automationController := api.NewAutomationController()
+	automationController := api.NewAutomationController(terminalManager)
 	automationController.RegisterRoutes(apiGroup)
 
 	// 健康检查

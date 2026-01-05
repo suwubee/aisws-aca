@@ -5,6 +5,7 @@ import (
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/approval"
+	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -12,11 +13,35 @@ import (
 // AutomationController 自动化控制器
 type AutomationController struct {
 	approvalEngine *approval.Engine
+	terminalMgr    *terminal.Manager
 }
 
-func NewAutomationController() *AutomationController {
+func NewAutomationController(terminalMgr *terminal.Manager) *AutomationController {
 	return &AutomationController{
 		approvalEngine: approval.NewEngine(),
+		terminalMgr:    terminalMgr,
+	}
+}
+
+func (ctrl *AutomationController) refreshAutomationForTerminal(terminalID string) {
+	if ctrl.terminalMgr == nil {
+		return
+	}
+	session := ctrl.terminalMgr.GetSession(terminalID)
+	if session == nil {
+		return
+	}
+	_ = session.RefreshAutomationConfig()
+	session.ReevaluateApprovalIfWaiting()
+}
+
+func (ctrl *AutomationController) refreshAutomationForAllSessions() {
+	if ctrl.terminalMgr == nil {
+		return
+	}
+	for _, session := range ctrl.terminalMgr.ListAllSessions() {
+		_ = session.RefreshAutomationConfig()
+		session.ReevaluateApprovalIfWaiting()
 	}
 }
 
@@ -117,6 +142,8 @@ func (ctrl *AutomationController) UpdateSystemRuleSet(c *fiber.Ctx) error {
 		model.DB.Save(&ruleSet)
 	}
 
+	ctrl.refreshAutomationForAllSessions()
+
 	return c.JSON(fiber.Map{"message": "System rule set updated", "item": ruleSet})
 }
 
@@ -213,6 +240,8 @@ func (ctrl *AutomationController) UpdateRuleSet(c *fiber.Ctx) error {
 	if err := model.DB.Save(&ruleSet).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update rule set"})
 	}
+
+	ctrl.refreshAutomationForAllSessions()
 
 	return c.JSON(fiber.Map{"message": "Rule set updated"})
 }
@@ -327,6 +356,8 @@ func (ctrl *AutomationController) UpdateTerminalRuleMode(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update terminal"})
 	}
 
+	ctrl.refreshAutomationForTerminal(terminalID)
+
 	return c.JSON(fiber.Map{"message": "Terminal rule mode updated"})
 }
 
@@ -373,6 +404,8 @@ func (ctrl *AutomationController) CreateTerminalCustomRule(c *fiber.Ctx) error {
 	terminal.RuleMode = "custom"
 	terminal.RuleSetID = &ruleSet.ID
 	model.DB.Save(&terminal)
+
+	ctrl.refreshAutomationForTerminal(terminalID)
 
 	return c.JSON(fiber.Map{"item": ruleSet, "message": "Custom rule created for terminal"})
 }
@@ -547,8 +580,8 @@ func (ctrl *AutomationController) DeleteAIProvider(c *fiber.Ctx) error {
 
 // ListMessages 获取消息列表
 func (ctrl *AutomationController) ListMessages(c *fiber.Ctx) error {
-	status := c.Query("status")       // unread, read, handled, dismissed
-	msgType := c.Query("type")        // approval_needed, blocked, info, warning, error
+	status := c.Query("status") // unread, read, handled, dismissed
+	msgType := c.Query("type")  // approval_needed, blocked, info, warning, error
 	terminalID := c.Query("terminal_id")
 	limit := c.QueryInt("limit", 50)
 	offset := c.QueryInt("offset", 0)

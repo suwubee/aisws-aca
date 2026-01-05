@@ -110,10 +110,12 @@ type Session struct {
 	outputSavedCursor int
 	outputLineBufSize int
 	// 检测和审批相关
-	detector       *detector.Detector
-	approvalEngine *approval.Engine
-	lastOutput     string // 用于检测状态变化
-	lastOutputMu   sync.Mutex
+	detector               *detector.Detector
+	approvalEngine         *approval.Engine
+	lastOutput             string // 用于检测状态变化
+	lastOutputMu           sync.Mutex
+	approvalEvalMu         sync.Mutex
+	approvalEvalInProgress bool
 }
 
 // LogEntry 日志条目
@@ -319,12 +321,34 @@ func (s *Session) detectAndHandle(data []byte) {
 
 // handleApproval 处理审批流程
 func (s *Session) handleApproval(output string) {
+	s.approvalEvalMu.Lock()
+	if s.approvalEvalInProgress {
+		s.approvalEvalMu.Unlock()
+		return
+	}
+	s.approvalEvalInProgress = true
+	s.approvalEvalMu.Unlock()
+	defer func() {
+		s.approvalEvalMu.Lock()
+		s.approvalEvalInProgress = false
+		s.approvalEvalMu.Unlock()
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// 获取更多上下文
 	scrollbackData := s.scrollback.Read()
-	context := detector.GetRecentContext(scrollbackData, 50)
+	contextLines := 50
+	if cfg, err := s.approvalEngine.GetAutomationConfig(s.id); err == nil && cfg != nil {
+		if cfg.ContextLines > 0 {
+			contextLines = cfg.ContextLines
+		}
+	}
+	if contextLines > 200 {
+		contextLines = 200
+	}
+	context := detector.GetRecentContext(scrollbackData, contextLines)
 	if context == "" {
 		context = output
 	}
@@ -333,6 +357,9 @@ func (s *Session) handleApproval(output string) {
 	result, err := s.approvalEngine.Evaluate(ctx, s.id, context)
 	if err != nil {
 		utils.Error("Approval evaluation failed", zap.Error(err))
+		return
+	}
+	if result.Reasoning == "不是审批提示" {
 		return
 	}
 
@@ -547,6 +574,26 @@ func (s *Session) RefreshAutomationConfig() error {
 
 	s.broadcastMetadata()
 	return nil
+}
+
+// ReevaluateApprovalIfWaiting 当终端处于等待审批状态时，按最新规则重新评估一次
+func (s *Session) ReevaluateApprovalIfWaiting() {
+	s.metaMutex.RLock()
+	state := ""
+	if s.aiAssistant != nil {
+		state = s.aiAssistant.State
+	}
+	s.metaMutex.RUnlock()
+
+	if state != string(detector.StateWaitingApproval) {
+		return
+	}
+
+	s.lastOutputMu.Lock()
+	output := s.lastOutput
+	s.lastOutputMu.Unlock()
+
+	go s.handleApproval(output)
 }
 
 // Getters

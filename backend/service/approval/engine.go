@@ -10,6 +10,7 @@ import (
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/ai"
+	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -38,6 +39,7 @@ type ApprovalResult struct {
 // Engine 审批引擎
 type Engine struct {
 	aiProvider *ai.AIProvider
+	detector   *detector.Detector
 	mu         sync.RWMutex
 
 	// 消息推送回调
@@ -48,6 +50,7 @@ type Engine struct {
 func NewEngine() *Engine {
 	return &Engine{
 		aiProvider: ai.NewAIProvider(),
+		detector:   detector.NewDetector(),
 	}
 }
 
@@ -167,7 +170,7 @@ func (e *Engine) Evaluate(ctx context.Context, terminalID, output string) (*Appr
 	}
 
 	// 检测是否是等待审批的提示
-	if !isApprovalPrompt(output) {
+	if !e.detector.IsApprovalPrompt(output) {
 		return &ApprovalResult{
 			Action:    ActionWait,
 			Reasoning: "不是审批提示",

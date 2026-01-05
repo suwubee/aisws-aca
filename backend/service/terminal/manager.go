@@ -114,6 +114,8 @@ func (m *Manager) LinkTask(id string, taskID *string) error {
 
 	session.SetTaskID(taskID)
 	model.DB.Model(&model.TerminalSession{}).Where("id = ?", id).Update("task_id", taskID)
+	_ = session.RefreshAutomationConfig()
+	session.ReevaluateApprovalIfWaiting()
 	return nil
 }
 
