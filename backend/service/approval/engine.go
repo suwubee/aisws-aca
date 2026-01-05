@@ -28,9 +28,9 @@ const (
 // ApprovalResult 审批结果
 type ApprovalResult struct {
 	Action      ApprovalAction `json:"action"`
-	Input       string         `json:"input"`       // 需要发送到终端的输入
-	Confidence  float64        `json:"confidence"`  // 置信度
-	Reasoning   string         `json:"reasoning"`   // 决策理由
+	Input       string         `json:"input"`        // 需要发送到终端的输入
+	Confidence  float64        `json:"confidence"`   // 置信度
+	Reasoning   string         `json:"reasoning"`    // 决策理由
 	RuleMatched string         `json:"rule_matched"` // 匹配的规则
 	AIDecision  bool           `json:"ai_decision"`  // 是否由AI决策
 }
@@ -147,18 +147,17 @@ func (e *Engine) GetAutomationConfig(terminalID string) (*EffectiveConfig, error
 // getDefaultConfig 返回默认配置
 func (e *Engine) getDefaultConfig(terminalID string) *EffectiveConfig {
 	return &EffectiveConfig{
-		TerminalID:        terminalID,
-		ApprovalMode:      "manual",
-		AutoInputType:     "yes",
-		ContextLines:      50,
-		DetectClaudeCode:  true,
-		DetectCodex:       true,
-		DetectGemini:      true,
-		NotifyOnBlock:     true,
-		NotifyOnApprove:   false,
+		TerminalID:       terminalID,
+		ApprovalMode:     "manual",
+		AutoInputType:    "yes",
+		ContextLines:     50,
+		DetectClaudeCode: true,
+		DetectCodex:      true,
+		DetectGemini:     true,
+		NotifyOnBlock:    true,
+		NotifyOnApprove:  false,
 	}
 }
-
 
 // Evaluate 评估是否需要审批以及采取什么动作
 func (e *Engine) Evaluate(ctx context.Context, terminalID, output string) (*ApprovalResult, error) {
@@ -356,6 +355,11 @@ func (e *Engine) sendNotification(terminalID, msgType, title, content, context s
 
 // RecordApproval 记录审批操作
 func (e *Engine) RecordApproval(terminalID string, aiSessionID *string, promptType, promptContent, response string, autoApproved bool, ruleMatched, aiDecision string) error {
+	promptContent = sanitizeApprovalText(promptContent)
+	response = strings.TrimSpace(response)
+	ruleMatched = strings.TrimSpace(ruleMatched)
+	aiDecision = strings.TrimSpace(aiDecision)
+
 	record := &model.ApprovalRecord{
 		ID:            uuid.New().String(),
 		TerminalID:    terminalID,
@@ -372,6 +376,51 @@ func (e *Engine) RecordApproval(terminalID string, aiSessionID *string, promptTy
 }
 
 // 辅助函数
+
+var approvalANSIRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[PX^_].*?\x1b\\`)
+var approvalANSIRemnantRegex = regexp.MustCompile(`\[[0-9;]{1,20}[a-zA-Z]`)
+var approvalANSIRemnantNoBracketRegex = regexp.MustCompile(`(^|[ \t])(?:[0-9]{1,3};){1,8}[0-9]{1,3}m([+\\-\\[]|[ \t])`)
+
+func sanitizeApprovalText(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	// 统一换行
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+
+	// 去除 ANSI 控制序列
+	s = approvalANSIRegex.ReplaceAllString(s, "")
+	// 二次兜底：去除可能残留的类似 "[39m" / "[K" 等片段（复制/编码导致 ESC 丢失时）
+	s = approvalANSIRemnantRegex.ReplaceAllString(s, "")
+	s = approvalANSIRemnantNoBracketRegex.ReplaceAllString(s, "$1$2")
+
+	// 去除其他控制字符（保留换行和制表符）
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, s)
+
+	// 压缩多余空行
+	s = strings.TrimSpace(s)
+	for strings.Contains(s, "\n\n\n") {
+		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
+	}
+
+	// 防止极端情况下存储过大（UI 也更友好）
+	const maxLen = 8000
+	if len(s) > maxLen {
+		s = s[:maxLen] + "\n…(truncated)"
+	}
+
+	return s
+}
 
 func isApprovalPrompt(output string) bool {
 	// 常见的审批提示模式
@@ -463,7 +512,7 @@ var DefaultBlacklistPatterns = []string{
 	"rm -rf",
 	"rm -r /",
 	"rm -rf /",
-	":(){ :|:& };:",  // fork bomb
+	":(){ :|:& };:", // fork bomb
 	"dd if=/dev/zero",
 	"mkfs",
 	"fdisk",

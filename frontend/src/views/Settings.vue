@@ -282,7 +282,7 @@ interface Message {
 
 interface ApprovalRecord {
   id: string; terminal_id: string; ai_session_id: string | null; prompt_type: string
-  prompt_content: string; response: string; auto_handled: boolean
+  prompt_content: string; response: string; auto_approved?: boolean; auto_handled?: boolean
   rule_matched: string; ai_decision: string; created_at: string
 }
 
@@ -599,12 +599,39 @@ const approvalRecords = ref<ApprovalRecord[]>([])
 const loadingApprovals = ref(false)
 const approvalPagination = reactive({ page: 1, pageSize: 20, itemCount: 0 })
 
+function cleanApprovalPrompt(content: string): string {
+  if (!content) return ''
+  let cleaned = content
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[PX^_].*?\x1b\\/g, '')
+    .replace(/\[[0-9;]{1,20}[a-zA-Z]/g, '')
+    .replace(/(?:^|\s)(?:[0-9]{1,3};){1,8}[0-9]{1,3}m(?=[+\-\[]|\s)/g, ' ')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .trim()
+  while (cleaned.includes('\n\n\n')) cleaned = cleaned.replace(/\n\n\n/g, '\n\n')
+  return cleaned
+}
+
+function normalizeApprovalResponse(response: string) {
+  return (response || '').trim()
+}
+
+function responseTagType(response: string) {
+  const r = normalizeApprovalResponse(response).toLowerCase()
+  if (r === 'y' || r === 'yes' || r === 'approve') return 'success'
+  if (r === 'n' || r === 'no' || r === 'reject') return 'error'
+  return 'default'
+}
+
 const approvalColumns: DataTableColumns<ApprovalRecord> = [
   { title: '时间', key: 'created_at', width: 140, render: (row) => new Date(row.created_at).toLocaleString('zh-CN') },
   { title: '类型', key: 'prompt_type', width: 100, render: (row) => h(NTag, { size: 'small', bordered: false }, () => row.prompt_type || 'unknown') },
-  { title: '提示内容', key: 'prompt_content', ellipsis: { tooltip: true }, render: (row) => h('pre', { style: { margin: 0, fontSize: '11px', maxHeight: '40px', overflow: 'hidden' } }, row.prompt_content?.substring(0, 200)) },
-  { title: '响应', key: 'response', width: 80, render: (row) => h(NTag, { size: 'small', type: row.response === 'y' || row.response === 'yes' ? 'success' : 'error' }, () => row.response) },
-  { title: '自动处理', key: 'auto_handled', width: 80, render: (row) => row.auto_handled ? h(NTag, { size: 'small', type: 'info' }, () => '是') : '否' },
+  { title: '提示内容', key: 'prompt_content', ellipsis: { tooltip: true }, render: (row) => h('pre', { style: { margin: 0, fontSize: '11px', maxHeight: '40px', overflow: 'hidden' } }, cleanApprovalPrompt(row.prompt_content).substring(0, 200)) },
+  { title: '响应', key: 'response', width: 80, render: (row) => h(NTag, { size: 'small', bordered: false, type: responseTagType(row.response) }, () => normalizeApprovalResponse(row.response) || '—') },
+  { title: '自动处理', key: 'auto_approved', width: 80, render: (row) => (row.auto_approved ?? row.auto_handled) ? h(NTag, { size: 'small', bordered: false, type: 'info' }, () => '是') : '否' },
   { title: '匹配规则', key: 'rule_matched', width: 100, ellipsis: { tooltip: true } }
 ]
 

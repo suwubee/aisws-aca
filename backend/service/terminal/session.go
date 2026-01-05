@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/ai-coding-assistant/model"
@@ -101,13 +103,16 @@ type Session struct {
 	// 输入/输出日志聚合（避免按字符记录）
 	ioBufMutex        sync.Mutex
 	inputLineBuf      []rune
-	inputEscState     int // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
-	outputLineBuf     string
+	inputEscState     int    // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
+	outputLineBuf     []rune // 当前输出行（处理 \r/\b/ANSI 清行等）
+	outputCursor      int
+	outputRemainder   []byte // 残留的半个 UTF-8/ANSI 序列
+	outputSavedCursor int
 	outputLineBufSize int
 	// 检测和审批相关
 	detector       *detector.Detector
 	approvalEngine *approval.Engine
-	lastOutput     string      // 用于检测状态变化
+	lastOutput     string // 用于检测状态变化
 	lastOutputMu   sync.Mutex
 }
 
@@ -120,9 +125,9 @@ type LogEntry struct {
 
 // ScrollbackBuffer 滚动缓冲区
 type ScrollbackBuffer struct {
-	data     []byte
-	maxSize  int
-	mutex    sync.RWMutex
+	data    []byte
+	maxSize int
+	mutex   sync.RWMutex
 }
 
 func NewScrollbackBuffer(maxSize int) *ScrollbackBuffer {
@@ -155,20 +160,20 @@ func (b *ScrollbackBuffer) Read() []byte {
 // NewSession 创建新会话
 func NewSession(id, shell string, scrollbackSize int) *Session {
 	return &Session{
-		id:             id,
-		shell:          shell,
-		status:         "running",
-		subscribers:    make(map[string]chan StreamEvent),
-		scrollback:     NewScrollbackBuffer(scrollbackSize),
-		createdAt:      time.Now(),
-		done:           make(chan struct{}),
-		logBuffer:      make([]LogEntry, 0, 100),
-		logFlushChan:   make(chan struct{}, 1),
-		inputLineBuf:   make([]rune, 0, 256),
-		outputLineBuf:  "",
+		id:                id,
+		shell:             shell,
+		status:            "running",
+		subscribers:       make(map[string]chan StreamEvent),
+		scrollback:        NewScrollbackBuffer(scrollbackSize),
+		createdAt:         time.Now(),
+		done:              make(chan struct{}),
+		logBuffer:         make([]LogEntry, 0, 100),
+		logFlushChan:      make(chan struct{}, 1),
+		inputLineBuf:      make([]rune, 0, 256),
+		outputLineBuf:     make([]rune, 0, 256),
 		outputLineBufSize: 8192,
-		detector:       detector.NewDetector(),
-		approvalEngine: approval.NewEngine(),
+		detector:          detector.NewDetector(),
+		approvalEngine:    approval.NewEngine(),
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -364,15 +369,25 @@ func (s *Session) handleApproval(output string) {
 	s.metaMutex.RUnlock()
 
 	promptType := "unknown"
-	if s.detector.IsApprovalPrompt(output) {
+	if s.detector.IsApprovalPrompt(context) {
 		promptType = "approval"
+	}
+
+	recordPrompt := output
+	if context != "" {
+		// 优先存储提取后的审批提示（更易读，避免只截到一段 ANSI/片段）
+		if _, extracted := s.detector.DetectState(context); extracted != "" {
+			recordPrompt = extracted
+		} else {
+			recordPrompt = context
+		}
 	}
 
 	s.approvalEngine.RecordApproval(
 		s.id,
 		aiSessionID,
 		promptType,
-		output,
+		recordPrompt,
 		result.Input,
 		approvalEvent.AutoHandled,
 		result.RuleMatched,
@@ -650,29 +665,11 @@ func (s *Session) flushInputLineLocked() {
 
 // addOutputLog 将PTY输出按行聚合，过滤提示符/回显后写入日志缓冲
 func (s *Session) addOutputLog(data []byte) {
-	// 先做一次轻量清理，保留换行用于分行
-	cleaned := stripANSI(string(data))
-	if strings.TrimSpace(cleaned) == "" {
-		return
-	}
-
-	// 统一换行符
-	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
-	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
-
-	// 追加到输出行缓冲
 	s.ioBufMutex.Lock()
-	s.outputLineBuf += cleaned
-	if s.outputLineBufSize > 0 && len(s.outputLineBuf) > s.outputLineBufSize {
-		s.outputLineBuf = s.outputLineBuf[len(s.outputLineBuf)-s.outputLineBufSize:]
-	}
-	buf := s.outputLineBuf
-	parts := strings.Split(buf, "\n")
-	// 最后一个可能是不完整行，留待后续补全
-	s.outputLineBuf = parts[len(parts)-1]
+	lines := s.consumeOutputLinesLocked(data)
 	s.ioBufMutex.Unlock()
 
-	for _, line := range parts[:len(parts)-1] {
+	for _, line := range lines {
 		// 保留前导空白（可能有缩进），仅去掉右侧空白
 		line = strings.TrimRight(line, " \t")
 		if strings.TrimSpace(line) == "" {
@@ -683,6 +680,267 @@ func (s *Session) addOutputLog(data []byte) {
 		}
 		s.addLog("output", line+"\n")
 	}
+}
+
+func (s *Session) consumeOutputLinesLocked(data []byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// 拼接上次残留（ANSI/UTF-8 可能跨 chunk）
+	buf := append(s.outputRemainder, data...)
+	s.outputRemainder = nil
+
+	lines := make([]string, 0, 8)
+
+	for i := 0; i < len(buf); {
+		b := buf[i]
+
+		// ANSI / VT 序列处理（尽量模拟行内覆盖，避免日志叠字）
+		if b == 0x1b { // ESC
+			seqLen, seqType, ok := scanEscapeSequence(buf[i:])
+			if !ok {
+				// 不完整序列，留待下次
+				s.outputRemainder = append(s.outputRemainder, buf[i:]...)
+				break
+			}
+			seq := buf[i : i+seqLen]
+			switch seqType {
+			case "CSI":
+				s.applyCSISequenceLocked(seq)
+			}
+			i += seqLen
+			continue
+		}
+
+		switch b {
+		case '\n':
+			s.flushOutputLineLocked(&lines)
+			i++
+			continue
+		case '\r':
+			// 回车：回到行首（不换行）
+			s.outputCursor = 0
+			i++
+			continue
+		case '\b', 0x7f:
+			// 退格：仅移动光标（是否擦除由后续输出决定）
+			if s.outputCursor > 0 {
+				s.outputCursor--
+			}
+			i++
+			continue
+		case '\t':
+			s.writeOutputRuneLocked('\t')
+			i++
+			continue
+		default:
+			// 忽略其他控制字符
+			if b < 32 {
+				i++
+				continue
+			}
+		}
+
+		// UTF-8 解码（确保中文不乱码；遇到半个 rune 留待下次）
+		r, size := utf8.DecodeRune(buf[i:])
+		if r == utf8.RuneError && size == 1 {
+			if !utf8.FullRune(buf[i:]) {
+				s.outputRemainder = append(s.outputRemainder, buf[i:]...)
+				break
+			}
+			// 非法字节，跳过
+			i++
+			continue
+		}
+		s.writeOutputRuneLocked(r)
+		i += size
+	}
+
+	return lines
+}
+
+func (s *Session) flushOutputLineLocked(lines *[]string) {
+	if len(s.outputLineBuf) == 0 {
+		s.outputCursor = 0
+		return
+	}
+
+	line := string(s.outputLineBuf)
+	// 重置行缓冲
+	s.outputLineBuf = s.outputLineBuf[:0]
+	s.outputCursor = 0
+
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+
+	*lines = append(*lines, line)
+}
+
+func (s *Session) writeOutputRuneLocked(r rune) {
+	// 过长保护（极端情况下避免无限增长）
+	if s.outputLineBufSize > 0 && len(s.outputLineBuf) > s.outputLineBufSize {
+		overflow := len(s.outputLineBuf) - s.outputLineBufSize
+		s.outputLineBuf = s.outputLineBuf[overflow:]
+		if s.outputCursor >= overflow {
+			s.outputCursor -= overflow
+		} else {
+			s.outputCursor = 0
+		}
+	}
+
+	// 光标可能超出当前内容，补空格到光标位置
+	for len(s.outputLineBuf) < s.outputCursor {
+		s.outputLineBuf = append(s.outputLineBuf, ' ')
+	}
+
+	if s.outputCursor < len(s.outputLineBuf) {
+		s.outputLineBuf[s.outputCursor] = r
+	} else {
+		s.outputLineBuf = append(s.outputLineBuf, r)
+	}
+	s.outputCursor++
+}
+
+func (s *Session) applyCSISequenceLocked(seq []byte) {
+	// seq 形如: ESC [ ... final
+	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' {
+		return
+	}
+	final := seq[len(seq)-1]
+	paramStr := string(seq[2 : len(seq)-1])
+	// 去掉私有前缀 '?'
+	paramStr = strings.TrimPrefix(paramStr, "?")
+
+	params := parseCSIParams(paramStr)
+	get1 := func(defaultVal int) int {
+		if len(params) == 0 {
+			return defaultVal
+		}
+		if params[0] == 0 {
+			return defaultVal
+		}
+		return params[0]
+	}
+
+	switch final {
+	case 'K': // EL - Erase in Line
+		mode := 0
+		if len(params) > 0 {
+			mode = params[0]
+		}
+		switch mode {
+		case 0: // clear from cursor to end
+			if s.outputCursor < len(s.outputLineBuf) {
+				s.outputLineBuf = s.outputLineBuf[:s.outputCursor]
+			}
+		case 1: // clear from start to cursor (用空格覆盖)
+			if s.outputCursor > len(s.outputLineBuf) {
+				s.outputCursor = len(s.outputLineBuf)
+			}
+			for i := 0; i < s.outputCursor && i < len(s.outputLineBuf); i++ {
+				s.outputLineBuf[i] = ' '
+			}
+		case 2: // clear entire line
+			s.outputLineBuf = s.outputLineBuf[:0]
+			s.outputCursor = 0
+		}
+	case 'J': // ED - Erase in Display（日志里按清行处理）
+		s.outputLineBuf = s.outputLineBuf[:0]
+		s.outputCursor = 0
+	case 'D': // Cursor Left
+		n := get1(1)
+		s.outputCursor -= n
+		if s.outputCursor < 0 {
+			s.outputCursor = 0
+		}
+	case 'C': // Cursor Right
+		n := get1(1)
+		s.outputCursor += n
+	case 'G': // CHA - Cursor Horizontal Absolute
+		n := get1(1)
+		if n < 1 {
+			n = 1
+		}
+		s.outputCursor = n - 1
+	case 's': // Save cursor
+		s.outputSavedCursor = s.outputCursor
+	case 'u': // Restore cursor
+		s.outputCursor = s.outputSavedCursor
+	case 'm':
+		// SGR - ignore
+	default:
+		// ignore other sequences
+	}
+
+	// 防止光标越界
+	if s.outputCursor < 0 {
+		s.outputCursor = 0
+	}
+	if s.outputLineBufSize > 0 && s.outputCursor > s.outputLineBufSize {
+		s.outputCursor = s.outputLineBufSize
+	}
+}
+
+func scanEscapeSequence(buf []byte) (seqLen int, seqType string, ok bool) {
+	if len(buf) < 2 || buf[0] != 0x1b {
+		return 0, "", false
+	}
+
+	switch buf[1] {
+	case '[': // CSI: ESC [ ... final(0x40-0x7E)
+		for i := 2; i < len(buf); i++ {
+			if buf[i] >= 0x40 && buf[i] <= 0x7e {
+				return i + 1, "CSI", true
+			}
+		}
+		return 0, "CSI", false
+
+	case ']': // OSC: ESC ] ... (BEL or ST)
+		for i := 2; i < len(buf); i++ {
+			if buf[i] == 0x07 { // BEL
+				return i + 1, "OSC", true
+			}
+			if buf[i] == 0x1b && i+1 < len(buf) && buf[i+1] == '\\' { // ST
+				return i + 2, "OSC", true
+			}
+		}
+		return 0, "OSC", false
+
+	case 'P', 'X', '^', '_': // DCS/SOS/PM/APC: ESC <type> ... ST
+		for i := 2; i < len(buf); i++ {
+			if buf[i] == 0x1b && i+1 < len(buf) && buf[i+1] == '\\' {
+				return i + 2, "ST", true
+			}
+		}
+		return 0, "ST", false
+
+	default:
+		// 其他 ESC 序列通常是 2 字节
+		return 2, "ESC", true
+	}
+}
+
+func parseCSIParams(s string) []int {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ";")
+	params := make([]int, 0, len(parts))
+	for _, p := range parts {
+		if p == "" {
+			params = append(params, 0)
+			continue
+		}
+		// 忽略非数字前缀（例如 ?25l 里已提前 TrimPrefix）
+		if n, err := strconv.Atoi(p); err == nil {
+			params = append(params, n)
+		} else {
+			params = append(params, 0)
+		}
+	}
+	return params
 }
 
 // addLog 添加日志到缓冲区
@@ -759,10 +1017,10 @@ func isShellPromptOnly(content string) bool {
 func isPromptLine(line string) bool {
 	// 常见的提示符模式
 	patterns := []string{
-		`^[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[^$#]*[$#]\s*$`,  // user@host:path$
-		`^[$#>]\s*$`,                                       // 简单提示符
-		`^\([^)]+\)\s*[$#>]\s*$`,                           // (venv) $
-		`^.*[$#>%]\s*$`,                                    // 任何以提示符结尾的行（仅当行很短时）
+		`^[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[^$#]*[$#]\s*$`, // user@host:path$
+		`^[$#>]\s*$`,             // 简单提示符
+		`^\([^)]+\)\s*[$#>]\s*$`, // (venv) $
+		`^.*[$#>%]\s*$`,          // 任何以提示符结尾的行（仅当行很短时）
 	}
 
 	// 如果行太长，不太可能只是提示符

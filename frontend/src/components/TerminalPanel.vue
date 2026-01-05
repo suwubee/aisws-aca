@@ -48,6 +48,16 @@
         </button>
         <button
           class="action-btn"
+          :class="{ active: showApprovals }"
+          @click="toggleApprovals"
+          title="审批记录"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/>
+          </svg>
+        </button>
+        <button
+          class="action-btn"
           :class="{ active: isFloating }"
           @click="toggleFloating"
           title="浮层显示"
@@ -81,7 +91,7 @@
     </div>
 
     <!-- Terminal Content -->
-    <div class="terminal-content" :class="{ 'with-logs': showLogs }">
+    <div class="terminal-content" :class="{ 'with-logs': showLogs || showApprovals }">
       <div class="terminal-main">
         <div
           v-for="terminal in terminals"
@@ -104,8 +114,9 @@
           </n-empty>
         </div>
       </div>
-      <div v-if="showLogs && activeTerminalId" class="logs-panel">
-        <TerminalLogs :session-id="activeTerminalId" />
+      <div v-if="(showLogs || showApprovals) && activeTerminalId" class="logs-panel">
+        <TerminalLogs v-if="showLogs" :session-id="activeTerminalId" />
+        <TerminalApprovals v-else :terminal-id="activeTerminalId" />
       </div>
     </div>
 
@@ -149,12 +160,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
 import { useTaskStore } from '@/stores/task'
 import Terminal from './Terminal.vue'
 import TerminalLogs from './TerminalLogs.vue'
+import TerminalApprovals from './TerminalApprovals.vue'
 import TerminalRuleConfig from './TerminalRuleConfig.vue'
 
 const message = useMessage()
@@ -177,6 +189,7 @@ const taskTitleMap = computed(() => {
 const isFullscreen = ref(false)
 const isFloating = ref(false)
 const showLogs = ref(false)
+const showApprovals = ref(false)
 const showRuleConfig = ref(false)
 const showCreateTerminal = ref(false)
 const createTerminalForm = reactive({
@@ -200,6 +213,16 @@ function toggleFloating() {
 
 function toggleLogs() {
   showLogs.value = !showLogs.value
+  if (showLogs.value) {
+    showApprovals.value = false
+  }
+}
+
+function toggleApprovals() {
+  showApprovals.value = !showApprovals.value
+  if (showApprovals.value) {
+    showLogs.value = false
+  }
 }
 
 function closeDisplayMode() {
@@ -208,17 +231,22 @@ function closeDisplayMode() {
 }
 
 // ESC键退出全屏/浮层
-watch([isFullscreen, isFloating], ([fullscreen, floating]) => {
-  const handleEsc = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      closeDisplayMode()
-    }
+function handleEsc(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    closeDisplayMode()
   }
+}
+
+watch([isFullscreen, isFloating], ([fullscreen, floating]) => {
   if (fullscreen || floating) {
     document.addEventListener('keydown', handleEsc)
   } else {
     document.removeEventListener('keydown', handleEsc)
   }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleEsc)
 })
 
 function setActiveTerminal(id: string) {

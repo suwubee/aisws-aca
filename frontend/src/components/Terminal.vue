@@ -21,16 +21,32 @@ const terminalRef = ref<HTMLElement>()
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let ws: WebSocket | null = null
+let resizeObserver: ResizeObserver | null = null
+let resizeRaf: number | null = null
+const decoder = new TextDecoder('utf-8')
 
 onMounted(() => {
   initTerminal()
   connectWebSocket()
 
   window.addEventListener('resize', handleResize)
+
+  if (terminalRef.value) {
+    resizeObserver = new ResizeObserver(() => handleResize())
+    resizeObserver.observe(terminalRef.value)
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf)
+    resizeRaf = null
+  }
   if (ws) {
     ws.close()
   }
@@ -111,10 +127,9 @@ function handleMessage(msg: any) {
 
     case 'data':
       if (terminal && msg.data) {
-        // 使用 TextDecoder 正确解码 UTF-8
+        // 使用 TextDecoder stream 模式，避免 UTF-8 分片导致乱码
         const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))
-        const decoder = new TextDecoder('utf-8')
-        terminal.write(decoder.decode(bytes))
+        terminal.write(decoder.decode(bytes, { stream: true }))
       }
       break
 
@@ -160,9 +175,16 @@ function sendResize(cols: number, rows: number) {
 }
 
 function handleResize() {
-  if (fitAddon) {
-    fitAddon.fit()
-  }
+  if (!fitAddon || !terminalRef.value) return
+
+  // 避免在 CSS 动画/频繁 resize 时多次 fit
+  if (resizeRaf) cancelAnimationFrame(resizeRaf)
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = null
+    const { clientWidth, clientHeight } = terminalRef.value!
+    if (clientWidth === 0 || clientHeight === 0) return
+    fitAddon?.fit()
+  })
 }
 </script>
 
