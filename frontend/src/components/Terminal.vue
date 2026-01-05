@@ -24,6 +24,7 @@ let ws: WebSocket | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeRaf: number | null = null
 const decoder = new TextDecoder('utf-8')
+let didInitialScroll = false
 
 onMounted(() => {
   initTerminal()
@@ -97,6 +98,7 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     console.log('WebSocket connected')
+    didInitialScroll = false
     // 发送初始大小
     if (terminal) {
       sendResize(terminal.cols, terminal.rows)
@@ -129,7 +131,12 @@ function handleMessage(msg: any) {
       if (terminal && msg.data) {
         // 使用 TextDecoder stream 模式，避免 UTF-8 分片导致乱码
         const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))
-        terminal.write(decoder.decode(bytes, { stream: true }))
+        terminal.write(decoder.decode(bytes, { stream: true }), () => {
+          if (!didInitialScroll) {
+            terminal?.scrollToBottom()
+            didInitialScroll = true
+          }
+        })
       }
       break
 

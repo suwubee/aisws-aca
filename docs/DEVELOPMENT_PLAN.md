@@ -129,7 +129,7 @@ type Session struct {
 - [x] 获取终端列表
 - [x] 关闭终端
 - [x] 重命名终端
-- [x] 获取终端日志 (GET /api/terminals/:id/logs)
+- [x] 获取终端日志 (GET /api/terminals/:id/logs?order=desc 默认返回最新)
 
 ---
 
@@ -161,7 +161,7 @@ type Session struct {
 - [x] 终端状态指示
 - [x] 终端快捷切换
 - [x] 终端浮层/全屏显示
-- [x] 终端日志面板
+- [x] 终端日志面板（默认加载最新，支持上翻加载更早）
 
 ---
 
@@ -231,7 +231,7 @@ Unknown -> WaitingInput -> Working -> WaitingApproval
 
 ---
 
-### Phase 8: 审批界面 (Sprint 4) ✅ 已完成（后端）
+### Phase 8: 审批界面 (Sprint 4) ✅ 已完成（后端 + 历史记录UI）
 
 #### 8.1 权限/确认检测
 - [x] 输出模式匹配
@@ -248,7 +248,7 @@ Unknown -> WaitingInput -> Working -> WaitingApproval
 #### 8.3 审批UI（待开发）
 - [ ] 审批提示弹窗
 - [ ] 快捷操作按钮（允许/拒绝）
-- [ ] 审批历史记录
+- [x] 审批历史记录（终端侧边栏 + Settings 全局列表，去 ANSI/格式化）
 - [ ] 手动输入框
 
 ---

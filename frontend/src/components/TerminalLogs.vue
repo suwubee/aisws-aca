@@ -36,7 +36,12 @@
       </div>
     </div>
 
-    <div ref="logsContainer" class="logs-content">
+    <div ref="logsContainer" class="logs-content" @scroll="handleScroll">
+      <div v-if="hasMore" class="load-older">
+        <n-button size="small" text type="primary" @click="loadMore" :loading="loading">
+          加载更早 (剩余 {{ total - rawLogs.length }} 条)
+        </n-button>
+      </div>
       <template v-if="groupedLogs.length > 0">
         <div
           v-for="(group, index) in groupedLogs"
@@ -60,10 +65,8 @@
       </div>
     </div>
 
-    <div v-if="hasMore" class="logs-footer">
-      <n-button size="small" text type="primary" @click="loadMore" :loading="loading">
-        加载更多 (剩余 {{ total - rawLogs.length }} 条)
-      </n-button>
+    <div v-if="showScrollToBottom" class="scroll-bottom">
+      <n-button size="small" type="primary" @click="scrollToBottom">回到底部</n-button>
     </div>
   </div>
 </template>
@@ -112,6 +115,7 @@ const typeOptions = [
 ]
 
 const hasMore = computed(() => rawLogs.value.length < total.value)
+const showScrollToBottom = ref(false)
 
 // 合并连续相同类型的日志
 const groupedLogs = computed(() => {
@@ -162,32 +166,94 @@ function cleanLogContent(content: string): string {
   return cleaned
 }
 
-async function fetchLogs(append = false) {
+const PAGE_SIZE = 200
+
+function isNearBottom(threshold = 80) {
+  if (!logsContainer.value) return true
+  const el = logsContainer.value
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+}
+
+function normalizeDescToAsc(items: LogEntry[]) {
+  // 后端按 desc 返回时，反转为 asc 便于阅读/分组
+  return [...items].reverse()
+}
+
+function handleScroll() {
+  showScrollToBottom.value = !isNearBottom()
+}
+
+async function fetchLatest(replace: boolean) {
   if (loading.value) return
   loading.value = true
 
   try {
-    const offset = append ? rawLogs.value.length : 0
+    const shouldStick = replace ? true : isNearBottom()
     const { data } = await terminalApi.logs(props.sessionId, {
-      limit: 200,
-      offset,
-      type: logType.value || undefined
+      limit: PAGE_SIZE,
+      offset: 0,
+      type: logType.value || undefined,
+      order: 'desc'
     })
 
-    if (append) {
-      rawLogs.value = [...rawLogs.value, ...data.items]
-    } else {
-      rawLogs.value = data.items
-    }
-    total.value = data.total
+    const latestAsc = normalizeDescToAsc(data.items || [])
+    total.value = data.total || 0
 
-    // 自动滚动到底部
-    if (!append) {
+    if (replace) {
+      rawLogs.value = latestAsc
+    } else {
+      const existing = new Set(rawLogs.value.map(l => l.id))
+      const newItems = latestAsc.filter(l => !existing.has(l.id))
+      if (newItems.length > 0) {
+        rawLogs.value = [...rawLogs.value, ...newItems]
+      }
+    }
+
+    if (shouldStick) {
       await nextTick()
       scrollToBottom()
+    } else {
+      await nextTick()
+      showScrollToBottom.value = !isNearBottom()
     }
   } catch (error) {
     console.error('Failed to fetch logs:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function fetchOlder() {
+  if (loading.value) return
+  if (!hasMore.value) return
+  loading.value = true
+
+  try {
+    const el = logsContainer.value
+    const prevScrollHeight = el?.scrollHeight || 0
+    const prevScrollTop = el?.scrollTop || 0
+
+    const { data } = await terminalApi.logs(props.sessionId, {
+      limit: PAGE_SIZE,
+      offset: rawLogs.value.length,
+      type: logType.value || undefined,
+      order: 'desc'
+    })
+
+    const olderAsc = normalizeDescToAsc(data.items || [])
+    total.value = data.total || total.value
+
+    // prepend older logs
+    rawLogs.value = [...olderAsc, ...rawLogs.value]
+
+    await nextTick()
+    if (el) {
+      const newScrollHeight = el.scrollHeight
+      el.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight)
+    }
+    showScrollToBottom.value = !isNearBottom()
+  } catch (error) {
+    console.error('Failed to fetch older logs:', error)
   } finally {
     loading.value = false
   }
@@ -207,6 +273,7 @@ async function clearAllLogs() {
 function scrollToBottom() {
   if (logsContainer.value) {
     logsContainer.value.scrollTop = logsContainer.value.scrollHeight
+    showScrollToBottom.value = false
   }
 }
 
@@ -220,28 +287,28 @@ function formatTime(dateStr: string) {
 }
 
 function refreshLogs() {
-  fetchLogs(false)
+  fetchLatest(true)
 }
 
 function loadMore() {
-  fetchLogs(true)
+  fetchOlder()
 }
 
 // 监听sessionId变化
 watch(() => props.sessionId, () => {
-  fetchLogs(false)
+  fetchLatest(true)
 }, { immediate: true })
 
 // 监听日志类型变化
 watch(logType, () => {
-  fetchLogs(false)
+  fetchLatest(true)
 })
 
 // 定期刷新日志
 let refreshTimer: number | null = null
 onMounted(() => {
   refreshTimer = window.setInterval(() => {
-    fetchLogs(false)
+    fetchLatest(false)
   }, 5000)
 })
 
@@ -260,6 +327,7 @@ onUnmounted(() => {
   background: #1a1a1a;
   color: #e0e0e0;
   font-size: 13px;
+  position: relative;
 }
 
 .logs-header {
@@ -293,6 +361,23 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 12px;
+}
+
+.load-older {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 10px;
+  position: sticky;
+  top: 0;
+  background: linear-gradient(to bottom, rgba(26, 26, 26, 1), rgba(26, 26, 26, 0.85));
+  z-index: 2;
+}
+
+.scroll-bottom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 3;
 }
 
 .log-group {
@@ -375,13 +460,6 @@ onUnmounted(() => {
 .empty-icon {
   font-size: 32px;
   opacity: 0.6;
-}
-
-.logs-footer {
-  padding: 10px;
-  text-align: center;
-  border-top: 1px solid #333;
-  background: #252525;
 }
 
 /* 滚动条样式 */

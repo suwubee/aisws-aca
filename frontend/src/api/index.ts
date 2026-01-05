@@ -71,7 +71,7 @@ export const terminalApi = {
   linkTask: (id: string, taskId: string | null) =>
     api.post(`/terminals/${id}/link-task`, { task_id: taskId }),
   stats: () => api.get('/terminals/stats'),
-  logs: (id: string, params?: { limit?: number; offset?: number; type?: string }) =>
+  logs: (id: string, params?: { limit?: number; offset?: number; type?: string; order?: 'asc' | 'desc' }) =>
     api.get(`/terminals/${id}/logs`, { params }),
   clearLogs: (id: string) => api.delete(`/terminals/${id}/logs`),
   deleteLog: (id: string, logId: string) => api.delete(`/terminals/${id}/logs/${logId}`)

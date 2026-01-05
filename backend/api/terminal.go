@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"strings"
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/terminal"
@@ -269,16 +270,26 @@ func (ctrl *TerminalController) GetLogs(c *fiber.Ctx) error {
 	id := c.Params("id")
 	limit := c.QueryInt("limit", 1000)
 	offset := c.QueryInt("offset", 0)
-	logType := c.Query("type") // input, output, 或空表示全部
+	logType := c.Query("type")                         // input, output, 或空表示全部
+	order := strings.ToLower(c.Query("order", "desc")) // asc/desc，默认返回最新日志
+	if order != "asc" && order != "desc" {
+		order = "desc"
+	}
 
-	query := model.DB.Where("terminal_id = ?", id).Order("created_at asc")
+	query := model.DB.Model(&model.Log{}).Where("terminal_id = ?", id)
 
 	if logType != "" {
 		query = query.Where("log_type = ?", logType)
 	}
 
 	var total int64
-	query.Model(&model.Log{}).Count(&total)
+	query.Count(&total)
+
+	if order == "asc" {
+		query = query.Order("created_at asc")
+	} else {
+		query = query.Order("created_at desc")
+	}
 
 	var logs []model.Log
 	query.Offset(offset).Limit(limit).Find(&logs)
@@ -286,6 +297,7 @@ func (ctrl *TerminalController) GetLogs(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"items": logs,
 		"total": total,
+		"order": order,
 	})
 }
 
