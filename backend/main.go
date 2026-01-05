@@ -81,12 +81,16 @@ func main() {
 	// API路由组
 	apiGroup := app.Group("/api")
 
-	// 认证API（不需要认证）
+	// 认证API - login不需要认证
 	authController := api.NewAuthController(&cfg.Auth)
-	authController.RegisterRoutes(app)
+	app.Post("/api/auth/login", authController.Login)
 
 	// 需要认证的API
 	apiGroup.Use(middleware.AuthMiddleware(&cfg.Auth))
+
+	// 认证相关的需要认证的路由
+	apiGroup.Post("/auth/logout", authController.Logout)
+	apiGroup.Get("/auth/me", authController.Me)
 
 	// 终端API
 	terminalController := api.NewTerminalController(terminalManager)

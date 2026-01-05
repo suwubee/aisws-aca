@@ -72,6 +72,17 @@ type Session struct {
 	createdAt   time.Time
 	closedAt    *time.Time
 	done        chan struct{}
+	// 日志相关
+	logBuffer    []LogEntry
+	logMutex     sync.Mutex
+	logFlushChan chan struct{}
+}
+
+// LogEntry 日志条目
+type LogEntry struct {
+	LogType   string
+	Content   string
+	CreatedAt time.Time
 }
 
 // ScrollbackBuffer 滚动缓冲区
@@ -111,13 +122,15 @@ func (b *ScrollbackBuffer) Read() []byte {
 // NewSession 创建新会话
 func NewSession(id, shell string, scrollbackSize int) *Session {
 	return &Session{
-		id:          id,
-		shell:       shell,
-		status:      "running",
-		subscribers: make(map[string]chan StreamEvent),
-		scrollback:  NewScrollbackBuffer(scrollbackSize),
-		createdAt:   time.Now(),
-		done:        make(chan struct{}),
+		id:           id,
+		shell:        shell,
+		status:       "running",
+		subscribers:  make(map[string]chan StreamEvent),
+		scrollback:   NewScrollbackBuffer(scrollbackSize),
+		createdAt:    time.Now(),
+		done:         make(chan struct{}),
+		logBuffer:    make([]LogEntry, 0, 100),
+		logFlushChan: make(chan struct{}, 1),
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -145,6 +158,9 @@ func (s *Session) Start() error {
 	// 启动进程等待goroutine
 	go s.wait()
 
+	// 启动日志刷新goroutine
+	go s.flushLogs()
+
 	return nil
 }
 
@@ -167,6 +183,9 @@ func (s *Session) readPTY() {
 			if n > 0 {
 				data := buf[:n]
 				s.scrollback.Write(data)
+
+				// 记录输出日志
+				s.addLog("output", string(data))
 
 				// 广播数据事件
 				s.broadcast(StreamEvent{
@@ -307,6 +326,8 @@ func (s *Session) Write(data []byte) error {
 	if s.pty == nil {
 		return nil
 	}
+	// 记录输入日志
+	s.addLog("input", string(data))
 	_, err := s.pty.Write(data)
 	return err
 }
@@ -389,5 +410,85 @@ func (s *Session) ToDBModel() *model.TerminalSession {
 		PID:       s.metadata.PID,
 		CreatedAt: s.createdAt,
 		ClosedAt:  s.closedAt,
+	}
+}
+
+// addLog 添加日志到缓冲区
+func (s *Session) addLog(logType, content string) {
+	s.logMutex.Lock()
+	s.logBuffer = append(s.logBuffer, LogEntry{
+		LogType:   logType,
+		Content:   content,
+		CreatedAt: time.Now(),
+	})
+	shouldFlush := len(s.logBuffer) >= 50 // 缓冲区达到50条时触发刷新
+	s.logMutex.Unlock()
+
+	if shouldFlush {
+		select {
+		case s.logFlushChan <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// flushLogs 定期刷新日志到数据库
+func (s *Session) flushLogs() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			// 会话结束时刷新剩余日志
+			s.doFlushLogs()
+			return
+		case <-ticker.C:
+			s.doFlushLogs()
+		case <-s.logFlushChan:
+			s.doFlushLogs()
+		}
+	}
+}
+
+// doFlushLogs 实际执行日志刷新
+func (s *Session) doFlushLogs() {
+	s.logMutex.Lock()
+	if len(s.logBuffer) == 0 {
+		s.logMutex.Unlock()
+		return
+	}
+
+	logs := make([]LogEntry, len(s.logBuffer))
+	copy(logs, s.logBuffer)
+	s.logBuffer = s.logBuffer[:0]
+	s.logMutex.Unlock()
+
+	// 批量写入数据库
+	terminalID := s.id
+	var taskID *string
+	s.metaMutex.RLock()
+	if s.taskID != nil {
+		taskIDCopy := *s.taskID
+		taskID = &taskIDCopy
+	}
+	s.metaMutex.RUnlock()
+
+	dbLogs := make([]*model.Log, 0, len(logs))
+	for _, log := range logs {
+		dbLogs = append(dbLogs, &model.Log{
+			ID:         uuid.New().String(),
+			TerminalID: &terminalID,
+			TaskID:     taskID,
+			LogType:    log.LogType,
+			Content:    log.Content,
+			CreatedAt:  log.CreatedAt,
+		})
+	}
+
+	if len(dbLogs) > 0 {
+		if err := model.DB.CreateInBatches(dbLogs, 100).Error; err != nil {
+			utils.Warn("Failed to save terminal logs", zap.Error(err))
+		}
 	}
 }

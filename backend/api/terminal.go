@@ -248,9 +248,35 @@ func (ctrl *TerminalController) RegisterRoutes(app *fiber.App) {
 	terminals.Post("/:id/close", ctrl.CloseTerminal)
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
+	terminals.Get("/:id/logs", ctrl.GetLogs)
 
 	// WebSocket路由
 	app.Get("/api/terminal/ws", websocket.New(ctrl.HandleWebSocket))
+}
+
+// GetLogs 获取终端日志
+func (ctrl *TerminalController) GetLogs(c *fiber.Ctx) error {
+	id := c.Params("id")
+	limit := c.QueryInt("limit", 1000)
+	offset := c.QueryInt("offset", 0)
+	logType := c.Query("type") // input, output, 或空表示全部
+
+	query := model.DB.Where("terminal_id = ?", id).Order("created_at asc")
+
+	if logType != "" {
+		query = query.Where("log_type = ?", logType)
+	}
+
+	var total int64
+	query.Model(&model.Log{}).Count(&total)
+
+	var logs []model.Log
+	query.Offset(offset).Limit(limit).Find(&logs)
+
+	return c.JSON(fiber.Map{
+		"items": logs,
+		"total": total,
+	})
 }
 
 // GetDBSessions 获取数据库中的会话列表

@@ -10,6 +10,11 @@ build/
 *.so
 *.dylib
 
+# Go binaries
+backend/aca
+backend/aca_server
+backend/server
+
 # Database
 *.db
 *.sqlite

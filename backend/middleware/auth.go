@@ -16,23 +16,27 @@ func AuthMiddleware(cfg *config.AuthConfig) fiber.Handler {
 			return c.Next()
 		}
 
-		// 获取Authorization头
-		authHeader := c.Get("Authorization")
-		if authHeader == "" {
-			return c.Status(401).JSON(fiber.Map{
-				"error": "Missing authorization header",
-			})
+		var tokenString string
+
+		// 先尝试从query参数获取token（WebSocket用）
+		tokenString = c.Query("token")
+
+		// 如果query没有，尝试从Authorization header获取
+		if tokenString == "" {
+			authHeader := c.Get("Authorization")
+			if authHeader != "" {
+				parts := strings.Split(authHeader, " ")
+				if len(parts) == 2 && parts[0] == "Bearer" {
+					tokenString = parts[1]
+				}
+			}
 		}
 
-		// 解析Bearer Token
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
+		if tokenString == "" {
 			return c.Status(401).JSON(fiber.Map{
-				"error": "Invalid authorization header format",
+				"error": "Missing authorization token",
 			})
 		}
-
-		tokenString := parts[1]
 
 		// 验证Token
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {

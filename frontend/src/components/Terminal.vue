@@ -111,8 +111,10 @@ function handleMessage(msg: any) {
 
     case 'data':
       if (terminal && msg.data) {
-        const data = atob(msg.data)
-        terminal.write(data)
+        // 使用 TextDecoder 正确解码 UTF-8
+        const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))
+        const decoder = new TextDecoder('utf-8')
+        terminal.write(decoder.decode(bytes))
       }
       break
 
@@ -136,9 +138,13 @@ function handleMessage(msg: any) {
 
 function sendInput(data: string) {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    // 使用 TextEncoder 正确编码 UTF-8
+    const encoder = new TextEncoder()
+    const bytes = encoder.encode(data)
+    const base64 = btoa(String.fromCharCode(...bytes))
     ws.send(JSON.stringify({
       type: 'input',
-      data: btoa(data)
+      data: base64
     }))
   }
 }

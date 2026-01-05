@@ -1,5 +1,5 @@
 <template>
-  <div class="terminal-panel">
+  <div class="terminal-panel" :class="{ 'is-fullscreen': isFullscreen, 'is-floating': isFloating }">
     <!-- Terminal Tabs -->
     <div class="terminal-tabs">
       <button
@@ -22,45 +22,136 @@
       <button class="terminal-tab add-tab" @click="createNewTerminal">
         +
       </button>
+      <div class="terminal-actions">
+        <button
+          class="action-btn"
+          :class="{ active: showLogs }"
+          @click="toggleLogs"
+          title="显示日志"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M3 5v14h18V5H3zm16 12H5V7h14v10zM7 9h10v2H7zm0 4h7v2H7z"/>
+          </svg>
+        </button>
+        <button
+          class="action-btn"
+          :class="{ active: isFloating }"
+          @click="toggleFloating"
+          title="浮层显示"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H5V6h14v12zM7 8h10v2H7zm0 4h10v2H7z"/>
+          </svg>
+        </button>
+        <button
+          class="action-btn"
+          :class="{ active: isFullscreen }"
+          @click="toggleFullscreen"
+          title="全屏显示"
+        >
+          <svg v-if="!isFullscreen" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
+          </svg>
+        </button>
+        <button
+          v-if="isFloating || isFullscreen"
+          class="action-btn close-mode-btn"
+          @click="closeDisplayMode"
+          title="关闭"
+        >
+          ×
+        </button>
+      </div>
     </div>
 
     <!-- Terminal Content -->
-    <div class="terminal-content">
-      <div
-        v-for="terminal in terminals"
-        :key="terminal.id"
-        v-show="terminal.id === activeTerminalId"
-        class="terminal-wrapper"
-      >
-        <Terminal
-          :session-id="terminal.id"
-          @metadata-update="(m) => updateMetadata(terminal.id, m)"
-        />
+    <div class="terminal-content" :class="{ 'with-logs': showLogs }">
+      <div class="terminal-main">
+        <div
+          v-for="terminal in terminals"
+          :key="terminal.id"
+          v-show="terminal.id === activeTerminalId"
+          class="terminal-wrapper"
+        >
+          <Terminal
+            :session-id="terminal.id"
+            @metadata-update="(m) => updateMetadata(terminal.id, m)"
+          />
+        </div>
+        <div v-if="terminals.length === 0" class="empty-terminal">
+          <n-empty description="暂无终端">
+            <template #extra>
+              <n-button size="small" @click="createNewTerminal">
+                创建终端
+              </n-button>
+            </template>
+          </n-empty>
+        </div>
       </div>
-      <div v-if="terminals.length === 0" class="empty-terminal">
-        <n-empty description="暂无终端">
-          <template #extra>
-            <n-button size="small" @click="createNewTerminal">
-              创建终端
-            </n-button>
-          </template>
-        </n-empty>
+      <div v-if="showLogs && activeTerminalId" class="logs-panel">
+        <TerminalLogs :session-id="activeTerminalId" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
 import Terminal from './Terminal.vue'
+import TerminalLogs from './TerminalLogs.vue'
 
 const message = useMessage()
 const terminalStore = useTerminalStore()
 
 const terminals = computed(() => terminalStore.terminals)
 const activeTerminalId = computed(() => terminalStore.activeTerminalId)
+
+// 显示模式状态
+const isFullscreen = ref(false)
+const isFloating = ref(false)
+const showLogs = ref(false)
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+  if (isFullscreen.value) {
+    isFloating.value = false
+  }
+}
+
+function toggleFloating() {
+  isFloating.value = !isFloating.value
+  if (isFloating.value) {
+    isFullscreen.value = false
+  }
+}
+
+function toggleLogs() {
+  showLogs.value = !showLogs.value
+}
+
+function closeDisplayMode() {
+  isFullscreen.value = false
+  isFloating.value = false
+}
+
+// ESC键退出全屏/浮层
+watch([isFullscreen, isFloating], ([fullscreen, floating]) => {
+  const handleEsc = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      closeDisplayMode()
+    }
+  }
+  if (fullscreen || floating) {
+    document.addEventListener('keydown', handleEsc)
+  } else {
+    document.removeEventListener('keydown', handleEsc)
+  }
+})
 
 function setActiveTerminal(id: string) {
   terminalStore.setActiveTerminal(id)
@@ -103,6 +194,31 @@ function getStatusClass(terminal: TerminalTab) {
   display: flex;
   flex-direction: column;
   background: #1e1e1e;
+  transition: all 0.3s ease;
+}
+
+/* 全屏模式 */
+.terminal-panel.is-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  border-radius: 0;
+}
+
+/* 浮层模式 */
+.terminal-panel.is-floating {
+  position: fixed;
+  top: 10%;
+  left: 10%;
+  right: 10%;
+  bottom: 10%;
+  z-index: 1000;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: 1px solid #444;
 }
 
 .terminal-tabs {
@@ -111,6 +227,50 @@ function getStatusClass(terminal: TerminalTab) {
   padding: 4px 8px;
   background: #2d2d2d;
   overflow-x: auto;
+  align-items: center;
+}
+
+.terminal-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid #444;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: #888;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.action-btn.active {
+  background: rgba(24, 160, 88, 0.3);
+  color: #18a058;
+}
+
+.action-btn.close-mode-btn {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.action-btn.close-mode-btn:hover {
+  background: rgba(248, 113, 113, 0.3);
+  color: #f87171;
 }
 
 .terminal-tab {
@@ -186,6 +346,22 @@ function getStatusClass(terminal: TerminalTab) {
 
 .terminal-content {
   flex: 1;
+  overflow: hidden;
+  display: flex;
+}
+
+.terminal-main {
+  flex: 1;
+  overflow: hidden;
+}
+
+.terminal-content.with-logs .terminal-main {
+  flex: 1;
+}
+
+.logs-panel {
+  width: 400px;
+  border-left: 1px solid #333;
   overflow: hidden;
 }
 

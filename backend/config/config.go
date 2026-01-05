@@ -46,7 +46,7 @@ func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
-			Port: getEnv("SERVER_PORT", "3007"),
+			Port: getEnv("SERVER_PORT", "34007"),
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite",

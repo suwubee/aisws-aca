@@ -67,7 +67,9 @@ export const terminalApi = {
     api.post(`/terminals/${id}/rename`, { title }),
   linkTask: (id: string, taskId: string | null) =>
     api.post(`/terminals/${id}/link-task`, { task_id: taskId }),
-  stats: () => api.get('/terminals/stats')
+  stats: () => api.get('/terminals/stats'),
+  logs: (id: string, params?: { limit?: number; offset?: number; type?: string }) =>
+    api.get(`/terminals/${id}/logs`, { params })
 }
 
 // Automation API (预留)
