@@ -58,35 +58,107 @@ func (e *Engine) SetMessageCallback(fn func(msg *model.Message)) {
 	e.onMessage = fn
 }
 
-// GetAutomationConfig 获取终端的自动化配置
-func (e *Engine) GetAutomationConfig(terminalID string) (*model.TerminalAutomation, error) {
-	var config model.TerminalAutomation
-	err := model.DB.Where("terminal_id = ?", terminalID).First(&config).Error
-	if err != nil {
-		// 返回默认配置
-		return &model.TerminalAutomation{
-			TerminalID:       terminalID,
-			ApprovalMode:     "manual",
-			AutoInputType:    "yes",
-			ContextLines:     50,
-			DetectClaudeCode: true,
-			DetectCodex:      true,
-			DetectGemini:     true,
-			NotifyOnBlock:    true,
-		}, nil
-	}
-	return &config, nil
+// EffectiveConfig 有效的审批配置（从RuleSet解析）
+type EffectiveConfig struct {
+	TerminalID        string
+	ApprovalMode      string
+	AutoInputType     string
+	WhitelistPatterns string
+	BlacklistPatterns string
+	AIProviderID      *string
+	AIPrompt          string
+	ContextLines      int
+	DetectClaudeCode  bool
+	DetectCodex       bool
+	DetectGemini      bool
+	NotifyOnBlock     bool
+	NotifyOnApprove   bool
 }
 
-// SaveAutomationConfig 保存终端自动化配置
-func (e *Engine) SaveAutomationConfig(config *model.TerminalAutomation) error {
-	if config.ID == "" {
-		config.ID = uuid.New().String()
-		config.CreatedAt = time.Now()
+// GetAutomationConfig 获取终端的有效自动化配置
+func (e *Engine) GetAutomationConfig(terminalID string) (*EffectiveConfig, error) {
+	// 获取终端信息
+	var terminal model.TerminalSession
+	if err := model.DB.First(&terminal, "id = ?", terminalID).Error; err != nil {
+		// 终端不存在，返回默认配置
+		return e.getDefaultConfig(terminalID), nil
 	}
-	config.UpdatedAt = time.Now()
-	return model.DB.Save(config).Error
+
+	// 根据终端的规则模式获取对应的规则集
+	var ruleSet *model.RuleSet
+
+	switch terminal.RuleMode {
+	case "system":
+		// 使用系统规则
+		var systemRule model.RuleSet
+		if err := model.DB.Where("type = ?", "system").First(&systemRule).Error; err == nil {
+			ruleSet = &systemRule
+		}
+
+	case "task":
+		// 使用关联任务的规则
+		if terminal.TaskID != nil {
+			var task model.Task
+			if err := model.DB.First(&task, "id = ?", *terminal.TaskID).Error; err == nil && task.RuleSetID != nil {
+				var taskRule model.RuleSet
+				if err := model.DB.First(&taskRule, "id = ?", *task.RuleSetID).Error; err == nil {
+					ruleSet = &taskRule
+				}
+			}
+		}
+
+	case "custom":
+		// 使用终端自定义规则
+		if terminal.RuleSetID != nil {
+			var customRule model.RuleSet
+			if err := model.DB.First(&customRule, "id = ?", *terminal.RuleSetID).Error; err == nil {
+				ruleSet = &customRule
+			}
+		}
+
+	default:
+		// none 模式，返回默认配置（手动审批）
+		return e.getDefaultConfig(terminalID), nil
+	}
+
+	// 如果没有找到规则集，返回默认配置
+	if ruleSet == nil {
+		return e.getDefaultConfig(terminalID), nil
+	}
+
+	// 将RuleSet转换为EffectiveConfig
+	return &EffectiveConfig{
+		TerminalID:        terminalID,
+		ApprovalMode:      ruleSet.ApprovalMode,
+		AutoInputType:     ruleSet.AutoInputType,
+		WhitelistPatterns: ruleSet.WhitelistPatterns,
+		BlacklistPatterns: ruleSet.BlacklistPatterns,
+		AIProviderID:      ruleSet.AIProviderID,
+		AIPrompt:          ruleSet.AIPrompt,
+		ContextLines:      ruleSet.ContextLines,
+		DetectClaudeCode:  ruleSet.DetectClaudeCode,
+		DetectCodex:       ruleSet.DetectCodex,
+		DetectGemini:      ruleSet.DetectGemini,
+		NotifyOnBlock:     ruleSet.NotifyOnBlock,
+		NotifyOnApprove:   ruleSet.NotifyOnApprove,
+	}, nil
 }
+
+// getDefaultConfig 返回默认配置
+func (e *Engine) getDefaultConfig(terminalID string) *EffectiveConfig {
+	return &EffectiveConfig{
+		TerminalID:        terminalID,
+		ApprovalMode:      "manual",
+		AutoInputType:     "yes",
+		ContextLines:      50,
+		DetectClaudeCode:  true,
+		DetectCodex:       true,
+		DetectGemini:      true,
+		NotifyOnBlock:     true,
+		NotifyOnApprove:   false,
+	}
+}
+
 
 // Evaluate 评估是否需要审批以及采取什么动作
 func (e *Engine) Evaluate(ctx context.Context, terminalID, output string) (*ApprovalResult, error) {
@@ -117,7 +189,7 @@ func (e *Engine) Evaluate(ctx context.Context, terminalID, output string) (*Appr
 }
 
 // handleManualMode 手动模式 - 检查黑名单并通知
-func (e *Engine) handleManualMode(config *model.TerminalAutomation, output string) (*ApprovalResult, error) {
+func (e *Engine) handleManualMode(config *EffectiveConfig, output string) (*ApprovalResult, error) {
 	// 检查黑名单
 	if config.BlacklistPatterns != "" {
 		patterns := parsePatterns(config.BlacklistPatterns)
@@ -144,7 +216,7 @@ func (e *Engine) handleManualMode(config *model.TerminalAutomation, output strin
 }
 
 // handleAutoYesMode 自动通过模式 - 检查黑名单，否则自动输入
-func (e *Engine) handleAutoYesMode(config *model.TerminalAutomation, output string) (*ApprovalResult, error) {
+func (e *Engine) handleAutoYesMode(config *EffectiveConfig, output string) (*ApprovalResult, error) {
 	// 先检查黑名单
 	if config.BlacklistPatterns != "" {
 		patterns := parsePatterns(config.BlacklistPatterns)
@@ -181,7 +253,7 @@ func (e *Engine) handleAutoYesMode(config *model.TerminalAutomation, output stri
 }
 
 // handleSmartMode AI辅助模式
-func (e *Engine) handleSmartMode(ctx context.Context, config *model.TerminalAutomation, output string) (*ApprovalResult, error) {
+func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, output string) (*ApprovalResult, error) {
 	// 先检查白名单
 	if config.WhitelistPatterns != "" {
 		patterns := parsePatterns(config.WhitelistPatterns)

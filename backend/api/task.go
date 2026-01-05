@@ -15,10 +15,11 @@ func NewTaskController() *TaskController {
 }
 
 type CreateTaskRequest struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Priority    int    `json:"priority"`
-	Status      string `json:"status"`
+	Title       string  `json:"title"`
+	Description string  `json:"description"`
+	Priority    int     `json:"priority"`
+	Status      string  `json:"status"`
+	RuleSetID   *string `json:"rule_set_id"`
 }
 
 type UpdateTaskRequest struct {
@@ -26,6 +27,7 @@ type UpdateTaskRequest struct {
 	Description *string `json:"description"`
 	Priority    *int    `json:"priority"`
 	Status      *string `json:"status"`
+	RuleSetID   *string `json:"rule_set_id"`
 }
 
 type MoveTaskRequest struct {
@@ -55,6 +57,7 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		Description: req.Description,
 		Status:      status,
 		Priority:    req.Priority,
+		RuleSetID:   req.RuleSetID,
 		OrderIndex:  float64(time.Now().UnixNano()),
 	}
 
@@ -130,6 +133,13 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 		if *req.Status == "done" {
 			now := time.Now()
 			updates["completed_at"] = now
+		}
+	}
+	if req.RuleSetID != nil {
+		if *req.RuleSetID == "" {
+			updates["rule_set_id"] = nil
+		} else {
+			updates["rule_set_id"] = *req.RuleSetID
 		}
 	}
 
@@ -210,8 +220,8 @@ func (ctrl *TaskController) GetTasksByStatus(c *fiber.Ctx) error {
 }
 
 // RegisterRoutes 注册路由
-func (ctrl *TaskController) RegisterRoutes(app *fiber.App) {
-	tasks := app.Group("/api/tasks")
+func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
+	tasks := app.Group("/tasks")
 	tasks.Get("/", ctrl.ListTasks)
 	tasks.Post("/", ctrl.CreateTask)
 	tasks.Get("/by-status", ctrl.GetTasksByStatus)

@@ -91,18 +91,21 @@ func main() {
 	// 认证相关的需要认证的路由
 	apiGroup.Post("/auth/logout", authController.Logout)
 	apiGroup.Get("/auth/me", authController.Me)
+	apiGroup.Post("/auth/change-password", authController.ChangePassword)
+	apiGroup.Post("/auth/reset-data", authController.ResetData)
 
-	// 终端API
+	// 终端API (注册在apiGroup上，继承auth中间件)
 	terminalController := api.NewTerminalController(terminalManager)
-	terminalController.RegisterRoutes(app)
+	terminalController.RegisterRoutes(apiGroup)
+	terminalController.RegisterWebSocket(app) // WebSocket单独注册，不需要auth
 
 	// 任务API
 	taskController := api.NewTaskController()
-	taskController.RegisterRoutes(app)
+	taskController.RegisterRoutes(apiGroup)
 
-	// 自动化API（预留）
+	// 自动化API
 	automationController := api.NewAutomationController()
-	automationController.RegisterRoutes(app)
+	automationController.RegisterRoutes(apiGroup)
 
 	// 健康检查
 	app.Get("/api/health", func(c *fiber.Ctx) error {

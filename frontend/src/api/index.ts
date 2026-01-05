@@ -37,7 +37,10 @@ export const authApi = {
   login: (username: string, password: string) =>
     api.post('/auth/login', { username, password }),
   logout: () => api.post('/auth/logout'),
-  me: () => api.get('/auth/me')
+  me: () => api.get('/auth/me'),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    api.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
+  resetData: () => api.post('/auth/reset-data')
 }
 
 // Task API
@@ -46,9 +49,9 @@ export const taskApi = {
     api.get('/tasks', { params }),
   getByStatus: () => api.get('/tasks/by-status'),
   get: (id: string) => api.get(`/tasks/${id}`),
-  create: (data: { title: string; description?: string; priority?: number }) =>
+  create: (data: { title: string; description?: string; priority?: number; rule_set_id?: string }) =>
     api.post('/tasks', data),
-  update: (id: string, data: Partial<{ title: string; description: string; status: string; priority: number }>) =>
+  update: (id: string, data: Partial<{ title: string; description: string; status: string; priority: number; rule_set_id: string | null }>) =>
     api.put(`/tasks/${id}`, data),
   delete: (id: string) => api.delete(`/tasks/${id}`),
   move: (id: string, data: { status: string; order_index: number }) =>
@@ -69,11 +72,82 @@ export const terminalApi = {
     api.post(`/terminals/${id}/link-task`, { task_id: taskId }),
   stats: () => api.get('/terminals/stats'),
   logs: (id: string, params?: { limit?: number; offset?: number; type?: string }) =>
-    api.get(`/terminals/${id}/logs`, { params })
+    api.get(`/terminals/${id}/logs`, { params }),
+  clearLogs: (id: string) => api.delete(`/terminals/${id}/logs`),
+  deleteLog: (id: string, logId: string) => api.delete(`/terminals/${id}/logs/${logId}`)
+}
+
+// Log API
+export const logApi = {
+  list: (params?: { terminal_id?: string; type?: string; keyword?: string; limit?: number; offset?: number }) =>
+    api.get('/logs', { params }),
+  listSessions: () => api.get('/logs/sessions'),
+  delete: (id: string) => api.delete(`/logs/${id}`)
+}
+
+// RuleSet 规则集类型
+export interface RuleSet {
+  id: string
+  name: string
+  type: string  // system, task, terminal
+  approval_mode: string
+  auto_input_type: string
+  whitelist_patterns: string
+  blacklist_patterns: string
+  ai_provider_id: string | null
+  ai_prompt: string
+  context_lines: number
+  detect_claude_code: boolean
+  detect_codex: boolean
+  detect_gemini: boolean
+  notify_on_block: boolean
+  notify_on_approve: boolean
+  created_at: string
+  updated_at: string
+}
+
+// RuleSet 请求数据
+export interface RuleSetRequest {
+  name?: string
+  approval_mode?: string
+  auto_input_type?: string
+  whitelist_patterns?: string[]
+  blacklist_patterns?: string[]
+  ai_provider_id?: string | null
+  ai_prompt?: string
+  context_lines?: number
+  detect_claude_code?: boolean
+  detect_codex?: boolean
+  detect_gemini?: boolean
+  notify_on_block?: boolean
+  notify_on_approve?: boolean
 }
 
 // Automation API
 export const automationApi = {
+  // 系统规则
+  getSystemRule: () => api.get('/automation/system-rule'),
+  updateSystemRule: (data: RuleSetRequest) => api.put('/automation/system-rule', data),
+
+  // 规则集 CRUD
+  listRuleSets: (type?: string) => api.get('/automation/rulesets', { params: type ? { type } : {} }),
+  getRuleSet: (id: string) => api.get(`/automation/rulesets/${id}`),
+  createRuleSet: (data: RuleSetRequest, type: string = 'terminal') =>
+    api.post('/automation/rulesets', data, { params: { type } }),
+  updateRuleSet: (id: string, data: RuleSetRequest) => api.put(`/automation/rulesets/${id}`, data),
+  deleteRuleSet: (id: string) => api.delete(`/automation/rulesets/${id}`),
+
+  // 终端规则模式
+  getTerminalRuleMode: (terminalId: string) =>
+    api.get(`/automation/terminals/${terminalId}/rule-mode`),
+  updateTerminalRuleMode: (terminalId: string, data: { rule_mode: string; rule_set_id?: string | null }) =>
+    api.put(`/automation/terminals/${terminalId}/rule-mode`, data),
+  createTerminalCustomRule: (terminalId: string, data: RuleSetRequest) =>
+    api.post(`/automation/terminals/${terminalId}/custom-rule`, data),
+
+  // 默认规则模板
+  getDefaultPatterns: () => api.get('/automation/patterns/defaults'),
+
   // AI Provider配置
   listAIProviders: () => api.get('/automation/ai-providers'),
   getAIProvider: (id: string) => api.get(`/automation/ai-providers/${id}`),
@@ -100,25 +174,6 @@ export const automationApi = {
     enabled?: boolean
   }) => api.put(`/automation/ai-providers/${id}`, data),
   deleteAIProvider: (id: string) => api.delete(`/automation/ai-providers/${id}`),
-
-  // 终端自动化配置
-  getTerminalConfig: (terminalId: string) =>
-    api.get(`/automation/terminals/${terminalId}/config`),
-  updateTerminalConfig: (terminalId: string, data: {
-    approval_mode?: string
-    auto_input_type?: string
-    whitelist_patterns?: string
-    blacklist_patterns?: string
-    ai_provider_id?: string | null
-    ai_prompt?: string
-    context_lines?: number
-    detect_claude_code?: boolean
-    detect_codex?: boolean
-    detect_gemini?: boolean
-    notify_on_block?: boolean
-    notify_on_approve?: boolean
-  }) => api.put(`/automation/terminals/${terminalId}/config`, data),
-  getDefaultPatterns: () => api.get('/automation/patterns/defaults'),
 
   // 消息管理
   listMessages: (params?: {

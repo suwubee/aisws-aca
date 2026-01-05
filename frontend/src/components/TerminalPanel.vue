@@ -14,6 +14,9 @@
           :class="getStatusClass(terminal)"
         ></span>
         <span class="tab-title">{{ terminal.title || 'Terminal' }}</span>
+        <span v-if="terminal.task_id" class="tab-task" :title="getTaskTitle(terminal.task_id)">
+          {{ getTaskTitle(terminal.task_id) }}
+        </span>
         <span
           class="close-btn"
           @click.stop="closeTerminal(terminal.id)"
@@ -23,6 +26,16 @@
         +
       </button>
       <div class="terminal-actions">
+        <button
+          class="action-btn"
+          @click="showRuleConfig = true"
+          :disabled="!activeTerminalId"
+          title="终端规则配置"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+          </svg>
+        </button>
         <button
           class="action-btn"
           :class="{ active: showLogs }"
@@ -95,26 +108,81 @@
         <TerminalLogs :session-id="activeTerminalId" />
       </div>
     </div>
+
+    <!-- Terminal Rule Config Modal -->
+    <TerminalRuleConfig
+      v-if="activeTerminalId"
+      :show="showRuleConfig"
+      :terminal-id="activeTerminalId"
+      :terminal-title="activeTerminal?.title"
+      @close="showRuleConfig = false"
+    />
+
+    <!-- Create Terminal Modal -->
+    <n-modal
+      v-model:show="showCreateTerminal"
+      preset="dialog"
+      title="创建终端"
+      positive-text="创建"
+      negative-text="取消"
+      style="width: 520px"
+      @positive-click="confirmCreateTerminal"
+    >
+      <n-form label-placement="left" label-width="90">
+        <n-form-item label="标题">
+          <n-input v-model:value="createTerminalForm.title" placeholder="可选" />
+        </n-form-item>
+        <n-form-item label="关联任务">
+          <n-select
+            v-model:value="createTerminalForm.taskId"
+            :options="taskOptions"
+            clearable
+            placeholder="选择要关联的任务（建议）"
+          />
+        </n-form-item>
+      </n-form>
+      <n-text depth="3">
+        未关联任务的终端会不便于追踪，建议选择一个任务进行关联。
+      </n-text>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
+import { useTaskStore } from '@/stores/task'
 import Terminal from './Terminal.vue'
 import TerminalLogs from './TerminalLogs.vue'
+import TerminalRuleConfig from './TerminalRuleConfig.vue'
 
 const message = useMessage()
 const terminalStore = useTerminalStore()
+const taskStore = useTaskStore()
 
 const terminals = computed(() => terminalStore.terminals)
 const activeTerminalId = computed(() => terminalStore.activeTerminalId)
+const activeTerminal = computed(() => terminals.value.find(t => t.id === activeTerminalId.value))
+const taskOptions = computed(() =>
+  taskStore.tasks.map(t => ({ label: t.title, value: t.id }))
+)
+const taskTitleMap = computed(() => {
+  const map = new Map<string, string>()
+  taskStore.tasks.forEach(t => map.set(t.id, t.title))
+  return map
+})
 
 // 显示模式状态
 const isFullscreen = ref(false)
 const isFloating = ref(false)
 const showLogs = ref(false)
+const showRuleConfig = ref(false)
+const showCreateTerminal = ref(false)
+const createTerminalForm = reactive({
+  title: '',
+  taskId: null as string | null
+})
 
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value
@@ -158,9 +226,24 @@ function setActiveTerminal(id: string) {
 }
 
 async function createNewTerminal() {
+  showCreateTerminal.value = true
+}
+
+async function confirmCreateTerminal() {
   try {
-    await terminalStore.createTerminal()
-    message.success('终端已创建')
+    const created = await terminalStore.createTerminal(
+      createTerminalForm.title,
+      createTerminalForm.taskId || undefined
+    )
+    showCreateTerminal.value = false
+    createTerminalForm.title = ''
+    createTerminalForm.taskId = null
+
+    if (created.task_id) {
+      message.success('终端已创建并关联任务')
+    } else {
+      message.warning('终端已创建，但未关联任务')
+    }
   } catch (error) {
     message.error('创建终端失败')
   }
@@ -177,6 +260,10 @@ async function closeTerminal(id: string) {
 
 function updateMetadata(id: string, metadata: any) {
   terminalStore.updateTerminalMetadata(id, metadata)
+}
+
+function getTaskTitle(taskId: string) {
+  return taskTitleMap.value.get(taskId) || taskId.slice(0, 8)
 }
 
 function getStatusClass(terminal: TerminalTab) {
@@ -236,6 +323,19 @@ function getStatusClass(terminal: TerminalTab) {
   gap: 4px;
   padding-left: 8px;
   border-left: 1px solid #444;
+}
+
+.tab-task {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.12);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .action-btn {

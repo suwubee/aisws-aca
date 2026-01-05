@@ -107,10 +107,71 @@ func (ctrl *AuthController) Me(c *fiber.Ctx) error {
 	})
 }
 
+// ChangePasswordRequest 修改密码请求
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+// ChangePassword 修改密码
+func (ctrl *AuthController) ChangePassword(c *fiber.Ctx) error {
+	var req ChangePasswordRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.OldPassword == "" || req.NewPassword == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Old password and new password are required"})
+	}
+
+	if len(req.NewPassword) < 6 {
+		return c.Status(400).JSON(fiber.Map{"error": "New password must be at least 6 characters"})
+	}
+
+	// 验证旧密码
+	if req.OldPassword != ctrl.config.Password {
+		return c.Status(401).JSON(fiber.Map{"error": "Old password is incorrect"})
+	}
+
+	// 更新配置文件中的密码（这里简化处理，实际应该更新配置文件）
+	ctrl.config.Password = req.NewPassword
+
+	// 更新数据库中的密码哈希
+	userID := c.Locals("userID")
+	if userID != nil {
+		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+		model.DB.Model(&model.User{}).Where("id = ?", userID).Update("password_hash", string(hashedPassword))
+	}
+
+	return c.JSON(fiber.Map{"message": "Password changed successfully"})
+}
+
+// ResetData 重置所有数据
+func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
+	// 删除所有日志
+	model.DB.Exec("DELETE FROM logs")
+	// 删除所有终端会话
+	model.DB.Exec("DELETE FROM terminal_sessions")
+	// 删除所有任务
+	model.DB.Exec("DELETE FROM tasks")
+	// 删除所有AI会话
+	model.DB.Exec("DELETE FROM ai_sessions")
+	// 删除所有审批记录
+	model.DB.Exec("DELETE FROM approval_records")
+	// 删除所有消息
+	model.DB.Exec("DELETE FROM messages")
+	// 删除所有终端自动化配置
+	model.DB.Exec("DELETE FROM terminal_automations")
+
+	return c.JSON(fiber.Map{"message": "All data has been reset"})
+}
+
 // RegisterRoutes 注册路由
 func (ctrl *AuthController) RegisterRoutes(app *fiber.App) {
 	auth := app.Group("/api/auth")
 	auth.Post("/login", ctrl.Login)
 	auth.Post("/logout", ctrl.Logout)
 	auth.Get("/me", ctrl.Me)
+	auth.Post("/change-password", ctrl.ChangePassword)
+	auth.Post("/reset-data", ctrl.ResetData)
 }

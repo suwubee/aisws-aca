@@ -35,11 +35,37 @@
           {{ aiStatus }}
         </n-tag>
       </div>
-      <n-button
-        size="tiny"
-        quaternary
-        @click="$emit('open-terminal', task)"
+      <n-popover
+        v-if="terminalCount > 0"
+        trigger="hover"
+        placement="bottom-end"
+        :show-arrow="false"
+        style="max-width: 280px"
       >
+        <template #trigger>
+          <n-button size="tiny" quaternary @click="$emit('open-terminal', task)">
+            终端
+            <n-badge :value="terminalCount" :max="99" class="terminal-badge" />
+          </n-button>
+        </template>
+        <div class="terminal-popover">
+          <div class="terminal-popover-title">关联终端</div>
+          <div
+            v-for="t in relatedTerminals"
+            :key="t.id"
+            class="terminal-popover-item"
+            @click="activateTerminal(t.id)"
+          >
+            <span class="terminal-name">{{ t.title || 'Terminal' }}</span>
+            <span class="terminal-state">{{ t.status }}</span>
+          </div>
+          <n-divider style="margin: 8px 0" />
+          <div class="terminal-popover-item terminal-popover-new" @click="$emit('open-terminal', task)">
+            + 新建终端
+          </div>
+        </div>
+      </n-popover>
+      <n-button v-else size="tiny" quaternary @click="$emit('open-terminal', task)">
         终端
       </n-button>
     </div>
@@ -49,6 +75,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { Task } from '@/stores/task'
+import { useTerminalStore } from '@/stores/terminal'
 
 const props = defineProps<{
   task: Task
@@ -61,6 +88,13 @@ const emit = defineEmits<{
 }>()
 
 const isDragging = ref(false)
+const terminalStore = useTerminalStore()
+
+const relatedTerminals = computed(() =>
+  terminalStore.terminals.filter(t => t.task_id === props.task.id)
+)
+
+const terminalCount = computed(() => relatedTerminals.value.length)
 
 const priorityLabel = computed(() => {
   const labels = ['低', '中', '高', '紧急']
@@ -80,6 +114,10 @@ const aiStatus = computed(() => {
 const aiStatusType = computed(() => {
   return 'success'
 })
+
+function activateTerminal(id: string) {
+  terminalStore.setActiveTerminal(id)
+}
 
 const menuOptions = [
   { label: '编辑', key: 'edit' },
@@ -137,5 +175,46 @@ function handleMenuSelect(key: string) {
 .task-meta {
   display: flex;
   gap: 4px;
+}
+
+.terminal-badge {
+  margin-left: 6px;
+}
+
+.terminal-popover-title {
+  font-size: 12px;
+  color: #aaa;
+  margin-bottom: 6px;
+}
+
+.terminal-popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.terminal-popover-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.terminal-popover-new {
+  color: var(--primary-color);
+  justify-content: center;
+}
+
+.terminal-name {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-state {
+  font-size: 12px;
+  color: #888;
 }
 </style>

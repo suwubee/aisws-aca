@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -96,6 +98,12 @@ type Session struct {
 	logBuffer    []LogEntry
 	logMutex     sync.Mutex
 	logFlushChan chan struct{}
+	// 输入/输出日志聚合（避免按字符记录）
+	ioBufMutex        sync.Mutex
+	inputLineBuf      []rune
+	inputEscState     int // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
+	outputLineBuf     string
+	outputLineBufSize int
 	// 检测和审批相关
 	detector       *detector.Detector
 	approvalEngine *approval.Engine
@@ -156,6 +164,9 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 		done:           make(chan struct{}),
 		logBuffer:      make([]LogEntry, 0, 100),
 		logFlushChan:   make(chan struct{}, 1),
+		inputLineBuf:   make([]rune, 0, 256),
+		outputLineBuf:  "",
+		outputLineBufSize: 8192,
 		detector:       detector.NewDetector(),
 		approvalEngine: approval.NewEngine(),
 		metadata: &SessionMetadata{
@@ -226,7 +237,7 @@ func (s *Session) readPTY() {
 				s.scrollback.Write(data)
 
 				// 记录输出日志
-				s.addLog("output", string(data))
+				s.addOutputLog(data)
 
 				// 广播数据事件
 				s.broadcast(StreamEvent{
@@ -455,7 +466,7 @@ func (s *Session) Write(data []byte) error {
 		return nil
 	}
 	// 记录输入日志
-	s.addLog("input", string(data))
+	s.addInputLog(data)
 	_, err := s.pty.Write(data)
 	return err
 }
@@ -503,14 +514,13 @@ func (s *Session) SendApprovalResponse(input string) error {
 }
 
 // GetAutomationConfig 获取自动化配置
-func (s *Session) GetAutomationConfig() (*model.TerminalAutomation, error) {
+func (s *Session) GetAutomationConfig() (*approval.EffectiveConfig, error) {
 	return s.approvalEngine.GetAutomationConfig(s.id)
 }
 
-// SetAutomationConfig 设置自动化配置
-func (s *Session) SetAutomationConfig(config *model.TerminalAutomation) error {
-	config.TerminalID = s.id
-	err := s.approvalEngine.SaveAutomationConfig(config)
+// RefreshAutomationConfig 刷新自动化配置元数据
+func (s *Session) RefreshAutomationConfig() error {
+	config, err := s.approvalEngine.GetAutomationConfig(s.id)
 	if err != nil {
 		return err
 	}
@@ -568,12 +578,131 @@ func (s *Session) ToDBModel() *model.TerminalSession {
 	}
 }
 
+// addInputLog 将用户/自动化输入按行聚合后写入日志缓冲（避免按字符记录）
+func (s *Session) addInputLog(data []byte) {
+	s.ioBufMutex.Lock()
+	defer s.ioBufMutex.Unlock()
+
+	for _, r := range string(data) {
+		// 处理方向键等转义序列，避免污染输入日志
+		switch s.inputEscState {
+		case 1: // 刚收到 ESC
+			switch r {
+			case '[':
+				s.inputEscState = 2
+				continue
+			case 'O':
+				s.inputEscState = 3
+				continue
+			default:
+				s.inputEscState = 0
+				continue
+			}
+		case 2: // CSI(ESC[...)
+			// 以字母或 ~ 结束
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '~' {
+				s.inputEscState = 0
+			}
+			continue
+		case 3: // SS3(ESCO...)
+			s.inputEscState = 0
+			continue
+		}
+
+		switch r {
+		case '\x1b':
+			s.inputEscState = 1
+			continue
+		case '\r', '\n':
+			s.flushInputLineLocked()
+			continue
+		case '\b', '\x7f':
+			if len(s.inputLineBuf) > 0 {
+				s.inputLineBuf = s.inputLineBuf[:len(s.inputLineBuf)-1]
+			}
+			continue
+		}
+
+		// 忽略控制字符（保留制表符）
+		if r < 32 && r != '\t' {
+			continue
+		}
+
+		s.inputLineBuf = append(s.inputLineBuf, r)
+		// 防止极端情况下输入缓冲无限增长
+		if len(s.inputLineBuf) > 4096 {
+			s.inputLineBuf = s.inputLineBuf[len(s.inputLineBuf)-4096:]
+		}
+	}
+}
+
+func (s *Session) flushInputLineLocked() {
+	if len(s.inputLineBuf) == 0 {
+		return
+	}
+	line := strings.TrimSpace(string(s.inputLineBuf))
+	s.inputLineBuf = s.inputLineBuf[:0]
+	if line == "" {
+		return
+	}
+	s.addLog("input", line+"\n")
+}
+
+// addOutputLog 将PTY输出按行聚合，过滤提示符/回显后写入日志缓冲
+func (s *Session) addOutputLog(data []byte) {
+	// 先做一次轻量清理，保留换行用于分行
+	cleaned := stripANSI(string(data))
+	if strings.TrimSpace(cleaned) == "" {
+		return
+	}
+
+	// 统一换行符
+	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
+
+	// 追加到输出行缓冲
+	s.ioBufMutex.Lock()
+	s.outputLineBuf += cleaned
+	if s.outputLineBufSize > 0 && len(s.outputLineBuf) > s.outputLineBufSize {
+		s.outputLineBuf = s.outputLineBuf[len(s.outputLineBuf)-s.outputLineBufSize:]
+	}
+	buf := s.outputLineBuf
+	parts := strings.Split(buf, "\n")
+	// 最后一个可能是不完整行，留待后续补全
+	s.outputLineBuf = parts[len(parts)-1]
+	s.ioBufMutex.Unlock()
+
+	for _, line := range parts[:len(parts)-1] {
+		// 保留前导空白（可能有缩进），仅去掉右侧空白
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if isShellPromptOrCommandLine(line) {
+			continue
+		}
+		s.addLog("output", line+"\n")
+	}
+}
+
 // addLog 添加日志到缓冲区
 func (s *Session) addLog(logType, content string) {
+	// 清理ANSI转义码
+	cleanContent := stripANSI(content)
+	// 过滤空内容
+	if strings.TrimSpace(cleanContent) == "" {
+		return
+	}
+
+	// 过滤shell提示符（仅对输出类型）
+	if logType == "output" && isShellPromptOnly(cleanContent) {
+		return
+	}
+
 	s.logMutex.Lock()
 	s.logBuffer = append(s.logBuffer, LogEntry{
 		LogType:   logType,
-		Content:   content,
+		Content:   cleanContent,
 		CreatedAt: time.Now(),
 	})
 	shouldFlush := len(s.logBuffer) >= 50 // 缓冲区达到50条时触发刷新
@@ -585,6 +714,103 @@ func (s *Session) addLog(logType, content string) {
 		default:
 		}
 	}
+}
+
+// ANSI转义码正则表达式
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_].*?\x1b\\|\x1b\[[\?]?[0-9;]*[hlm]`)
+
+// Shell提示符正则表达式
+var shellPromptRegex = regexp.MustCompile(`^[\s\r\n]*([a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[~\/][^\$#]*[\$#]\s*)+[\s\r\n]*$`)
+
+// 提示符+命令行（回显）过滤：例如 "root@host:~/path# ls -la"
+var shellPromptWithCommandRegex = regexp.MustCompile(`^(?:\([^)]+\)\s*)?[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[^$#%]*[$#%]\s+.+$`)
+var simplePromptWithCommandRegex = regexp.MustCompile(`^[$#%>]\s+.+$`)
+
+// isShellPromptOnly 检查内容是否只是shell提示符
+func isShellPromptOnly(content string) bool {
+	// 去除首尾空白
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+
+	// 检查是否匹配常见的shell提示符模式
+	// 例如: "root@hostname:~/path# " 或 "user@host:~$ "
+	if shellPromptRegex.MatchString(content) {
+		return true
+	}
+
+	// 检查是否只包含换行和提示符
+	lines := strings.Split(trimmed, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// 如果有任何非提示符行，返回false
+		if !isPromptLine(line) {
+			return false
+		}
+	}
+	return true
+}
+
+// isPromptLine 检查单行是否是shell提示符
+func isPromptLine(line string) bool {
+	// 常见的提示符模式
+	patterns := []string{
+		`^[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[^$#]*[$#]\s*$`,  // user@host:path$
+		`^[$#>]\s*$`,                                       // 简单提示符
+		`^\([^)]+\)\s*[$#>]\s*$`,                           // (venv) $
+		`^.*[$#>%]\s*$`,                                    // 任何以提示符结尾的行（仅当行很短时）
+	}
+
+	// 如果行太长，不太可能只是提示符
+	if len(line) > 100 {
+		return false
+	}
+
+	for _, pattern := range patterns {
+		if matched, _ := regexp.MatchString(pattern, line); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// isShellPromptOrCommandLine 检查单行是否为提示符或提示符回显的命令行
+func isShellPromptOrCommandLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return true
+	}
+	if isPromptLine(trimmed) {
+		return true
+	}
+	if shellPromptWithCommandRegex.MatchString(trimmed) {
+		return true
+	}
+	if simplePromptWithCommandRegex.MatchString(trimmed) {
+		return true
+	}
+	return false
+}
+
+// stripANSI 去除ANSI转义码
+func stripANSI(s string) string {
+	// 移除ANSI转义序列
+	result := ansiRegex.ReplaceAllString(s, "")
+	// 移除其他控制字符（保留换行和制表符）
+	cleaned := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r == '\r' {
+			return r
+		}
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, result)
+	return cleaned
 }
 
 // flushLogs 定期刷新日志到数据库

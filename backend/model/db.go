@@ -28,7 +28,7 @@ func InitDB(dsn string) error {
 		&ApprovalRecord{},
 		&Log{},
 		&AIProviderConfig{},
-		&TerminalAutomation{},
+		&RuleSet{},
 		&Message{},
 	)
 }
@@ -50,6 +50,7 @@ type Task struct {
 	Status      string     `gorm:"default:todo;index" json:"status"` // todo, in_progress, done, archived
 	Priority    int        `gorm:"default:0;index" json:"priority"`  // 0-3
 	OrderIndex  float64    `gorm:"index" json:"order_index"`
+	RuleSetID   *string    `gorm:"index" json:"rule_set_id"` // 任务关联的规则集
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at"`
@@ -63,6 +64,8 @@ type TerminalSession struct {
 	Shell     string     `gorm:"default:bash" json:"shell"`
 	Status    string     `gorm:"default:running;index" json:"status"` // running, exited
 	PID       int        `json:"pid"`
+	RuleMode  string     `gorm:"default:none" json:"rule_mode"` // none, system, task, custom
+	RuleSetID *string    `gorm:"index" json:"rule_set_id"`      // 自定义规则集ID (rule_mode=custom时使用)
 	CreatedAt time.Time  `json:"created_at"`
 	ClosedAt  *time.Time `json:"closed_at"`
 	Task      *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
@@ -73,7 +76,7 @@ type AISession struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
 	TerminalID  string    `gorm:"not null;index" json:"terminal_id"`
 	TaskID      *string   `gorm:"index" json:"task_id"`
-	AIType      string    `gorm:"not null" json:"ai_type"` // claude-code, codex, gemini
+	AIType      string    `gorm:"not null" json:"ai_type"`    // claude-code, codex, gemini
 	State       string    `gorm:"default:unknown" json:"state"` // unknown, waiting_input, working, waiting_approval
 	SessionFile string    `json:"session_file"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -89,8 +92,8 @@ type ApprovalRecord struct {
 	PromptContent string    `json:"prompt_content"`
 	Response      string    `json:"response"`
 	AutoApproved  bool      `gorm:"default:false" json:"auto_approved"`
-	RuleMatched   string    `json:"rule_matched"`   // 匹配的规则
-	AIDecision    string    `json:"ai_decision"`    // AI决策说明
+	RuleMatched   string    `json:"rule_matched"` // 匹配的规则
+	AIDecision    string    `json:"ai_decision"`  // AI决策说明
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -120,24 +123,25 @@ type AIProviderConfig struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// TerminalAutomation 终端自动化配置
-type TerminalAutomation struct {
-	ID         string    `gorm:"primaryKey" json:"id"`
-	TerminalID string    `gorm:"uniqueIndex;not null" json:"terminal_id"`
+// RuleSet 规则集模型 - 可被系统、任务、终端复用
+type RuleSet struct {
+	ID   string `gorm:"primaryKey" json:"id"`
+	Name string `gorm:"not null" json:"name"` // 规则集名称
+	Type string `gorm:"not null;index" json:"type"` // system, task, terminal
 
 	// 审批模式: manual(手动), auto_yes(全自动yes), smart(AI辅助)
 	ApprovalMode string `gorm:"default:manual" json:"approval_mode"`
 
 	// 自动输入设置（auto_yes模式）
-	AutoInputType string `gorm:"default:yes" json:"auto_input_type"` // yes, enter, option1
+	AutoInputType string `gorm:"default:yes" json:"auto_input_type"` // yes, y, enter, option1
 
 	// 规则设置
 	WhitelistPatterns string `json:"whitelist_patterns"` // JSON数组，允许通过的模式
 	BlacklistPatterns string `json:"blacklist_patterns"` // JSON数组，需要阻止的模式
 
 	// AI辅助设置（smart模式）
-	AIProviderID *string `json:"ai_provider_id"`        // 关联的AI配置
-	AIPrompt     string  `json:"ai_prompt"`             // AI判断提示词
+	AIProviderID *string `json:"ai_provider_id"`                  // 关联的AI配置
+	AIPrompt     string  `json:"ai_prompt"`                       // AI判断提示词
 	ContextLines int     `gorm:"default:50" json:"context_lines"` // 发送给AI的上下文行数
 
 	// 检测设置
@@ -146,8 +150,8 @@ type TerminalAutomation struct {
 	DetectGemini     bool `gorm:"default:true" json:"detect_gemini"`
 
 	// 通知设置
-	NotifyOnBlock   bool `gorm:"default:true" json:"notify_on_block"`   // 阻止时通知
-	NotifyOnApprove bool `gorm:"default:false" json:"notify_on_approve"` // 自动通过时通知
+	NotifyOnBlock   bool `gorm:"default:true" json:"notify_on_block"`
+	NotifyOnApprove bool `gorm:"default:false" json:"notify_on_approve"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -158,14 +162,14 @@ type Message struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
 	TerminalID  *string    `gorm:"index" json:"terminal_id"`
 	TaskID      *string    `gorm:"index" json:"task_id"`
-	Type        string     `gorm:"not null;index" json:"type"`    // approval_needed, blocked, info, warning, error
+	Type        string     `gorm:"not null;index" json:"type"`         // approval_needed, blocked, info, warning, error
 	Title       string     `gorm:"not null" json:"title"`
 	Content     string     `json:"content"`
-	Context     string     `json:"context"`                       // 相关上下文（终端输出等）
+	Context     string     `json:"context"`                            // 相关上下文（终端输出等）
 	Status      string     `gorm:"default:unread;index" json:"status"` // unread, read, handled, dismissed
-	ActionTaken string     `json:"action_taken"`                  // 用户采取的操作
-	Priority    int        `gorm:"default:0" json:"priority"`     // 0=normal, 1=high, 2=urgent
-	ExpiresAt   *time.Time `json:"expires_at"`                    // 过期时间
+	ActionTaken string     `json:"action_taken"`                       // 用户采取的操作
+	Priority    int        `gorm:"default:0" json:"priority"`          // 0=normal, 1=high, 2=urgent
+	ExpiresAt   *time.Time `json:"expires_at"`                         // 过期时间
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ReadAt      *time.Time `json:"read_at"`

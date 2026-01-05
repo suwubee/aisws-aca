@@ -104,9 +104,20 @@ async function handleDeleteTask(task: Task) {
 }
 
 async function handleOpenTerminal(task: Task) {
+  // 优先切换到该任务已存在的终端（避免重复创建）
+  const related = terminalStore.terminals
+    .filter(t => t.task_id === task.id)
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+
+  if (related.length > 0) {
+    terminalStore.setActiveTerminal(related[0].id)
+    message.success('已切换到关联终端')
+    return
+  }
+
   try {
     await terminalStore.createTerminal(task.title, task.id)
-    message.success('终端已创建')
+    message.success('终端已创建并关联任务')
   } catch (error) {
     message.error('创建终端失败')
   }

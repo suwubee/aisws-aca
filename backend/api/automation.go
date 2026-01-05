@@ -20,6 +20,371 @@ func NewAutomationController() *AutomationController {
 	}
 }
 
+// ===== RuleSet APIs =====
+
+// RuleSetRequest 规则集请求
+type RuleSetRequest struct {
+	Name              string   `json:"name"`
+	ApprovalMode      string   `json:"approval_mode"`
+	AutoInputType     string   `json:"auto_input_type"`
+	WhitelistPatterns []string `json:"whitelist_patterns"`
+	BlacklistPatterns []string `json:"blacklist_patterns"`
+	AIProviderID      *string  `json:"ai_provider_id"`
+	AIPrompt          string   `json:"ai_prompt"`
+	ContextLines      int      `json:"context_lines"`
+	DetectClaudeCode  bool     `json:"detect_claude_code"`
+	DetectCodex       bool     `json:"detect_codex"`
+	DetectGemini      bool     `json:"detect_gemini"`
+	NotifyOnBlock     bool     `json:"notify_on_block"`
+	NotifyOnApprove   bool     `json:"notify_on_approve"`
+}
+
+// GetSystemRuleSet 获取系统规则集
+func (ctrl *AutomationController) GetSystemRuleSet(c *fiber.Ctx) error {
+	var ruleSet model.RuleSet
+	result := model.DB.First(&ruleSet, "type = ?", "system")
+
+	if result.Error != nil {
+		// 自动创建默认系统规则
+		ruleSet = model.RuleSet{
+			ID:               "system-default",
+			Name:             "系统默认规则",
+			Type:             "system",
+			ApprovalMode:     "manual",
+			AutoInputType:    "yes",
+			ContextLines:     50,
+			DetectClaudeCode: true,
+			DetectCodex:      true,
+			DetectGemini:     true,
+			NotifyOnBlock:    true,
+			NotifyOnApprove:  false,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+		}
+		model.DB.Create(&ruleSet)
+	}
+
+	return c.JSON(fiber.Map{"item": ruleSet})
+}
+
+// UpdateSystemRuleSet 更新系统规则集
+func (ctrl *AutomationController) UpdateSystemRuleSet(c *fiber.Ctx) error {
+	var req RuleSetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// 转换数组为JSON字符串
+	whitelistJSON := toJSONArray(req.WhitelistPatterns)
+	blacklistJSON := toJSONArray(req.BlacklistPatterns)
+
+	now := time.Now()
+
+	// 查找或创建系统规则
+	var ruleSet model.RuleSet
+	result := model.DB.First(&ruleSet, "type = ?", "system")
+
+	if result.Error != nil {
+		ruleSet = model.RuleSet{
+			ID:        "system-default",
+			Name:      "系统默认规则",
+			Type:      "system",
+			CreatedAt: now,
+		}
+	}
+
+	ruleSet.Name = req.Name
+	if ruleSet.Name == "" {
+		ruleSet.Name = "系统默认规则"
+	}
+	ruleSet.ApprovalMode = req.ApprovalMode
+	ruleSet.AutoInputType = req.AutoInputType
+	ruleSet.WhitelistPatterns = whitelistJSON
+	ruleSet.BlacklistPatterns = blacklistJSON
+	ruleSet.AIProviderID = req.AIProviderID
+	ruleSet.AIPrompt = req.AIPrompt
+	ruleSet.ContextLines = req.ContextLines
+	ruleSet.DetectClaudeCode = req.DetectClaudeCode
+	ruleSet.DetectCodex = req.DetectCodex
+	ruleSet.DetectGemini = req.DetectGemini
+	ruleSet.NotifyOnBlock = req.NotifyOnBlock
+	ruleSet.NotifyOnApprove = req.NotifyOnApprove
+	ruleSet.UpdatedAt = now
+
+	if result.Error != nil {
+		model.DB.Create(&ruleSet)
+	} else {
+		model.DB.Save(&ruleSet)
+	}
+
+	return c.JSON(fiber.Map{"message": "System rule set updated", "item": ruleSet})
+}
+
+// ListRuleSets 获取规则集列表
+func (ctrl *AutomationController) ListRuleSets(c *fiber.Ctx) error {
+	ruleType := c.Query("type") // system, task, terminal
+
+	query := model.DB.Model(&model.RuleSet{}).Order("created_at desc")
+	if ruleType != "" {
+		query = query.Where("type = ?", ruleType)
+	}
+
+	var ruleSets []model.RuleSet
+	query.Find(&ruleSets)
+
+	return c.JSON(fiber.Map{"items": ruleSets})
+}
+
+// GetRuleSet 获取单个规则集
+func (ctrl *AutomationController) GetRuleSet(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var ruleSet model.RuleSet
+	if err := model.DB.First(&ruleSet, "id = ?", id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Rule set not found"})
+	}
+	return c.JSON(fiber.Map{"item": ruleSet})
+}
+
+// CreateRuleSet 创建规则集
+func (ctrl *AutomationController) CreateRuleSet(c *fiber.Ctx) error {
+	var req RuleSetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	ruleType := c.Query("type", "terminal") // default to terminal
+
+	now := time.Now()
+	ruleSet := &model.RuleSet{
+		ID:                uuid.New().String(),
+		Name:              req.Name,
+		Type:              ruleType,
+		ApprovalMode:      req.ApprovalMode,
+		AutoInputType:     req.AutoInputType,
+		WhitelistPatterns: toJSONArray(req.WhitelistPatterns),
+		BlacklistPatterns: toJSONArray(req.BlacklistPatterns),
+		AIProviderID:      req.AIProviderID,
+		AIPrompt:          req.AIPrompt,
+		ContextLines:      req.ContextLines,
+		DetectClaudeCode:  req.DetectClaudeCode,
+		DetectCodex:       req.DetectCodex,
+		DetectGemini:      req.DetectGemini,
+		NotifyOnBlock:     req.NotifyOnBlock,
+		NotifyOnApprove:   req.NotifyOnApprove,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	if err := model.DB.Create(ruleSet).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create rule set"})
+	}
+
+	return c.JSON(fiber.Map{"item": ruleSet, "message": "Rule set created"})
+}
+
+// UpdateRuleSet 更新规则集
+func (ctrl *AutomationController) UpdateRuleSet(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var ruleSet model.RuleSet
+	if err := model.DB.First(&ruleSet, "id = ?", id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Rule set not found"})
+	}
+
+	var req RuleSetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	ruleSet.Name = req.Name
+	ruleSet.ApprovalMode = req.ApprovalMode
+	ruleSet.AutoInputType = req.AutoInputType
+	ruleSet.WhitelistPatterns = toJSONArray(req.WhitelistPatterns)
+	ruleSet.BlacklistPatterns = toJSONArray(req.BlacklistPatterns)
+	ruleSet.AIProviderID = req.AIProviderID
+	ruleSet.AIPrompt = req.AIPrompt
+	ruleSet.ContextLines = req.ContextLines
+	ruleSet.DetectClaudeCode = req.DetectClaudeCode
+	ruleSet.DetectCodex = req.DetectCodex
+	ruleSet.DetectGemini = req.DetectGemini
+	ruleSet.NotifyOnBlock = req.NotifyOnBlock
+	ruleSet.NotifyOnApprove = req.NotifyOnApprove
+	ruleSet.UpdatedAt = time.Now()
+
+	if err := model.DB.Save(&ruleSet).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update rule set"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Rule set updated"})
+}
+
+// DeleteRuleSet 删除规则集
+func (ctrl *AutomationController) DeleteRuleSet(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// 不允许删除系统规则
+	var ruleSet model.RuleSet
+	if err := model.DB.First(&ruleSet, "id = ?", id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Rule set not found"})
+	}
+	if ruleSet.Type == "system" {
+		return c.Status(400).JSON(fiber.Map{"error": "Cannot delete system rule set"})
+	}
+
+	if err := model.DB.Delete(&model.RuleSet{}, "id = ?", id).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete rule set"})
+	}
+	return c.JSON(fiber.Map{"message": "Rule set deleted"})
+}
+
+// ===== Terminal Rule Mode APIs =====
+
+// TerminalRuleModeRequest 终端规则模式请求
+type TerminalRuleModeRequest struct {
+	RuleMode  string  `json:"rule_mode"`   // none, system, task, custom
+	RuleSetID *string `json:"rule_set_id"` // custom 模式时需要指定规则集ID
+}
+
+// GetTerminalRuleMode 获取终端规则模式
+func (ctrl *AutomationController) GetTerminalRuleMode(c *fiber.Ctx) error {
+	terminalID := c.Params("id")
+
+	var terminal model.TerminalSession
+	if err := model.DB.First(&terminal, "id = ?", terminalID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	// 获取关联的规则集信息
+	var ruleSet *model.RuleSet
+	var effectiveRuleSet *model.RuleSet
+
+	switch terminal.RuleMode {
+	case "system":
+		var sysRule model.RuleSet
+		if model.DB.First(&sysRule, "type = ?", "system").Error == nil {
+			effectiveRuleSet = &sysRule
+		}
+	case "task":
+		if terminal.TaskID != nil {
+			var task model.Task
+			if model.DB.First(&task, "id = ?", *terminal.TaskID).Error == nil && task.RuleSetID != nil {
+				var taskRule model.RuleSet
+				if model.DB.First(&taskRule, "id = ?", *task.RuleSetID).Error == nil {
+					effectiveRuleSet = &taskRule
+				}
+			}
+		}
+	case "custom":
+		if terminal.RuleSetID != nil {
+			var customRule model.RuleSet
+			if model.DB.First(&customRule, "id = ?", *terminal.RuleSetID).Error == nil {
+				ruleSet = &customRule
+				effectiveRuleSet = &customRule
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"rule_mode":          terminal.RuleMode,
+		"rule_set_id":        terminal.RuleSetID,
+		"rule_set":           ruleSet,
+		"effective_rule_set": effectiveRuleSet,
+		"task_id":            terminal.TaskID,
+	})
+}
+
+// UpdateTerminalRuleMode 更新终端规则模式
+func (ctrl *AutomationController) UpdateTerminalRuleMode(c *fiber.Ctx) error {
+	terminalID := c.Params("id")
+
+	var terminal model.TerminalSession
+	if err := model.DB.First(&terminal, "id = ?", terminalID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	var req TerminalRuleModeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// 验证规则模式
+	validModes := map[string]bool{"none": true, "system": true, "task": true, "custom": true}
+	if !validModes[req.RuleMode] {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid rule mode"})
+	}
+
+	// custom 模式需要验证规则集存在
+	if req.RuleMode == "custom" && req.RuleSetID != nil {
+		var ruleSet model.RuleSet
+		if err := model.DB.First(&ruleSet, "id = ?", *req.RuleSetID).Error; err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Rule set not found"})
+		}
+	}
+
+	terminal.RuleMode = req.RuleMode
+	terminal.RuleSetID = req.RuleSetID
+
+	if err := model.DB.Save(&terminal).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update terminal"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Terminal rule mode updated"})
+}
+
+// CreateTerminalCustomRule 为终端创建自定义规则
+func (ctrl *AutomationController) CreateTerminalCustomRule(c *fiber.Ctx) error {
+	terminalID := c.Params("id")
+
+	var terminal model.TerminalSession
+	if err := model.DB.First(&terminal, "id = ?", terminalID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	var req RuleSetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	now := time.Now()
+	ruleSet := &model.RuleSet{
+		ID:                uuid.New().String(),
+		Name:              req.Name,
+		Type:              "terminal",
+		ApprovalMode:      req.ApprovalMode,
+		AutoInputType:     req.AutoInputType,
+		WhitelistPatterns: toJSONArray(req.WhitelistPatterns),
+		BlacklistPatterns: toJSONArray(req.BlacklistPatterns),
+		AIProviderID:      req.AIProviderID,
+		AIPrompt:          req.AIPrompt,
+		ContextLines:      req.ContextLines,
+		DetectClaudeCode:  req.DetectClaudeCode,
+		DetectCodex:       req.DetectCodex,
+		DetectGemini:      req.DetectGemini,
+		NotifyOnBlock:     req.NotifyOnBlock,
+		NotifyOnApprove:   req.NotifyOnApprove,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	if err := model.DB.Create(ruleSet).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create rule set"})
+	}
+
+	// 更新终端关联
+	terminal.RuleMode = "custom"
+	terminal.RuleSetID = &ruleSet.ID
+	model.DB.Save(&terminal)
+
+	return c.JSON(fiber.Map{"item": ruleSet, "message": "Custom rule created for terminal"})
+}
+
+// GetDefaultPatterns 获取默认的黑白名单模式
+func (ctrl *AutomationController) GetDefaultPatterns(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"whitelist": approval.DefaultWhitelistPatterns,
+		"blacklist": approval.DefaultBlacklistPatterns,
+	})
+}
+
 // ===== AI Provider Config APIs =====
 
 // AIProviderConfigRequest AI配置请求
@@ -178,76 +543,6 @@ func (ctrl *AutomationController) DeleteAIProvider(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "AI provider deleted"})
 }
 
-// ===== Terminal Automation Config APIs =====
-
-// TerminalAutomationRequest 终端自动化配置请求
-type TerminalAutomationRequest struct {
-	ApprovalMode      string  `json:"approval_mode"`
-	AutoInputType     string  `json:"auto_input_type"`
-	WhitelistPatterns string  `json:"whitelist_patterns"`
-	BlacklistPatterns string  `json:"blacklist_patterns"`
-	AIProviderID      *string `json:"ai_provider_id"`
-	AIPrompt          string  `json:"ai_prompt"`
-	ContextLines      int     `json:"context_lines"`
-	DetectClaudeCode  bool    `json:"detect_claude_code"`
-	DetectCodex       bool    `json:"detect_codex"`
-	DetectGemini      bool    `json:"detect_gemini"`
-	NotifyOnBlock     bool    `json:"notify_on_block"`
-	NotifyOnApprove   bool    `json:"notify_on_approve"`
-}
-
-// GetTerminalAutomation 获取终端自动化配置
-func (ctrl *AutomationController) GetTerminalAutomation(c *fiber.Ctx) error {
-	terminalID := c.Params("id")
-
-	config, err := ctrl.approvalEngine.GetAutomationConfig(terminalID)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to get automation config"})
-	}
-
-	return c.JSON(fiber.Map{"item": config})
-}
-
-// UpdateTerminalAutomation 更新终端自动化配置
-func (ctrl *AutomationController) UpdateTerminalAutomation(c *fiber.Ctx) error {
-	terminalID := c.Params("id")
-
-	var req TerminalAutomationRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-
-	config := &model.TerminalAutomation{
-		TerminalID:        terminalID,
-		ApprovalMode:      req.ApprovalMode,
-		AutoInputType:     req.AutoInputType,
-		WhitelistPatterns: req.WhitelistPatterns,
-		BlacklistPatterns: req.BlacklistPatterns,
-		AIProviderID:      req.AIProviderID,
-		AIPrompt:          req.AIPrompt,
-		ContextLines:      req.ContextLines,
-		DetectClaudeCode:  req.DetectClaudeCode,
-		DetectCodex:       req.DetectCodex,
-		DetectGemini:      req.DetectGemini,
-		NotifyOnBlock:     req.NotifyOnBlock,
-		NotifyOnApprove:   req.NotifyOnApprove,
-	}
-
-	if err := ctrl.approvalEngine.SaveAutomationConfig(config); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to save automation config"})
-	}
-
-	return c.JSON(fiber.Map{"message": "Automation config updated"})
-}
-
-// GetDefaultPatterns 获取默认的黑白名单模式
-func (ctrl *AutomationController) GetDefaultPatterns(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{
-		"whitelist": approval.DefaultWhitelistPatterns,
-		"blacklist": approval.DefaultBlacklistPatterns,
-	})
-}
-
 // ===== Message APIs =====
 
 // ListMessages 获取消息列表
@@ -399,9 +694,54 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****" + key[len(key)-4:]
 }
 
+func toJSONArray(arr []string) string {
+	if len(arr) == 0 {
+		return "[]"
+	}
+	result := "["
+	for i, s := range arr {
+		if i > 0 {
+			result += ","
+		}
+		// 简单转义双引号
+		escaped := ""
+		for _, c := range s {
+			if c == '"' {
+				escaped += "\\\""
+			} else if c == '\\' {
+				escaped += "\\\\"
+			} else {
+				escaped += string(c)
+			}
+		}
+		result += "\"" + escaped + "\""
+	}
+	result += "]"
+	return result
+}
+
 // RegisterRoutes 注册路由
-func (ctrl *AutomationController) RegisterRoutes(app *fiber.App) {
-	automation := app.Group("/api/automation")
+func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
+	automation := app.Group("/automation")
+
+	// 系统规则
+	automation.Get("/system-rule", ctrl.GetSystemRuleSet)
+	automation.Put("/system-rule", ctrl.UpdateSystemRuleSet)
+
+	// 规则集 CRUD
+	automation.Get("/rulesets", ctrl.ListRuleSets)
+	automation.Post("/rulesets", ctrl.CreateRuleSet)
+	automation.Get("/rulesets/:id", ctrl.GetRuleSet)
+	automation.Put("/rulesets/:id", ctrl.UpdateRuleSet)
+	automation.Delete("/rulesets/:id", ctrl.DeleteRuleSet)
+
+	// 终端规则模式
+	automation.Get("/terminals/:id/rule-mode", ctrl.GetTerminalRuleMode)
+	automation.Put("/terminals/:id/rule-mode", ctrl.UpdateTerminalRuleMode)
+	automation.Post("/terminals/:id/custom-rule", ctrl.CreateTerminalCustomRule)
+
+	// 默认规则模板
+	automation.Get("/patterns/defaults", ctrl.GetDefaultPatterns)
 
 	// AI Provider配置
 	automation.Get("/ai-providers", ctrl.ListAIProviders)
@@ -409,11 +749,6 @@ func (ctrl *AutomationController) RegisterRoutes(app *fiber.App) {
 	automation.Get("/ai-providers/:id", ctrl.GetAIProvider)
 	automation.Put("/ai-providers/:id", ctrl.UpdateAIProvider)
 	automation.Delete("/ai-providers/:id", ctrl.DeleteAIProvider)
-
-	// 终端自动化配置
-	automation.Get("/terminals/:id/config", ctrl.GetTerminalAutomation)
-	automation.Put("/terminals/:id/config", ctrl.UpdateTerminalAutomation)
-	automation.Get("/patterns/defaults", ctrl.GetDefaultPatterns)
 
 	// 消息管理
 	automation.Get("/messages", ctrl.ListMessages)

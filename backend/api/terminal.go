@@ -239,8 +239,8 @@ func (ctrl *TerminalController) GetTerminalStats(c *fiber.Ctx) error {
 }
 
 // RegisterRoutes 注册路由
-func (ctrl *TerminalController) RegisterRoutes(app *fiber.App) {
-	terminals := app.Group("/api/terminals")
+func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
+	terminals := app.Group("/terminals")
 	terminals.Get("/", ctrl.ListTerminals)
 	terminals.Post("/", ctrl.CreateTerminal)
 	terminals.Get("/stats", ctrl.GetTerminalStats)
@@ -249,8 +249,18 @@ func (ctrl *TerminalController) RegisterRoutes(app *fiber.App) {
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
 	terminals.Get("/:id/logs", ctrl.GetLogs)
+	terminals.Delete("/:id/logs", ctrl.ClearLogs)
+	terminals.Delete("/:id/logs/:logId", ctrl.DeleteLog)
 
-	// WebSocket路由
+	// 日志管理路由
+	logs := app.Group("/logs")
+	logs.Get("/", ctrl.ListAllLogs)
+	logs.Get("/sessions", ctrl.ListLogSessions)
+	logs.Delete("/:id", ctrl.DeleteLogById)
+}
+
+// RegisterWebSocket 注册WebSocket路由（需要单独处理）
+func (ctrl *TerminalController) RegisterWebSocket(app *fiber.App) {
 	app.Get("/api/terminal/ws", websocket.New(ctrl.HandleWebSocket))
 }
 
@@ -277,6 +287,107 @@ func (ctrl *TerminalController) GetLogs(c *fiber.Ctx) error {
 		"items": logs,
 		"total": total,
 	})
+}
+
+// ClearLogs 清空终端日志
+func (ctrl *TerminalController) ClearLogs(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if err := model.DB.Where("terminal_id = ?", id).Delete(&model.Log{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to clear logs"})
+	}
+	return c.JSON(fiber.Map{"message": "Logs cleared"})
+}
+
+// DeleteLog 删除单条日志
+func (ctrl *TerminalController) DeleteLog(c *fiber.Ctx) error {
+	logId := c.Params("logId")
+	if err := model.DB.Where("id = ?", logId).Delete(&model.Log{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete log"})
+	}
+	return c.JSON(fiber.Map{"message": "Log deleted"})
+}
+
+// ListAllLogs 获取所有日志（分页）
+func (ctrl *TerminalController) ListAllLogs(c *fiber.Ctx) error {
+	limit := c.QueryInt("limit", 100)
+	offset := c.QueryInt("offset", 0)
+	terminalID := c.Query("terminal_id")
+	logType := c.Query("type")
+	keyword := c.Query("keyword")
+
+	query := model.DB.Model(&model.Log{}).Order("created_at desc")
+
+	if terminalID != "" {
+		query = query.Where("terminal_id = ?", terminalID)
+	}
+	if logType != "" {
+		query = query.Where("log_type = ?", logType)
+	}
+	if keyword != "" {
+		query = query.Where("content LIKE ?", "%"+keyword+"%")
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var logs []model.Log
+	query.Offset(offset).Limit(limit).Find(&logs)
+
+	return c.JSON(fiber.Map{
+		"items": logs,
+		"total": total,
+	})
+}
+
+// ListLogSessions 获取有日志的终端会话列表
+func (ctrl *TerminalController) ListLogSessions(c *fiber.Ctx) error {
+	type SessionLogInfo struct {
+		TerminalID string `json:"terminal_id"`
+		Title      string `json:"title"`
+		LogCount   int64  `json:"log_count"`
+		FirstLog   string `json:"first_log"`
+		LastLog    string `json:"last_log"`
+	}
+
+	var results []SessionLogInfo
+
+	// 获取每个终端的日志统计
+	rows, err := model.DB.Raw(`
+		SELECT
+			l.terminal_id,
+			COALESCE(t.title, 'Unknown') as title,
+			COUNT(l.id) as log_count,
+			MIN(l.created_at) as first_log,
+			MAX(l.created_at) as last_log
+		FROM logs l
+		LEFT JOIN terminal_sessions t ON l.terminal_id = t.id
+		WHERE l.terminal_id IS NOT NULL
+		GROUP BY l.terminal_id, t.title
+		ORDER BY last_log DESC
+	`).Rows()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get log sessions"})
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var info SessionLogInfo
+		if err := rows.Scan(&info.TerminalID, &info.Title, &info.LogCount, &info.FirstLog, &info.LastLog); err != nil {
+			continue
+		}
+		results = append(results, info)
+	}
+
+	return c.JSON(fiber.Map{"items": results})
+}
+
+// DeleteLogById 通过ID删除日志
+func (ctrl *TerminalController) DeleteLogById(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if err := model.DB.Where("id = ?", id).Delete(&model.Log{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete log"})
+	}
+	return c.JSON(fiber.Map{"message": "Log deleted"})
 }
 
 // GetDBSessions 获取数据库中的会话列表
