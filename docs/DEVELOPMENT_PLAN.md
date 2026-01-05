@@ -231,19 +231,52 @@ Unknown -> WaitingInput -> Working -> WaitingApproval
 
 ---
 
-### Phase 8: 审批界面 (Sprint 4) 🚧 进行中
+### Phase 8: 审批界面 (Sprint 4) ✅ 已完成（后端）
 
 #### 8.1 权限/确认检测
 - [x] 输出模式匹配
 - [x] yes/no提示检测
 - [x] 权限请求检测
-- [ ] 审批事件通知（WebSocket推送）
+- [x] 审批事件通知（WebSocket推送）
 
-#### 8.2 审批UI
+#### 8.2 审批后端
+- [x] 审批引擎（规则匹配 + AI辅助）
+- [x] 审批记录存储
+- [x] 消息/通知系统
+- [x] 审批API接口
+
+#### 8.3 审批UI（待开发）
 - [ ] 审批提示弹窗
 - [ ] 快捷操作按钮（允许/拒绝）
 - [ ] 审批历史记录
 - [ ] 手动输入框
+
+---
+
+### Phase 9: 自动化配置系统 (Sprint 4) ✅ 已完成（后端）
+
+#### 9.1 AI Provider配置
+- [x] OpenAI兼容API服务
+- [x] 多Provider支持（OpenAI/DeepSeek/Ollama等）
+- [x] API配置CRUD接口
+- [x] API Key安全存储
+
+#### 9.2 终端自动化配置
+- [x] 三种审批模式（manual/auto_yes/smart）
+- [x] 白名单/黑名单规则
+- [x] AI辅助决策
+- [x] 通知设置
+
+#### 9.3 AI代理检测增强
+- [x] Claude Code检测
+- [x] Codex检测
+- [x] Gemini CLI检测
+- [x] 状态机实现
+
+#### 9.4 配置UI（待开发）
+- [ ] AI Provider配置页面
+- [ ] 终端自动化配置面板
+- [ ] 默认模式设置
 
 ---
 

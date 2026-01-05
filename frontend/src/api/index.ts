@@ -72,14 +72,76 @@ export const terminalApi = {
     api.get(`/terminals/${id}/logs`, { params })
 }
 
-// Automation API (预留)
+// Automation API
 export const automationApi = {
-  analyze: (data: { terminal_id: string; recent_logs: string; context: object }) =>
-    api.post('/automation/analyze', data),
-  execute: (data: { terminal_id: string; action: string; input: string }) =>
-    api.post('/automation/execute', data),
-  getConfig: () => api.get('/automation/config'),
-  updateConfig: (data: object) => api.put('/automation/config', data)
+  // AI Provider配置
+  listAIProviders: () => api.get('/automation/ai-providers'),
+  getAIProvider: (id: string) => api.get(`/automation/ai-providers/${id}`),
+  createAIProvider: (data: {
+    name: string
+    provider: string
+    base_url?: string
+    api_key?: string
+    model: string
+    temperature?: number
+    max_tokens?: number
+    is_default?: boolean
+    enabled?: boolean
+  }) => api.post('/automation/ai-providers', data),
+  updateAIProvider: (id: string, data: {
+    name?: string
+    provider?: string
+    base_url?: string
+    api_key?: string
+    model?: string
+    temperature?: number
+    max_tokens?: number
+    is_default?: boolean
+    enabled?: boolean
+  }) => api.put(`/automation/ai-providers/${id}`, data),
+  deleteAIProvider: (id: string) => api.delete(`/automation/ai-providers/${id}`),
+
+  // 终端自动化配置
+  getTerminalConfig: (terminalId: string) =>
+    api.get(`/automation/terminals/${terminalId}/config`),
+  updateTerminalConfig: (terminalId: string, data: {
+    approval_mode?: string
+    auto_input_type?: string
+    whitelist_patterns?: string
+    blacklist_patterns?: string
+    ai_provider_id?: string | null
+    ai_prompt?: string
+    context_lines?: number
+    detect_claude_code?: boolean
+    detect_codex?: boolean
+    detect_gemini?: boolean
+    notify_on_block?: boolean
+    notify_on_approve?: boolean
+  }) => api.put(`/automation/terminals/${terminalId}/config`, data),
+  getDefaultPatterns: () => api.get('/automation/patterns/defaults'),
+
+  // 消息管理
+  listMessages: (params?: {
+    status?: string
+    type?: string
+    terminal_id?: string
+    limit?: number
+    offset?: number
+  }) => api.get('/automation/messages', { params }),
+  getMessage: (id: string) => api.get(`/automation/messages/${id}`),
+  getUnreadCount: () => api.get('/automation/messages/unread-count'),
+  markMessageRead: (id: string) => api.post(`/automation/messages/${id}/read`),
+  handleMessage: (id: string, action: string) =>
+    api.post(`/automation/messages/${id}/handle`, { action }),
+  dismissMessage: (id: string) => api.post(`/automation/messages/${id}/dismiss`),
+  markAllRead: () => api.post('/automation/messages/mark-all-read'),
+
+  // 审批记录
+  listApprovalRecords: (params?: {
+    terminal_id?: string
+    limit?: number
+    offset?: number
+  }) => api.get('/automation/approval-records', { params })
 }
 
 export default api

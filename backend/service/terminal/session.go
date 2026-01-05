@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"context"
 	"encoding/base64"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"unsafe"
 
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/approval"
+	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/creack/pty"
 	"github.com/google/uuid"
@@ -24,15 +27,29 @@ const (
 	StreamEventData     StreamEventType = "data"
 	StreamEventMetadata StreamEventType = "metadata"
 	StreamEventExit     StreamEventType = "exit"
+	StreamEventApproval StreamEventType = "approval" // 新增：审批事件
+	StreamEventMessage  StreamEventType = "message"  // 新增：消息事件
 )
 
 // StreamEvent 流事件
 type StreamEvent struct {
-	Type     StreamEventType        `json:"type"`
-	Data     string                 `json:"data,omitempty"`
-	Metadata *SessionMetadata       `json:"metadata,omitempty"`
-	ExitCode int                    `json:"exit_code,omitempty"`
-	Message  string                 `json:"message,omitempty"`
+	Type           StreamEventType  `json:"type"`
+	Data           string           `json:"data,omitempty"`
+	Metadata       *SessionMetadata `json:"metadata,omitempty"`
+	ExitCode       int              `json:"exit_code,omitempty"`
+	Message        string           `json:"message,omitempty"`
+	ApprovalResult *ApprovalEvent   `json:"approval_result,omitempty"` // 审批结果
+}
+
+// ApprovalEvent 审批事件
+type ApprovalEvent struct {
+	Action      string  `json:"action"`       // approve, reject, wait, input
+	Input       string  `json:"input"`        // 自动输入的内容
+	Reasoning   string  `json:"reasoning"`    // 决策理由
+	Confidence  float64 `json:"confidence"`   // 置信度
+	RuleMatched string  `json:"rule_matched"` // 匹配的规则
+	AIDecision  bool    `json:"ai_decision"`  // 是否AI决策
+	AutoHandled bool    `json:"auto_handled"` // 是否自动处理
 }
 
 // SessionMetadata 会话元数据
@@ -43,6 +60,7 @@ type SessionMetadata struct {
 	RunningCommand string       `json:"running_command,omitempty"`
 	TaskID         *string      `json:"task_id,omitempty"`
 	AIAssistant    *AIAssistant `json:"ai_assistant,omitempty"`
+	AutomationMode string       `json:"automation_mode,omitempty"` // manual, auto_yes, smart
 }
 
 // AIAssistant AI助手信息
@@ -52,6 +70,8 @@ type AIAssistant struct {
 	State          string    `json:"state"` // unknown, waiting_input, working, waiting_approval
 	StateUpdatedAt time.Time `json:"state_updated_at"`
 	Detected       bool      `json:"detected"`
+	Version        string    `json:"version,omitempty"`
+	ApprovalPrompt string    `json:"approval_prompt,omitempty"` // 当前的审批提示
 }
 
 // Session 终端会话
@@ -76,6 +96,11 @@ type Session struct {
 	logBuffer    []LogEntry
 	logMutex     sync.Mutex
 	logFlushChan chan struct{}
+	// 检测和审批相关
+	detector       *detector.Detector
+	approvalEngine *approval.Engine
+	lastOutput     string      // 用于检测状态变化
+	lastOutputMu   sync.Mutex
 }
 
 // LogEntry 日志条目
@@ -122,15 +147,17 @@ func (b *ScrollbackBuffer) Read() []byte {
 // NewSession 创建新会话
 func NewSession(id, shell string, scrollbackSize int) *Session {
 	return &Session{
-		id:           id,
-		shell:        shell,
-		status:       "running",
-		subscribers:  make(map[string]chan StreamEvent),
-		scrollback:   NewScrollbackBuffer(scrollbackSize),
-		createdAt:    time.Now(),
-		done:         make(chan struct{}),
-		logBuffer:    make([]LogEntry, 0, 100),
-		logFlushChan: make(chan struct{}, 1),
+		id:             id,
+		shell:          shell,
+		status:         "running",
+		subscribers:    make(map[string]chan StreamEvent),
+		scrollback:     NewScrollbackBuffer(scrollbackSize),
+		createdAt:      time.Now(),
+		done:           make(chan struct{}),
+		logBuffer:      make([]LogEntry, 0, 100),
+		logFlushChan:   make(chan struct{}, 1),
+		detector:       detector.NewDetector(),
+		approvalEngine: approval.NewEngine(),
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -152,6 +179,9 @@ func (s *Session) Start() error {
 	s.cmd = cmd
 	s.metadata.PID = cmd.Process.Pid
 
+	// 加载自动化配置
+	s.loadAutomationConfig()
+
 	// 启动PTY读取goroutine
 	go s.readPTY()
 
@@ -162,6 +192,17 @@ func (s *Session) Start() error {
 	go s.flushLogs()
 
 	return nil
+}
+
+// loadAutomationConfig 加载自动化配置
+func (s *Session) loadAutomationConfig() {
+	config, err := s.approvalEngine.GetAutomationConfig(s.id)
+	if err != nil {
+		return
+	}
+	s.metaMutex.Lock()
+	s.metadata.AutomationMode = config.ApprovalMode
+	s.metaMutex.Unlock()
 }
 
 // readPTY 读取PTY输出
@@ -193,11 +234,145 @@ func (s *Session) readPTY() {
 					Data: base64.StdEncoding.EncodeToString(data),
 				})
 
-				// 检测AI助手状态（简化实现）
-				s.detectAIAssistant(data)
+				// 更新最后输出
+				s.lastOutputMu.Lock()
+				s.lastOutput = string(data)
+				s.lastOutputMu.Unlock()
+
+				// 检测AI助手状态
+				s.detectAndHandle(data)
 			}
 		}
 	}
+}
+
+// detectAndHandle 检测AI状态并处理审批
+func (s *Session) detectAndHandle(data []byte) {
+	output := string(data)
+
+	// 检测AI代理
+	if s.aiAssistant == nil || !s.aiAssistant.Detected {
+		if agent := s.detector.DetectAgent(output); agent != nil {
+			s.metaMutex.Lock()
+			s.aiAssistant = &AIAssistant{
+				Type:           string(agent.Type),
+				DisplayName:    agent.DisplayName,
+				State:          string(agent.State),
+				StateUpdatedAt: agent.StateUpdatedAt,
+				Detected:       agent.Detected,
+				Version:        agent.Version,
+			}
+			s.metadata.AIAssistant = s.aiAssistant
+			s.metaMutex.Unlock()
+
+			utils.Info("AI agent detected",
+				zap.String("type", string(agent.Type)),
+				zap.String("terminal", s.id))
+
+			s.broadcastMetadata()
+		}
+	}
+
+	// 检测状态变化
+	state, approvalPrompt := s.detector.DetectState(output)
+
+	s.metaMutex.Lock()
+	if s.aiAssistant != nil {
+		oldState := s.aiAssistant.State
+		s.aiAssistant.State = string(state)
+		s.aiAssistant.StateUpdatedAt = time.Now()
+		if approvalPrompt != "" {
+			s.aiAssistant.ApprovalPrompt = approvalPrompt
+		}
+		s.metadata.AIAssistant = s.aiAssistant
+
+		// 状态变化时广播
+		if oldState != string(state) {
+			s.metaMutex.Unlock()
+			s.broadcastMetadata()
+
+			// 如果进入等待审批状态，触发审批流程
+			if state == detector.StateWaitingApproval {
+				go s.handleApproval(output)
+			}
+			return
+		}
+	}
+	s.metaMutex.Unlock()
+}
+
+// handleApproval 处理审批流程
+func (s *Session) handleApproval(output string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 获取更多上下文
+	scrollbackData := s.scrollback.Read()
+	context := detector.GetRecentContext(scrollbackData, 50)
+	if context == "" {
+		context = output
+	}
+
+	// 评估审批
+	result, err := s.approvalEngine.Evaluate(ctx, s.id, context)
+	if err != nil {
+		utils.Error("Approval evaluation failed", zap.Error(err))
+		return
+	}
+
+	// 构建审批事件
+	approvalEvent := &ApprovalEvent{
+		Action:      string(result.Action),
+		Input:       result.Input,
+		Reasoning:   result.Reasoning,
+		Confidence:  result.Confidence,
+		RuleMatched: result.RuleMatched,
+		AIDecision:  result.AIDecision,
+		AutoHandled: false,
+	}
+
+	// 如果是自动通过，执行输入
+	if result.Action == approval.ActionApprove && result.Input != "" {
+		if err := s.Write([]byte(result.Input)); err != nil {
+			utils.Error("Failed to write approval input", zap.Error(err))
+		} else {
+			approvalEvent.AutoHandled = true
+			utils.Info("Auto-approved",
+				zap.String("terminal", s.id),
+				zap.String("input", result.Input),
+				zap.String("reasoning", result.Reasoning))
+		}
+	}
+
+	// 记录审批操作
+	var aiSessionID *string
+	s.metaMutex.RLock()
+	if s.aiAssistant != nil {
+		// 这里可以关联AI会话ID
+	}
+	s.metaMutex.RUnlock()
+
+	promptType := "unknown"
+	if s.detector.IsApprovalPrompt(output) {
+		promptType = "approval"
+	}
+
+	s.approvalEngine.RecordApproval(
+		s.id,
+		aiSessionID,
+		promptType,
+		output,
+		result.Input,
+		approvalEvent.AutoHandled,
+		result.RuleMatched,
+		result.Reasoning,
+	)
+
+	// 广播审批事件
+	s.broadcast(StreamEvent{
+		Type:           StreamEventApproval,
+		ApprovalResult: approvalEvent,
+	})
 }
 
 // wait 等待进程退出
@@ -224,53 +399,6 @@ func (s *Session) wait() {
 
 		close(s.done)
 	}
-}
-
-// detectAIAssistant 检测AI助手状态（简化实现）
-func (s *Session) detectAIAssistant(data []byte) {
-	output := string(data)
-
-	// 简单检测Claude Code
-	if containsAny(output, []string{"claude", "Claude Code", "anthropic"}) {
-		s.metaMutex.Lock()
-		if s.aiAssistant == nil {
-			s.aiAssistant = &AIAssistant{
-				Type:        "claude-code",
-				DisplayName: "Claude Code",
-				State:       "working",
-				Detected:    true,
-			}
-		}
-		s.aiAssistant.StateUpdatedAt = time.Now()
-
-		// 检测状态
-		if containsAny(output, []string{"(yes/no)", "(y/n)", "Allow?", "Approve?"}) {
-			s.aiAssistant.State = "waiting_approval"
-		} else if containsAny(output, []string{"> ", "? ", "Enter"}) {
-			s.aiAssistant.State = "waiting_input"
-		} else {
-			s.aiAssistant.State = "working"
-		}
-
-		s.metadata.AIAssistant = s.aiAssistant
-		s.metaMutex.Unlock()
-
-		// 广播元数据更新
-		s.broadcastMetadata()
-	}
-}
-
-func containsAny(s string, substrs []string) bool {
-	for _, substr := range substrs {
-		if len(s) >= len(substr) {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // Subscribe 订阅会话事件
@@ -369,15 +497,42 @@ func (s *Session) Close() error {
 	return nil
 }
 
+// SendApprovalResponse 手动发送审批响应
+func (s *Session) SendApprovalResponse(input string) error {
+	return s.Write([]byte(input))
+}
+
+// GetAutomationConfig 获取自动化配置
+func (s *Session) GetAutomationConfig() (*model.TerminalAutomation, error) {
+	return s.approvalEngine.GetAutomationConfig(s.id)
+}
+
+// SetAutomationConfig 设置自动化配置
+func (s *Session) SetAutomationConfig(config *model.TerminalAutomation) error {
+	config.TerminalID = s.id
+	err := s.approvalEngine.SaveAutomationConfig(config)
+	if err != nil {
+		return err
+	}
+
+	// 更新元数据
+	s.metaMutex.Lock()
+	s.metadata.AutomationMode = config.ApprovalMode
+	s.metaMutex.Unlock()
+
+	s.broadcastMetadata()
+	return nil
+}
+
 // Getters
-func (s *Session) ID() string                  { return s.id }
-func (s *Session) Title() string               { return s.title }
-func (s *Session) TaskID() *string             { return s.taskID }
-func (s *Session) Status() string              { return s.status }
-func (s *Session) CreatedAt() time.Time        { return s.createdAt }
-func (s *Session) ClosedAt() *time.Time        { return s.closedAt }
-func (s *Session) Scrollback() []byte          { return s.scrollback.Read() }
-func (s *Session) Metadata() *SessionMetadata  {
+func (s *Session) ID() string           { return s.id }
+func (s *Session) Title() string        { return s.title }
+func (s *Session) TaskID() *string      { return s.taskID }
+func (s *Session) Status() string       { return s.status }
+func (s *Session) CreatedAt() time.Time { return s.createdAt }
+func (s *Session) ClosedAt() *time.Time { return s.closedAt }
+func (s *Session) Scrollback() []byte   { return s.scrollback.Read() }
+func (s *Session) Metadata() *SessionMetadata {
 	s.metaMutex.RLock()
 	defer s.metaMutex.RUnlock()
 	meta := *s.metadata
