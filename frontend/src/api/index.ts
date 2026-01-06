@@ -36,11 +36,45 @@ api.interceptors.response.use(
 export const authApi = {
   login: (username: string, password: string) =>
     api.post('/auth/login', { username, password }),
+  register: (data: RegisterUserRequest) =>
+    api.post('/auth/register', data),
   logout: () => api.post('/auth/logout'),
   me: () => api.get('/auth/me'),
   changePassword: (oldPassword: string, newPassword: string) =>
     api.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
   resetData: () => api.post('/auth/reset-data')
+}
+
+export type UserRole = 'admin' | 'user' | 'viewer'
+export type UserStatus = 'active' | 'disabled'
+
+export interface User {
+  id: string
+  username: string
+  email: string
+  role: UserRole | string
+  status: UserStatus | string
+  created_at: string
+  updated_at: string
+  last_login_at: string | null
+}
+
+export interface RegisterUserRequest {
+  username: string
+  email: string
+  password: string
+  role: UserRole
+  status: UserStatus
+}
+
+export interface UpdateUserRequest {
+  role?: UserRole
+  status?: UserStatus
+}
+
+export const userApi = {
+  list: () => api.get('/users'),
+  update: (id: string, data: UpdateUserRequest) => api.put(`/users/${id}`, data)
 }
 
 // Task API

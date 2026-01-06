@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/config"
@@ -26,12 +27,21 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type RegisterRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Role     string `json:"role"`   // admin, user, viewer
+	Status   string `json:"status"` // active, disabled
+}
+
 type LoginResponse struct {
 	Token     string `json:"token"`
 	ExpiresAt int64  `json:"expires_at"`
 	User      struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
+		Role     string `json:"role"`
 	} `json:"user"`
 }
 
@@ -42,55 +52,80 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// 验证用户名（单用户模式）
-	if req.Username != ctrl.config.Username {
-		return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
+	identifier := strings.TrimSpace(req.Username)
+	password := req.Password
+	if identifier == "" || password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Username and password are required"})
 	}
 
-	// 查找或创建用户（密码只存数据库）
+	// 从数据库查询用户（按username或email）
 	var user model.User
-	result := model.DB.Where("username = ?", req.Username).First(&user)
+	result := model.DB.Where("username = ? OR email = ?", identifier, identifier).First(&user)
 	if result.Error != nil {
-		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
-		}
-
-		// 首次启动/初始化：仅允许使用配置中的默认密码创建用户
-		if req.Password != ctrl.config.Password {
-			return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
-		}
-
-		// 首次启动/初始化：写入配置中的默认密码到数据库（哈希）
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
-		}
-
-		user = model.User{
-			ID:           uuid.New().String(),
-			Username:     req.Username,
-			PasswordHash: string(hashedPassword),
-		}
-		if err := model.DB.Create(&user).Error; err != nil {
-			// 并发场景下可能已被创建，兜底重新读取
-			if err := model.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
-				return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			// 启动初始化：当数据库中没有任何用户时，允许使用配置中的默认账号首次登录并创建管理员
+			var userCount int64
+			if err := model.DB.Model(&model.User{}).Count(&userCount).Error; err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
 			}
+			if userCount == 0 && identifier == ctrl.config.Username && password == ctrl.config.Password {
+				hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+				if err != nil {
+					return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
+				}
+
+				user = model.User{
+					ID:           uuid.New().String(),
+					Username:     identifier,
+					PasswordHash: string(hashedPassword),
+					Role:         "admin",
+					Status:       "active",
+				}
+				if err := model.DB.Create(&user).Error; err != nil {
+					return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
+				}
+			} else {
+				return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
+			}
+		} else {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
 		}
 	}
 
 	// 验证密码（从数据库读取password_hash进行bcrypt校验）
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
 	}
 
+	// 检查用户状态(active/disabled)
+	if user.Status != "" && user.Status != "active" {
+		return c.Status(403).JSON(fiber.Map{"error": "User is disabled"})
+	}
+
+	// 兼容旧单用户模式：如果库里只有一个用户且它是配置默认账号，则提升为admin
+	if user.Role != "admin" && user.Username == ctrl.config.Username {
+		var userCount int64
+		if err := model.DB.Model(&model.User{}).Count(&userCount).Error; err == nil && userCount == 1 {
+			if err := model.DB.Model(&model.User{}).Where("id = ?", user.ID).Update("role", "admin").Error; err == nil {
+				user.Role = "admin"
+			}
+		}
+	}
+
+	// 更新LastLoginAt
+	now := time.Now()
+	if err := model.DB.Model(&model.User{}).Where("id = ?", user.ID).Update("last_login_at", now).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update last login time"})
+	}
+
 	// 生成JWT Token
-	expiresAt := time.Now().Add(ctrl.config.JWTExpiration)
+	expiresAt := now.Add(ctrl.config.JWTExpiration)
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":      user.ID,
 		"username": user.Username,
+		"role":     user.Role,
 		"exp":      expiresAt.Unix(),
-		"iat":      time.Now().Unix(),
+		"iat":      now.Unix(),
 	})
 
 	tokenString, err := token.SignedString([]byte(ctrl.config.JWTSecret))
@@ -104,11 +139,85 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 		User: struct {
 			ID       string `json:"id"`
 			Username string `json:"username"`
+			Role     string `json:"role"`
 		}{
 			ID:       user.ID,
 			Username: user.Username,
+			Role:     user.Role,
 		},
 	})
+}
+
+// Register 管理员创建用户
+func (ctrl *AuthController) Register(c *fiber.Ctx) error {
+	role, _ := c.Locals("role").(string)
+	if role == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
+	}
+	if role != "admin" {
+		return c.Status(403).JSON(fiber.Map{"error": "Forbidden"})
+	}
+
+	var req RegisterRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	username := strings.TrimSpace(req.Username)
+	email := strings.TrimSpace(req.Email)
+	password := req.Password
+	if username == "" || email == "" || password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Username, email and password are required"})
+	}
+	if len(password) < 6 {
+		return c.Status(400).JSON(fiber.Map{"error": "Password must be at least 6 characters"})
+	}
+
+	userRole := strings.TrimSpace(req.Role)
+	if userRole == "" {
+		userRole = "user"
+	}
+	switch userRole {
+	case "admin", "user", "viewer":
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid role"})
+	}
+
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		status = "active"
+	}
+	switch status {
+	case "active", "disabled":
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
+	}
+
+	var existing model.User
+	if err := model.DB.Where("username = ? OR email = ?", username, email).First(&existing).Error; err == nil {
+		return c.Status(409).JSON(fiber.Map{"error": "User already exists"})
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+
+	user := model.User{
+		ID:           uuid.New().String(),
+		Username:     username,
+		Email:        email,
+		PasswordHash: string(hashedPassword),
+		Role:         userRole,
+		Status:       status,
+	}
+	if err := model.DB.Create(&user).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
+	}
+
+	return c.Status(201).JSON(fiber.Map{"item": user})
 }
 
 // Logout 用户登出
@@ -121,6 +230,7 @@ func (ctrl *AuthController) Logout(c *fiber.Ctx) error {
 func (ctrl *AuthController) Me(c *fiber.Ctx) error {
 	userID := c.Locals("userID")
 	username := c.Locals("username")
+	role := c.Locals("role")
 
 	if userID == nil {
 		return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
@@ -129,6 +239,7 @@ func (ctrl *AuthController) Me(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"id":       userID,
 		"username": username,
+		"role":     role,
 	})
 }
 
@@ -216,6 +327,7 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 func (ctrl *AuthController) RegisterRoutes(app *fiber.App) {
 	auth := app.Group("/api/auth")
 	auth.Post("/login", ctrl.Login)
+	auth.Post("/register", ctrl.Register)
 	auth.Post("/logout", ctrl.Logout)
 	auth.Get("/me", ctrl.Me)
 	auth.Post("/change-password", ctrl.ChangePassword)

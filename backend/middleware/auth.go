@@ -53,6 +53,7 @@ func AuthMiddleware(cfg *config.AuthConfig) fiber.Handler {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			c.Locals("userID", claims["sub"])
 			c.Locals("username", claims["username"])
+			c.Locals("role", claims["role"])
 		}
 
 		return c.Next()
@@ -84,8 +85,38 @@ func OptionalAuthMiddleware(cfg *config.AuthConfig) fiber.Handler {
 				if claims, ok := token.Claims.(jwt.MapClaims); ok {
 					c.Locals("userID", claims["sub"])
 					c.Locals("username", claims["username"])
+					c.Locals("role", claims["role"])
 				}
 			}
+		}
+
+		return c.Next()
+	}
+}
+
+// RequireRole 角色检查中间件
+func RequireRole(roles ...string) fiber.Handler {
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		if role == "" {
+			continue
+		}
+		allowed[role] = struct{}{}
+	}
+
+	return func(c *fiber.Ctx) error {
+		roleValue := c.Locals("role")
+		if roleValue == nil {
+			return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
+		}
+
+		role, ok := roleValue.(string)
+		if !ok || role == "" {
+			return c.Status(403).JSON(fiber.Map{"error": "Forbidden"})
+		}
+
+		if _, ok := allowed[role]; !ok {
+			return c.Status(403).JSON(fiber.Map{"error": "Forbidden"})
 		}
 
 		return c.Next()

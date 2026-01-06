@@ -52,6 +52,16 @@
         </div>
       </n-tab-pane>
 
+      <!-- 用户管理（仅管理员） -->
+      <n-tab-pane v-if="isAdmin" name="users" tab="用户管理">
+        <div class="section">
+          <div class="section-header">
+            <span>用户管理</span>
+          </div>
+          <UserManagement />
+        </div>
+      </n-tab-pane>
+
       <!-- 默认审批规则 -->
       <n-tab-pane name="automation" tab="系统规则">
         <div class="section">
@@ -301,9 +311,11 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
 import { automationApi, authApi } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import AgentConfig from '@/components/AgentConfig.vue'
 import LogExport from '@/components/LogExport.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
+import UserManagement from '@/components/UserManagement.vue'
 
 // Types
 interface AIProvider {
@@ -323,6 +335,8 @@ interface ApprovalRecord {
 }
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 // ===== Account Settings =====
 const passwordFormRef = ref<FormInst | null>(null)

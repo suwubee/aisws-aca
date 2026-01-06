@@ -36,16 +36,21 @@ func InitDB(dsn string) error {
 
 // User 用户模型
 type User struct {
-	ID           string    `gorm:"primaryKey" json:"id"`
-	Username     string    `gorm:"uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"not null" json:"-"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string     `gorm:"primaryKey" json:"id"`
+	Username     string     `gorm:"uniqueIndex" json:"username"`
+	Email        string     `gorm:"uniqueIndex" json:"email"`
+	PasswordHash string     `json:"-"`
+	Role         string     `gorm:"default:user" json:"role"`     // admin, user, viewer
+	Status       string     `gorm:"default:active" json:"status"` // active, disabled
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	LastLoginAt  *time.Time `json:"last_login_at"`
 }
 
 // Task 任务模型
 type Task struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
+	UserID      string     `gorm:"index" json:"user_id"`
 	Title       string     `gorm:"not null" json:"title"`
 	Description string     `json:"description"`
 	Status      string     `gorm:"default:todo;index" json:"status"` // todo, in_progress, done, archived
@@ -67,6 +72,7 @@ type Task struct {
 // TerminalSession 终端会话模型
 type TerminalSession struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
+	UserID      string     `gorm:"index" json:"user_id"`
 	Title       string     `json:"title"`
 	TaskID      *string    `gorm:"index" json:"task_id"`
 	Shell       string     `gorm:"default:bash" json:"shell"`

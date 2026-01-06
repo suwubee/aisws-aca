@@ -101,6 +101,7 @@ func main() {
 	apiGroup.Get("/auth/me", authController.Me)
 	apiGroup.Post("/auth/change-password", authController.ChangePassword)
 	apiGroup.Post("/auth/reset-data", authController.ResetData)
+	apiGroup.Post("/auth/register", middleware.RequireRole("admin"), authController.Register)
 
 	// 终端API (注册在apiGroup上，继承auth中间件)
 	terminalController := api.NewTerminalController(terminalManager)

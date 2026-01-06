@@ -5,6 +5,7 @@ import { authApi } from '@/api'
 interface User {
   id: string
   username: string
+  role: string
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -12,6 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
 
   const isAuthenticated = computed(() => !!token.value)
+  const isAdmin = computed(() => user.value?.role === 'admin')
 
   async function login(username: string, password: string) {
     const { data } = await authApi.login(username, password)
@@ -43,6 +45,7 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     user,
     isAuthenticated,
+    isAdmin,
     login,
     logout,
     fetchUser
