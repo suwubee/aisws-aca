@@ -49,13 +49,35 @@ export const taskApi = {
     api.get('/tasks', { params }),
   getByStatus: () => api.get('/tasks/by-status'),
   get: (id: string) => api.get(`/tasks/${id}`),
-  create: (data: { title: string; description?: string; priority?: number; rule_set_id?: string }) =>
-    api.post('/tasks', data),
-  update: (id: string, data: Partial<{ title: string; description: string; status: string; priority: number; rule_set_id: string | null }>) =>
-    api.put(`/tasks/${id}`, data),
+  getDetail: (id: string) => api.get(`/tasks/${id}/detail`),
+  getTerminals: (id: string) => api.get(`/tasks/${id}/terminals`),
+  create: (data: {
+    title: string
+    description?: string
+    priority?: number
+    rule_set_id?: string
+    work_dir?: string
+    cli_type?: string
+    initial_prompt?: string
+    auto_start?: boolean
+    auto_create_dir?: boolean
+  }) => api.post('/tasks', data),
+  update: (id: string, data: Partial<{
+    title: string
+    description: string
+    status: string
+    priority: number
+    rule_set_id: string | null
+    work_dir: string
+    cli_type: string
+    initial_prompt: string
+    auto_start: boolean
+    auto_create_dir: boolean
+  }>) => api.put(`/tasks/${id}`, data),
   delete: (id: string) => api.delete(`/tasks/${id}`),
   move: (id: string, data: { status: string; order_index: number }) =>
-    api.post(`/tasks/${id}/move`, data)
+    api.post(`/tasks/${id}/move`, data),
+  start: (id: string) => api.post(`/tasks/${id}/start`)
 }
 
 // Terminal API

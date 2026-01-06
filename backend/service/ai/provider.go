@@ -202,28 +202,25 @@ type DecisionResult struct {
 }
 
 // DefaultApprovalPrompt 默认的审批判断提示词
-const DefaultApprovalPrompt = `你是一个终端自动化审批助手。分析以下终端输出，只做安全判断与需要的输入建议。
+const DefaultApprovalPrompt = `你是一个终端自动化审批助手。分析终端输出，判断是否需要输入以及输入什么。
 
-判定规则（从上到下匹配）：
-1) 安全且明确的操作：action=approve
-2) 明确危险操作（如 rm -rf、覆盖写入敏感路径、sudo/root 权限、不可逆删除等）：action=reject
-3) 需要确认 (y/n, yes/no, continue/proceed/confirm)：若操作安全，action=approve 并给出 input（如 "y\n" / "yes\n" / "\n"）
-4) 需要用户选择多个选项：action=wait
-5) 不确定：action=wait
+【重要】input 字段使用标准类型名称：
+- "enter" = 回车键
+- "yes" = 输入 yes 并回车
+- "y" = 输入 y 并回车
+- "1" = 输入 1 并回车
+- "" = 不需要输入
 
-输出字段（必须齐全）：
-- action: approve | reject | wait | input
-- input: string（可为空；如需要自动输入必须包含换行符）
-- confidence: 0~1 的数字（允许用百分比，如 92%）
-- reasoning: 简短说明
+判定规则：
+1) 任务完成/结果反馈（无输入提示符）：action=wait, input=""
+2) 危险操作（rm -rf、sudo、不可逆删除）：action=reject
+3) Claude Code 选择提示（Enter to confirm / ❯ 1. Yes）：action=approve, input="enter"
+4) y/n 确认提示：action=approve, input="y"
+5) 需要具体内容输入：action=wait
+6) 不确定：action=wait
 
-输出格式要求（优先级从高到低）：
-1) 仅输出一个 JSON 对象（不要 Markdown、不要代码块、不要额外文字）
-2) 如果无法稳定输出 JSON，则输出 4 行键值对（不要其它内容）：
-ACTION: ...
-INPUT: ...
-CONFIDENCE: ...
-REASONING: ...
+输出 JSON：
+{"action":"approve|reject|wait","input":"enter|yes|y|1|空","confidence":0.9,"reasoning":"说明"}
 `
 
 func buildApprovalPrompt(userPrompt string) string {
@@ -247,6 +244,35 @@ func normalizeDecisionKey(key string) string {
 		return "reasoning"
 	default:
 		return ""
+	}
+}
+
+// convertInputType 将标准输入类型转换为实际输入内容
+func convertInputType(input string) string {
+	input = strings.TrimSpace(strings.ToLower(input))
+	switch input {
+	case "enter", "回车", "confirm":
+		return "\r"
+	case "yes":
+		return "yes\r"
+	case "y":
+		return "y\r"
+	case "no":
+		return "no\r"
+	case "n":
+		return "n\r"
+	case "1":
+		return "1\r"
+	case "2":
+		return "2\r"
+	case "":
+		return ""
+	default:
+		// 如果不是标准类型，保持原样（可能是自定义输入）
+		if !strings.HasSuffix(input, "\r") && input != "" {
+			return input + "\r"
+		}
+		return input
 	}
 }
 
@@ -318,6 +344,8 @@ func parseDecisionFromResponse(response string) *DecisionResult {
 		best = &parsed
 	}
 	if best != nil {
+		// 将标准输入类型转换为实际输入
+		best.Input = convertInputType(best.Input)
 		return best
 	}
 

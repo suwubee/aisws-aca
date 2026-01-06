@@ -9,9 +9,37 @@ export interface Task {
   status: string
   priority: number
   order_index: number
+  rule_set_id?: string | null
   created_at: string
   updated_at: string
   completed_at: string | null
+  // 自动化配置
+  work_dir?: string
+  cli_type?: string
+  initial_prompt?: string
+  auto_start?: boolean
+  auto_create_dir?: boolean
+}
+
+export interface TerminalSession {
+  id: string
+  title: string
+  task_id?: string | null
+  shell: string
+  status: string
+  pid: number
+  tmux_session?: string
+  rule_mode: string
+  rule_set_id?: string | null
+  created_at: string
+  closed_at?: string | null
+}
+
+export interface TaskDetail {
+  task: Task
+  terminals: TerminalSession[]
+  logs: any[]
+  approvals: any[]
 }
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived'
@@ -64,6 +92,33 @@ export const useTaskStore = defineStore('task', () => {
     await fetchTasks()
   }
 
+  async function getTaskDetail(id: string): Promise<TaskDetail> {
+    const { data } = await taskApi.getDetail(id)
+    return data
+  }
+
+  async function startTask(id: string) {
+    const { data } = await taskApi.start(id)
+    await fetchTasks()
+    return data
+  }
+
+  async function createAutomationTask(params: {
+    title: string
+    description?: string
+    priority?: number
+    work_dir: string
+    cli_type: string
+    initial_prompt: string
+    auto_start?: boolean
+    auto_create_dir?: boolean
+    rule_set_id?: string
+  }) {
+    const { data } = await taskApi.create(params)
+    await fetchTasks()
+    return data.item
+  }
+
   return {
     tasks,
     tasksByStatus,
@@ -72,6 +127,9 @@ export const useTaskStore = defineStore('task', () => {
     createTask,
     updateTask,
     deleteTask,
-    moveTask
+    moveTask,
+    getTaskDetail,
+    startTask,
+    createAutomationTask
   }
 })

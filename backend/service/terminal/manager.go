@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"os/exec"
 	"sync"
 	"time"
 
@@ -67,6 +68,44 @@ func (m *Manager) GetSession(id string) *Session {
 		return v.(*Session)
 	}
 	return nil
+}
+
+// GetOrResumeSession 获取或恢复会话
+func (m *Manager) GetOrResumeSession(id string) (*Session, error) {
+	// 先检查内存中是否有
+	if session := m.GetSession(id); session != nil {
+		return session, nil
+	}
+
+	// 检查数据库中是否有这个会话
+	var dbSession model.TerminalSession
+	if err := model.DB.First(&dbSession, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+
+	// 检查 tmux 会话是否存在
+	checkCmd := exec.Command("tmux", "has-session", "-t", id)
+	if checkCmd.Run() != nil {
+		// tmux 会话不存在
+		return nil, nil
+	}
+
+	// 恢复会话
+	session := NewSession(id, m.config.DefaultShell, m.config.ScrollbackBytes)
+	session.SetTitle(dbSession.Title)
+	if dbSession.TaskID != nil {
+		session.SetTaskID(dbSession.TaskID)
+	}
+
+	// 使用 attach 模式启动
+	if err := session.StartWithTmux(true); err != nil {
+		return nil, err
+	}
+
+	m.sessions.Store(id, session)
+	utils.Info("Resumed terminal session", zap.String("id", id))
+
+	return session, nil
 }
 
 // CloseSession 关闭会话

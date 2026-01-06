@@ -156,6 +156,8 @@ func GetRecentContext(scrollback []byte, lines int) string {
 	}
 
 	content := string(scrollback)
+	// 清理并去重进度条类型的输出
+	content = cleanProgressOutput(content)
 	allLines := strings.Split(content, "\n")
 
 	// 获取最后N行
@@ -165,6 +167,92 @@ func GetRecentContext(scrollback []byte, lines int) string {
 	}
 
 	return strings.Join(allLines[start:], "\n")
+}
+
+// cleanProgressOutput 清理进度条类型的输出，模拟终端的行覆盖行为
+func cleanProgressOutput(content string) string {
+	// 移除ANSI转义序列
+	content = stripANSISequences(content)
+
+	// 处理 \r 回车符（进度条覆盖）
+	var result strings.Builder
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		// 处理行内的 \r，只保留最后一个版本
+		if strings.Contains(line, "\r") {
+			parts := strings.Split(line, "\r")
+			// 取最后一个非空部分
+			for i := len(parts) - 1; i >= 0; i-- {
+				if strings.TrimSpace(parts[i]) != "" {
+					line = parts[i]
+					break
+				}
+			}
+			// 如果全是空的，取最后一个
+			if strings.TrimSpace(line) == "" && len(parts) > 0 {
+				line = parts[len(parts)-1]
+			}
+		}
+
+		// 跳过进度条特征行（避免记录大量重复的进度信息）
+		if isProgressLine(line) {
+			continue
+		}
+
+		result.WriteString(line)
+		result.WriteString("\n")
+	}
+
+	return strings.TrimRight(result.String(), "\n")
+}
+
+// stripANSISequences 移除ANSI转义序列
+func stripANSISequences(s string) string {
+	// ANSI转义序列正则
+	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_].*?\x1b\\|\x1b\[[\?]?[0-9;]*[hlm]`)
+	s = ansiRegex.ReplaceAllString(s, "")
+
+	// 移除其他控制字符（保留换行、制表符、回车）
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r == '\r' {
+			return r
+		}
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, s)
+
+	return s
+}
+
+// isProgressLine 检测是否是进度条行
+func isProgressLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+
+	// 常见进度条模式
+	progressPatterns := []string{
+		`^\s*\d+%`,                          // 百分比开头: "50%..."
+		`\[\s*=*>?\s*\]`,                    // 进度条: [===>    ]
+		`\d+\s*[KMG]?B/s`,                   // 下载速度: 1.5MB/s
+		`\d+:\d+:\d+`,                       // 时间格式: 00:01:23
+		`ETA\s*\d+`,                         // ETA时间
+		`\d+\s*[KMG]?B\s*/\s*\d+\s*[KMG]?B`, // 下载进度: 100KB / 1MB
+		`^\s*[\-\\|/]+\s*$`,                 // 旋转动画: - \ | /
+		`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\s]+$`,                 // Unicode旋转动画
+	}
+
+	for _, pattern := range progressPatterns {
+		if matched, _ := regexp.MatchString(pattern, line); matched {
+			return true
+		}
+	}
+
+	return false
 }
 
 // extractApprovalPrompt 提取审批提示内容
@@ -267,18 +355,19 @@ var defaultStatePatterns = []StatePattern{
 	{
 		State: StateWaitingApproval,
 		Patterns: []string{
-			// 通用确认提示
-			`(?i)\(y/n\)\s*$`,
-			`(?i)\[y/n\]\s*$`,
-			`(?i)\(yes/no\)\s*$`,
-			`(?i)\[yes/no\]\s*$`,
-			`(?i)yes\s+or\s+no\s*\?`,
-			`(?i)continue\s*\?\s*\(y/n\)`,
-			`(?i)proceed\s*\?\s*$`,
-			`(?i)confirm\s*\?\s*$`,
+			// 通用确认提示（更宽松的匹配）
+			`(?i)\(y/n\)`,
+			`(?i)\[y/n\]`,
+			`(?i)\(yes/no\)`,
+			`(?i)\[yes/no\]`,
+			`(?i)yes\s+or\s+no`,
+			`(?i)continue\s*\?`,
+			`(?i)proceed\s*\?`,
+			`(?i)confirm\s*\?`,
+			`(?i)y/n`,
 			// Claude Code 特有
-			`(?i)allow\s+tool\s+use\s*\?`,
-			`(?i)allow\s+read\s*\?`,
+			`(?i)allow\s+tool`,
+			`(?i)allow\s+read`,
 			`(?i)allow\s+write\s*\?`,
 			`(?i)allow\s+execute\s*\?`,
 			`(?i)allow\s+bash\s*\?`,
@@ -296,6 +385,10 @@ var defaultStatePatterns = []StatePattern{
 			// 选择提示
 			`\[\d+\]\s+.*\[\d+\]`,
 			`\d+\)\s+.*\d+\)`,
+			`(?i)enter\s+to\s+confirm`,
+			`(?i)esc\s+to\s+cancel`,
+			`❯\s*\d+\.`,
+			`(?i)\d+\.\s*(yes|no)`,
 		},
 		Priority: 100,
 	},

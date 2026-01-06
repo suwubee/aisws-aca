@@ -65,6 +65,7 @@ type SessionMetadata struct {
 	TaskID         *string      `json:"task_id,omitempty"`
 	AIAssistant    *AIAssistant `json:"ai_assistant,omitempty"`
 	AutomationMode string       `json:"automation_mode,omitempty"` // manual, auto_yes, smart
+	TmuxSession    string       `json:"tmux_session,omitempty"`    // tmux 会话名称
 }
 
 // AIAssistant AI助手信息
@@ -116,6 +117,13 @@ type Session struct {
 	lastOutputMu           sync.Mutex
 	approvalEvalMu         sync.Mutex
 	approvalEvalInProgress bool
+	// 节流相关（减少屏闪）
+	dataBatchMu      sync.Mutex
+	dataBatchBuf     []byte        // 数据批量缓冲
+	dataBatchTimer   *time.Timer   // 批量发送定时器
+	dataBatchMaxWait time.Duration // 最大等待时间
+	metaThrottleMu   sync.Mutex
+	metaThrottleLast time.Time // 上次元数据广播时间
 }
 
 // LogEntry 日志条目
@@ -176,6 +184,8 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 		outputLineBufSize: 8192,
 		detector:          detector.NewDetector(),
 		approvalEngine:    approval.NewEngine(),
+		dataBatchBuf:      make([]byte, 0, 8192),
+		dataBatchMaxWait:  16 * time.Millisecond, // 约60fps
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -185,6 +195,65 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 
 // Start 启动会话
 func (s *Session) Start() error {
+	return s.StartWithTmux(false)
+}
+
+// StartWithTmux 使用 tmux 启动会话
+func (s *Session) StartWithTmux(attach bool) error {
+	var cmd *exec.Cmd
+
+	if attach {
+		// 重新连接到已有的 tmux 会话
+		cmd = exec.Command("tmux", "attach-session", "-t", s.id)
+	} else {
+		// 创建新的 tmux 会话
+		// 先检查会话是否已存在
+		checkCmd := exec.Command("tmux", "has-session", "-t", s.id)
+		if checkCmd.Run() == nil {
+			// 会话已存在，直接 attach
+			cmd = exec.Command("tmux", "attach-session", "-t", s.id)
+		} else {
+			// 创建新会话
+			cmd = exec.Command("tmux", "new-session", "-d", "-s", s.id, "-x", "120", "-y", "30")
+			cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+			if err := cmd.Run(); err != nil {
+				utils.Warn("Failed to create tmux session, falling back to direct shell", zap.Error(err))
+				return s.startDirectShell()
+			}
+			// 然后 attach 到新创建的会话
+			cmd = exec.Command("tmux", "attach-session", "-t", s.id)
+		}
+	}
+
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return err
+	}
+
+	s.pty = ptmx
+	s.cmd = cmd
+	s.metadata.PID = cmd.Process.Pid
+	s.metadata.TmuxSession = s.id
+
+	// 加载自动化配置
+	s.loadAutomationConfig()
+
+	// 启动PTY读取goroutine
+	go s.readPTY()
+
+	// 启动进程等待goroutine
+	go s.wait()
+
+	// 启动日志刷新goroutine
+	go s.flushLogs()
+
+	return nil
+}
+
+// startDirectShell 直接启动 shell（fallback）
+func (s *Session) startDirectShell() error {
 	cmd := exec.Command(s.shell)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
@@ -197,16 +266,9 @@ func (s *Session) Start() error {
 	s.cmd = cmd
 	s.metadata.PID = cmd.Process.Pid
 
-	// 加载自动化配置
 	s.loadAutomationConfig()
-
-	// 启动PTY读取goroutine
 	go s.readPTY()
-
-	// 启动进程等待goroutine
 	go s.wait()
-
-	// 启动日志刷新goroutine
 	go s.flushLogs()
 
 	return nil
@@ -229,6 +291,7 @@ func (s *Session) readPTY() {
 	for {
 		select {
 		case <-s.done:
+			s.flushDataBatch() // 退出前刷新剩余数据
 			return
 		default:
 			n, err := s.pty.Read(buf)
@@ -236,6 +299,7 @@ func (s *Session) readPTY() {
 				if err != io.EOF {
 					utils.Debug("PTY read error", zap.Error(err))
 				}
+				s.flushDataBatch()
 				return
 			}
 
@@ -246,11 +310,8 @@ func (s *Session) readPTY() {
 				// 记录输出日志
 				s.addOutputLog(data)
 
-				// 广播数据事件
-				s.broadcast(StreamEvent{
-					Type: StreamEventData,
-					Data: base64.StdEncoding.EncodeToString(data),
-				})
+				// 批量广播数据事件（减少屏闪）
+				s.batchBroadcastData(data)
 
 				// 更新最后输出
 				s.lastOutputMu.Lock()
@@ -262,6 +323,54 @@ func (s *Session) readPTY() {
 			}
 		}
 	}
+}
+
+// batchBroadcastData 批量广播数据（减少频繁更新导致的屏闪）
+func (s *Session) batchBroadcastData(data []byte) {
+	s.dataBatchMu.Lock()
+	defer s.dataBatchMu.Unlock()
+
+	s.dataBatchBuf = append(s.dataBatchBuf, data...)
+
+	// 如果缓冲区较大，立即发送
+	if len(s.dataBatchBuf) >= 4096 {
+		s.flushDataBatchLocked()
+		return
+	}
+
+	// 否则设置定时器延迟发送
+	if s.dataBatchTimer == nil {
+		s.dataBatchTimer = time.AfterFunc(s.dataBatchMaxWait, func() {
+			s.flushDataBatch()
+		})
+	}
+}
+
+// flushDataBatch 刷新数据批量缓冲
+func (s *Session) flushDataBatch() {
+	s.dataBatchMu.Lock()
+	defer s.dataBatchMu.Unlock()
+	s.flushDataBatchLocked()
+}
+
+// flushDataBatchLocked 刷新数据批量缓冲（需要持有锁）
+func (s *Session) flushDataBatchLocked() {
+	if s.dataBatchTimer != nil {
+		s.dataBatchTimer.Stop()
+		s.dataBatchTimer = nil
+	}
+
+	if len(s.dataBatchBuf) == 0 {
+		return
+	}
+
+	// 发送批量数据
+	s.broadcast(StreamEvent{
+		Type: StreamEventData,
+		Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
+	})
+
+	s.dataBatchBuf = s.dataBatchBuf[:0]
 }
 
 // detectAndHandle 检测AI状态并处理审批
@@ -294,6 +403,17 @@ func (s *Session) detectAndHandle(data []byte) {
 	// 检测状态变化
 	state, approvalPrompt := s.detector.DetectState(output)
 
+	// 无论是否有AI代理，都检测审批状态
+	if state == detector.StateWaitingApproval {
+		utils.Info("Detected waiting approval state",
+			zap.String("terminal", s.id),
+			zap.String("prompt", approvalPrompt))
+
+		// 触发审批流程
+		go s.handleApproval(output)
+	}
+
+	// 更新AI助手状态（如果存在）
 	s.metaMutex.Lock()
 	if s.aiAssistant != nil {
 		oldState := s.aiAssistant.State
@@ -308,11 +428,6 @@ func (s *Session) detectAndHandle(data []byte) {
 		if oldState != string(state) {
 			s.metaMutex.Unlock()
 			s.broadcastMetadata()
-
-			// 如果进入等待审批状态，触发审批流程
-			if state == detector.StateWaitingApproval {
-				go s.handleApproval(output)
-			}
 			return
 		}
 	}
@@ -340,7 +455,8 @@ func (s *Session) handleApproval(output string) {
 	// 获取更多上下文
 	scrollbackData := s.scrollback.Read()
 	contextLines := 50
-	if cfg, err := s.approvalEngine.GetAutomationConfig(s.id); err == nil && cfg != nil {
+	cfg, cfgErr := s.approvalEngine.GetAutomationConfig(s.id)
+	if cfgErr == nil && cfg != nil {
 		if cfg.ContextLines > 0 {
 			contextLines = cfg.ContextLines
 		}
@@ -348,18 +464,35 @@ func (s *Session) handleApproval(output string) {
 	if contextLines > 200 {
 		contextLines = 200
 	}
-	context := detector.GetRecentContext(scrollbackData, contextLines)
-	if context == "" {
-		context = output
+	fullContext := detector.GetRecentContext(scrollbackData, contextLines)
+	if fullContext == "" {
+		fullContext = output
 	}
 
-	// 评估审批
-	result, err := s.approvalEngine.Evaluate(ctx, s.id, context)
+	// 添加调试日志
+	utils.Debug("handleApproval called",
+		zap.String("terminal", s.id),
+		zap.Int("context_len", len(fullContext)),
+		zap.Int("output_len", len(output)))
+
+	// 评估审批 - 传入原始output用于检测，fullContext用于AI分析
+	result, err := s.approvalEngine.EvaluateWithContext(ctx, s.id, output, fullContext)
 	if err != nil {
 		utils.Error("Approval evaluation failed", zap.Error(err))
 		return
 	}
+
+	// 添加调试日志
+	utils.Info("Approval evaluation result",
+		zap.String("terminal", s.id),
+		zap.String("action", string(result.Action)),
+		zap.String("input", result.Input),
+		zap.String("reasoning", result.Reasoning),
+		zap.Float64("confidence", result.Confidence),
+		zap.Bool("ai_decision", result.AIDecision))
+
 	if result.Reasoning == "不是审批提示" {
+		utils.Info("Skipping - not approval prompt", zap.String("terminal", s.id))
 		return
 	}
 
@@ -375,17 +508,35 @@ func (s *Session) handleApproval(output string) {
 	}
 
 	// 如果是自动通过/自动输入，执行输入
-	if (result.Action == approval.ActionApprove || result.Action == approval.ActionInput) && result.Input != "" {
+	shouldExecute := (result.Action == approval.ActionApprove || result.Action == approval.ActionInput) && result.Input != ""
+	utils.Info("Checking execution condition",
+		zap.String("terminal", s.id),
+		zap.String("action", string(result.Action)),
+		zap.Bool("input_not_empty", result.Input != ""),
+		zap.Bool("should_execute", shouldExecute))
+
+	if shouldExecute {
+		utils.Info("Executing auto approval",
+			zap.String("terminal", s.id),
+			zap.String("action", string(result.Action)),
+			zap.String("input", result.Input))
+
 		if err := s.Write([]byte(result.Input)); err != nil {
 			utils.Error("Failed to write approval input", zap.Error(err))
 		} else {
 			approvalEvent.AutoHandled = true
-			utils.Info("Auto-handled approval",
+			utils.Info("Auto-handled approval success",
 				zap.String("terminal", s.id),
 				zap.String("action", string(result.Action)),
 				zap.String("input", result.Input),
 				zap.String("reasoning", result.Reasoning))
 		}
+	} else {
+		utils.Info("Not auto-handling approval",
+			zap.String("terminal", s.id),
+			zap.String("action", string(result.Action)),
+			zap.String("input", result.Input),
+			zap.Bool("input_empty", result.Input == ""))
 	}
 
 	// 记录审批操作
@@ -397,17 +548,17 @@ func (s *Session) handleApproval(output string) {
 	s.metaMutex.RUnlock()
 
 	promptType := "unknown"
-	if s.detector.IsApprovalPrompt(context) {
+	if s.detector.IsApprovalPrompt(fullContext) {
 		promptType = "approval"
 	}
 
 	recordPrompt := output
-	if context != "" {
+	if fullContext != "" {
 		// 优先存储提取后的审批提示（更易读，避免只截到一段 ANSI/片段）
-		if _, extracted := s.detector.DetectState(context); extracted != "" {
+		if _, extracted := s.detector.DetectState(fullContext); extracted != "" {
 			recordPrompt = extracted
 		} else {
-			recordPrompt = context
+			recordPrompt = fullContext
 		}
 	}
 
@@ -491,8 +642,17 @@ func (s *Session) broadcast(event StreamEvent) {
 	}
 }
 
-// broadcastMetadata 广播元数据
+// broadcastMetadata 广播元数据（带节流）
 func (s *Session) broadcastMetadata() {
+	s.metaThrottleMu.Lock()
+	// 节流：最少间隔100ms
+	if time.Since(s.metaThrottleLast) < 100*time.Millisecond {
+		s.metaThrottleMu.Unlock()
+		return
+	}
+	s.metaThrottleLast = time.Now()
+	s.metaThrottleMu.Unlock()
+
 	s.metaMutex.RLock()
 	metadata := *s.metadata
 	s.metaMutex.RUnlock()
@@ -506,11 +666,17 @@ func (s *Session) broadcastMetadata() {
 // Write 写入数据到PTY
 func (s *Session) Write(data []byte) error {
 	if s.pty == nil {
+		utils.Warn("Write failed: pty is nil", zap.String("terminal", s.id))
 		return nil
 	}
 	// 记录输入日志
 	s.addInputLog(data)
-	_, err := s.pty.Write(data)
+	n, err := s.pty.Write(data)
+	utils.Info("PTY Write result",
+		zap.String("terminal", s.id),
+		zap.Int("bytes_written", n),
+		zap.String("data", string(data)),
+		zap.Error(err))
 	return err
 }
 

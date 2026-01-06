@@ -46,7 +46,23 @@ type Engine struct {
 	onMessage func(msg *model.Message)
 }
 
-var yesNoPromptRegex = regexp.MustCompile(`(?i)(\(y/n\)|\[y/n\]|\(yes/no\)|\[yes/no\]|y/n|yes/no|continue\s*\?|proceed\s*\?|confirm\s*\?)`)
+var yesNoPromptRegex = regexp.MustCompile(`(?i)(\(y/n\)|\[y/n\]|\(yes/no\)|\[yes/no\]|y/n|yes/no|continue\s*\?|proceed\s*\?|confirm\s*\?|enter\s+to\s+confirm|esc\s+to\s+cancel|\d+\.\s*(yes|no))`)
+
+// isClaudeCodeSelectPrompt 检测是否是 Claude Code 选择提示
+func isClaudeCodeSelectPrompt(output string) bool {
+	patterns := []string{
+		`(?i)enter\s+to\s+(confirm|select)`,
+		`(?i)esc\s+to\s+cancel`,
+		`❯\s*\d+\.`,
+		`(?i)\d+\.\s*yes.*proceed`,
+	}
+	for _, p := range patterns {
+		if matched, _ := regexp.MatchString(p, output); matched {
+			return true
+		}
+	}
+	return false
+}
 
 // NewEngine 创建审批引擎
 func NewEngine() *Engine {
@@ -86,8 +102,14 @@ func (e *Engine) GetAutomationConfig(terminalID string) (*EffectiveConfig, error
 	var terminal model.TerminalSession
 	if err := model.DB.First(&terminal, "id = ?", terminalID).Error; err != nil {
 		// 终端不存在，返回默认配置
+		utils.Debug("Terminal not found, using default config",
+			zap.String("terminal", terminalID))
 		return e.getDefaultConfig(terminalID), nil
 	}
+
+	utils.Debug("Terminal found",
+		zap.String("terminal", terminalID),
+		zap.String("rule_mode", terminal.RuleMode))
 
 	// 根据终端的规则模式获取对应的规则集
 	var ruleSet *model.RuleSet
@@ -98,6 +120,12 @@ func (e *Engine) GetAutomationConfig(terminalID string) (*EffectiveConfig, error
 		var systemRule model.RuleSet
 		if err := model.DB.Where("type = ?", "system").First(&systemRule).Error; err == nil {
 			ruleSet = &systemRule
+			utils.Debug("Using system rule",
+				zap.String("rule_id", systemRule.ID),
+				zap.String("approval_mode", systemRule.ApprovalMode),
+				zap.String("auto_input_type", systemRule.AutoInputType))
+		} else {
+			utils.Warn("System rule not found", zap.Error(err))
 		}
 
 	case "task":
@@ -166,29 +194,53 @@ func (e *Engine) getDefaultConfig(terminalID string) *EffectiveConfig {
 
 // Evaluate 评估是否需要审批以及采取什么动作
 func (e *Engine) Evaluate(ctx context.Context, terminalID, output string) (*ApprovalResult, error) {
+	return e.EvaluateWithContext(ctx, terminalID, output, output)
+}
+
+// EvaluateWithContext 评估审批，使用原始output检测，fullContext用于AI分析
+func (e *Engine) EvaluateWithContext(ctx context.Context, terminalID, output, fullContext string) (*ApprovalResult, error) {
 	config, err := e.GetAutomationConfig(terminalID)
 	if err != nil {
+		utils.Error("Failed to get automation config", zap.Error(err), zap.String("terminal", terminalID))
 		return nil, err
 	}
 
-	// 检测是否是等待审批的提示
-	if !e.detector.IsApprovalPrompt(output) {
+	utils.Info("Automation config loaded",
+		zap.String("terminal", terminalID),
+		zap.String("approval_mode", config.ApprovalMode),
+		zap.String("auto_input_type", config.AutoInputType))
+
+	// 检测是否是等待审批的提示（使用原始output）
+	isApproval := e.detector.IsApprovalPrompt(output)
+	utils.Info("IsApprovalPrompt check",
+		zap.String("terminal", terminalID),
+		zap.Bool("is_approval", isApproval),
+		zap.Int("output_len", len(output)))
+
+	if !isApproval {
 		return &ApprovalResult{
 			Action:    ActionWait,
 			Reasoning: "不是审批提示",
 		}, nil
 	}
 
-	// 根据模式处理
+	// 根据模式处理（使用fullContext进行分析）
+	utils.Info("Processing approval",
+		zap.String("terminal", terminalID),
+		zap.String("mode", config.ApprovalMode))
+
 	switch config.ApprovalMode {
 	case "manual":
-		return e.handleManualMode(config, output)
+		return e.handleManualMode(config, fullContext)
 	case "auto_yes":
-		return e.handleAutoYesMode(config, output)
+		return e.handleAutoYesMode(config, fullContext)
 	case "smart":
-		return e.handleSmartMode(ctx, config, output)
+		return e.handleSmartMode(ctx, config, fullContext)
 	default:
-		return e.handleManualMode(config, output)
+		utils.Warn("Unknown approval mode, defaulting to manual",
+			zap.String("terminal", terminalID),
+			zap.String("mode", config.ApprovalMode))
+		return e.handleManualMode(config, fullContext)
 	}
 }
 
@@ -323,6 +375,11 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 					Confidence: decision.Confidence,
 					Reasoning:  decision.Reasoning,
 					AIDecision: true,
+				}
+
+				// 强制转换：Claude Code 选择提示需要回车
+				if action == "approve" && isClaudeCodeSelectPrompt(output) {
+					result.Input = "\r"  // 使用 \r 而不是 \n
 				}
 
 				// 根据AI决策发送通知
@@ -503,15 +560,15 @@ func matchPattern(text, pattern string) bool {
 func getAutoInput(inputType string) string {
 	switch inputType {
 	case "yes":
-		return "yes\n"
+		return "yes\r"
 	case "y":
-		return "y\n"
+		return "y\r"
 	case "enter":
-		return "\n"
+		return "\r"
 	case "option1":
-		return "1\n"
+		return "1\r"
 	default:
-		return "yes\n"
+		return "yes\r"
 	}
 }
 

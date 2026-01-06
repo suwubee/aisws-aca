@@ -27,6 +27,8 @@
           @edit="handleEditTask"
           @delete="handleDeleteTask"
           @open-terminal="handleOpenTerminal"
+          @start="handleStartTask"
+          @detail="handleViewDetail"
         />
         <div
           v-if="getTaskCount(column.status) === 0"
@@ -42,11 +44,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import { useTaskStore, type Task } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import TaskCard from './TaskCard.vue'
 
 const message = useMessage()
+const router = useRouter()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
 
@@ -121,6 +125,24 @@ async function handleOpenTerminal(task: Task) {
   } catch (error) {
     message.error('创建终端失败')
   }
+}
+
+async function handleStartTask(task: Task) {
+  try {
+    const result = await taskStore.startTask(task.id)
+    message.success('任务已启动')
+    // 切换到新创建的终端
+    if (result.terminal_id) {
+      await terminalStore.fetchTerminals()
+      terminalStore.setActiveTerminal(result.terminal_id)
+    }
+  } catch (error: any) {
+    message.error(error.response?.data?.error || '启动任务失败')
+  }
+}
+
+function handleViewDetail(task: Task) {
+  router.push(`/task/${task.id}`)
 }
 </script>
 

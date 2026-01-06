@@ -4,14 +4,20 @@ import (
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/task"
+	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
 
-type TaskController struct{}
+type TaskController struct {
+	automationService *task.AutomationService
+}
 
-func NewTaskController() *TaskController {
-	return &TaskController{}
+func NewTaskController(tm *terminal.Manager) *TaskController {
+	return &TaskController{
+		automationService: task.NewAutomationService(tm),
+	}
 }
 
 type CreateTaskRequest struct {
@@ -20,6 +26,12 @@ type CreateTaskRequest struct {
 	Priority    int     `json:"priority"`
 	Status      string  `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
+	// 自动化配置
+	WorkDir       string `json:"work_dir"`
+	CLIType       string `json:"cli_type"`
+	InitialPrompt string `json:"initial_prompt"`
+	AutoStart     bool   `json:"auto_start"`
+	AutoCreateDir *bool  `json:"auto_create_dir"`
 }
 
 type UpdateTaskRequest struct {
@@ -28,6 +40,12 @@ type UpdateTaskRequest struct {
 	Priority    *int    `json:"priority"`
 	Status      *string `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
+	// 自动化配置
+	WorkDir       *string `json:"work_dir"`
+	CLIType       *string `json:"cli_type"`
+	InitialPrompt *string `json:"initial_prompt"`
+	AutoStart     *bool   `json:"auto_start"`
+	AutoCreateDir *bool   `json:"auto_create_dir"`
 }
 
 type MoveTaskRequest struct {
@@ -51,14 +69,29 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		status = "todo"
 	}
 
+	cliType := req.CLIType
+	if cliType == "" {
+		cliType = "claude"
+	}
+
+	autoCreateDir := true
+	if req.AutoCreateDir != nil {
+		autoCreateDir = *req.AutoCreateDir
+	}
+
 	task := model.Task{
-		ID:          uuid.New().String(),
-		Title:       req.Title,
-		Description: req.Description,
-		Status:      status,
-		Priority:    req.Priority,
-		RuleSetID:   req.RuleSetID,
-		OrderIndex:  float64(time.Now().UnixNano()),
+		ID:            uuid.New().String(),
+		Title:         req.Title,
+		Description:   req.Description,
+		Status:        status,
+		Priority:      req.Priority,
+		RuleSetID:     req.RuleSetID,
+		OrderIndex:    float64(time.Now().UnixNano()),
+		WorkDir:       req.WorkDir,
+		CLIType:       cliType,
+		InitialPrompt: req.InitialPrompt,
+		AutoStart:     req.AutoStart,
+		AutoCreateDir: autoCreateDir,
 	}
 
 	if err := model.DB.Create(&task).Error; err != nil {
@@ -104,6 +137,47 @@ func (ctrl *TaskController) GetTask(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"item": task})
 }
 
+// GetTaskDetail 获取任务完整详情（包含终端、日志、审批）
+func (ctrl *TaskController) GetTaskDetail(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var task model.Task
+	if err := model.DB.First(&task, "id = ?", id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	// 获取关联的终端
+	var terminals []model.TerminalSession
+	model.DB.Where("task_id = ?", id).Order("created_at desc").Find(&terminals)
+
+	// 获取终端ID列表
+	terminalIDs := make([]string, len(terminals))
+	for i, t := range terminals {
+		terminalIDs[i] = t.ID
+	}
+
+	// 获取关联的日志（最近100条）
+	var logs []model.Log
+	if len(terminalIDs) > 0 {
+		model.DB.Where("terminal_id IN ?", terminalIDs).
+			Order("created_at desc").Limit(100).Find(&logs)
+	}
+
+	// 获取关联的审批记录
+	var approvals []model.ApprovalRecord
+	if len(terminalIDs) > 0 {
+		model.DB.Where("terminal_id IN ?", terminalIDs).
+			Order("created_at desc").Find(&approvals)
+	}
+
+	return c.JSON(fiber.Map{
+		"task":      task,
+		"terminals": terminals,
+		"logs":      logs,
+		"approvals": approvals,
+	})
+}
+
 // UpdateTask 更新任务
 func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -141,6 +215,22 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 		} else {
 			updates["rule_set_id"] = *req.RuleSetID
 		}
+	}
+	// 自动化配置字段
+	if req.WorkDir != nil {
+		updates["work_dir"] = *req.WorkDir
+	}
+	if req.CLIType != nil {
+		updates["cli_type"] = *req.CLIType
+	}
+	if req.InitialPrompt != nil {
+		updates["initial_prompt"] = *req.InitialPrompt
+	}
+	if req.AutoStart != nil {
+		updates["auto_start"] = *req.AutoStart
+	}
+	if req.AutoCreateDir != nil {
+		updates["auto_create_dir"] = *req.AutoCreateDir
 	}
 
 	if len(updates) > 0 {
@@ -219,6 +309,42 @@ func (ctrl *TaskController) GetTasksByStatus(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": grouped})
 }
 
+// StartTask 启动自动化任务
+func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var taskModel model.Task
+	if err := model.DB.First(&taskModel, "id = ?", id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	result, err := ctrl.automationService.StartTask(&taskModel)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"error":  err.Error(),
+			"result": result,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":     "Task started",
+		"task":        result.Task,
+		"terminal_id": result.Terminal.ID(),
+		"work_dir":    result.WorkDir,
+		"cli_started": result.CLIStarted,
+	})
+}
+
+// GetTaskTerminals 获取任务关联的终端列表
+func (ctrl *TaskController) GetTaskTerminals(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var terminals []model.TerminalSession
+	model.DB.Where("task_id = ?", id).Order("created_at desc").Find(&terminals)
+
+	return c.JSON(fiber.Map{"items": terminals})
+}
+
 // RegisterRoutes 注册路由
 func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks := app.Group("/tasks")
@@ -226,7 +352,10 @@ func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks.Post("/", ctrl.CreateTask)
 	tasks.Get("/by-status", ctrl.GetTasksByStatus)
 	tasks.Get("/:id", ctrl.GetTask)
+	tasks.Get("/:id/detail", ctrl.GetTaskDetail)
 	tasks.Put("/:id", ctrl.UpdateTask)
 	tasks.Delete("/:id", ctrl.DeleteTask)
 	tasks.Post("/:id/move", ctrl.MoveTask)
+	tasks.Post("/:id/start", ctrl.StartTask)
+	tasks.Get("/:id/terminals", ctrl.GetTaskTerminals)
 }

@@ -19,6 +19,11 @@ const routes = [
         component: () => import('@/views/Dashboard.vue')
       },
       {
+        path: 'task/:id',
+        name: 'TaskDetail',
+        component: () => import('@/views/TaskDetail.vue')
+      },
+      {
         path: 'logs',
         name: 'LogManagement',
         component: () => import('@/views/LogManagement.vue')

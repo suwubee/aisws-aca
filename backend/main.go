@@ -81,6 +81,14 @@ func main() {
 	// API路由组
 	apiGroup := app.Group("/api")
 
+	// 健康检查（不需要认证）
+	apiGroup.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"version": "1.0.0",
+		})
+	})
+
 	// 认证API - login不需要认证
 	authController := api.NewAuthController(&cfg.Auth)
 	app.Post("/api/auth/login", authController.Login)
@@ -100,20 +108,12 @@ func main() {
 	terminalController.RegisterWebSocket(app) // WebSocket单独注册，不需要auth
 
 	// 任务API
-	taskController := api.NewTaskController()
+	taskController := api.NewTaskController(terminalManager)
 	taskController.RegisterRoutes(apiGroup)
 
 	// 自动化API
 	automationController := api.NewAutomationController(terminalManager)
 	automationController.RegisterRoutes(apiGroup)
-
-	// 健康检查
-	app.Get("/api/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"version": "1.0.0",
-		})
-	})
 
 	// 静态文件服务
 	staticFS, err := fs.Sub(staticFiles, "static")

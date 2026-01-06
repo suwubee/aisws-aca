@@ -31,6 +31,9 @@
         >
           {{ priorityLabel }}
         </n-tag>
+        <n-tag v-if="task.cli_type" size="small" type="info">
+          {{ task.cli_type }}
+        </n-tag>
         <n-tag v-if="aiStatus" :type="aiStatusType" size="small">
           {{ aiStatus }}
         </n-tag>
@@ -85,6 +88,8 @@ const emit = defineEmits<{
   (e: 'edit', task: Task): void
   (e: 'delete', task: Task): void
   (e: 'open-terminal', task: Task): void
+  (e: 'start', task: Task): void
+  (e: 'detail', task: Task): void
 }>()
 
 const isDragging = ref(false)
@@ -119,16 +124,28 @@ function activateTerminal(id: string) {
   terminalStore.setActiveTerminal(id)
 }
 
-const menuOptions = [
-  { label: '编辑', key: 'edit' },
-  { label: '删除', key: 'delete' }
-]
+const menuOptions = computed(() => {
+  const options = [
+    { label: '编辑', key: 'edit' },
+    { label: '查看详情', key: 'detail' }
+  ]
+  // 如果有自动化配置，添加启动选项
+  if (props.task.work_dir || props.task.cli_type) {
+    options.unshift({ label: '▶ 启动任务', key: 'start' })
+  }
+  options.push({ label: '删除', key: 'delete' })
+  return options
+})
 
 function handleMenuSelect(key: string) {
   if (key === 'edit') {
     emit('edit', props.task)
   } else if (key === 'delete') {
     emit('delete', props.task)
+  } else if (key === 'start') {
+    emit('start', props.task)
+  } else if (key === 'detail') {
+    emit('detail', props.task)
   }
 }
 </script>

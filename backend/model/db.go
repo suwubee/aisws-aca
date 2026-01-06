@@ -54,21 +54,29 @@ type Task struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at"`
+
+	// 自动化任务配置
+	WorkDir       string `json:"work_dir"`                              // 工作目录
+	CLIType       string `gorm:"default:claude" json:"cli_type"`        // CLI类型: claude, codex, gemini
+	InitialPrompt string `json:"initial_prompt"`                        // 初始提示/需求描述
+	AutoStart     bool   `gorm:"default:false" json:"auto_start"`       // 是否自动启动
+	AutoCreateDir bool   `gorm:"default:true" json:"auto_create_dir"`   // 是否自动创建目录
 }
 
 // TerminalSession 终端会话模型
 type TerminalSession struct {
-	ID        string     `gorm:"primaryKey" json:"id"`
-	Title     string     `json:"title"`
-	TaskID    *string    `gorm:"index" json:"task_id"`
-	Shell     string     `gorm:"default:bash" json:"shell"`
-	Status    string     `gorm:"default:running;index" json:"status"` // running, exited
-	PID       int        `json:"pid"`
-	RuleMode  string     `gorm:"default:none" json:"rule_mode"` // none, system, task, custom
-	RuleSetID *string    `gorm:"index" json:"rule_set_id"`      // 自定义规则集ID (rule_mode=custom时使用)
-	CreatedAt time.Time  `json:"created_at"`
-	ClosedAt  *time.Time `json:"closed_at"`
-	Task      *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
+	ID          string     `gorm:"primaryKey" json:"id"`
+	Title       string     `json:"title"`
+	TaskID      *string    `gorm:"index" json:"task_id"`
+	Shell       string     `gorm:"default:bash" json:"shell"`
+	Status      string     `gorm:"default:running;index" json:"status"` // running, exited, detached
+	PID         int        `json:"pid"`
+	TmuxSession string     `json:"tmux_session"`                        // tmux 会话名称
+	RuleMode    string     `gorm:"default:system" json:"rule_mode"`     // none, system, task, custom
+	RuleSetID   *string    `gorm:"index" json:"rule_set_id"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ClosedAt    *time.Time `json:"closed_at"`
+	Task        *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
 }
 
 // AISession AI会话模型
@@ -76,9 +84,10 @@ type AISession struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
 	TerminalID  string    `gorm:"not null;index" json:"terminal_id"`
 	TaskID      *string   `gorm:"index" json:"task_id"`
-	AIType      string    `gorm:"not null" json:"ai_type"`    // claude-code, codex, gemini
+	AIType      string    `gorm:"not null" json:"ai_type"`      // claude-code, codex, gemini
 	State       string    `gorm:"default:unknown" json:"state"` // unknown, waiting_input, working, waiting_approval
-	SessionFile string    `json:"session_file"`
+	SessionID   string    `json:"session_id"`                   // AI CLI 工具的会话ID（用于 --resume）
+	SessionFile string    `json:"session_file"`                 // 会话文件路径
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
