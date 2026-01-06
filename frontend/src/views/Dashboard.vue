@@ -11,6 +11,14 @@
       <Kanban />
     </div>
 
+    <!-- Agent Monitor Section -->
+    <div class="agent-monitor-section">
+      <n-space vertical size="large">
+        <AgentMonitor />
+        <AgentStats />
+      </n-space>
+    </div>
+
     <!-- Terminal Section -->
     <div class="terminal-section">
       <TerminalPanel />
@@ -79,6 +87,8 @@ import { useMessage } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import Kanban from '@/components/Kanban.vue'
+import AgentMonitor from '@/components/AgentMonitor.vue'
+import AgentStats from '@/components/AgentStats.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 
 const message = useMessage()
@@ -184,6 +194,11 @@ async function handleCreateTask() {
 
 .terminal-section {
   height: 350px;
+  border-top: 1px solid var(--border-color);
+}
+
+.agent-monitor-section {
+  padding: 12px 16px;
   border-top: 1px solid var(--border-color);
 }
 </style>

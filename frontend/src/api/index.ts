@@ -145,6 +145,17 @@ export interface RuleSetRequest {
   notify_on_approve?: boolean
 }
 
+// ===== Agent Config =====
+export type AIAgentType = 'claude-code' | 'codex' | 'gemini' | 'copilot' | 'cursor'
+
+export interface AgentConfig {
+  agent_type: AIAgentType
+  display_name: string
+  enabled: boolean
+  priority: number
+  detect_modes: string[]
+}
+
 // Automation API
 export const automationApi = {
   // 系统规则
@@ -218,7 +229,11 @@ export const automationApi = {
     terminal_id?: string
     limit?: number
     offset?: number
-  }) => api.get('/automation/approval-records', { params })
+  }) => api.get('/automation/approval-records', { params }),
+
+  // AI代理配置
+  getAgentConfigs: () => api.get('/automation/agent-configs'),
+  updateAgentConfigs: (items: AgentConfig[]) => api.put('/automation/agent-configs', { items })
 }
 
 export default api

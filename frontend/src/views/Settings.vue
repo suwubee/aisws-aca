@@ -142,6 +142,17 @@
         </div>
       </n-tab-pane>
 
+      <!-- AI 代理配置 -->
+      <n-tab-pane name="agents" tab="AI代理">
+        <div class="section">
+          <div class="section-header">
+            <span>AI代理配置</span>
+            <n-text depth="3">配置各AI代理的检测模式、优先级与启用状态</n-text>
+          </div>
+          <AgentConfig />
+        </div>
+      </n-tab-pane>
+
       <!-- AI Provider 配置 -->
       <n-tab-pane name="ai-providers" tab="AI Provider">
         <div class="section">
@@ -268,6 +279,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
 import { automationApi, authApi } from '@/api'
+import AgentConfig from '@/components/AgentConfig.vue'
 
 // Types
 interface AIProvider {
