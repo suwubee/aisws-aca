@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"time"
 
 	"github.com/ai-coding-assistant/config"
@@ -41,23 +42,46 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// 验证用户名密码（单用户模式）
-	if req.Username != ctrl.config.Username || req.Password != ctrl.config.Password {
+	// 验证用户名（单用户模式）
+	if req.Username != ctrl.config.Username {
 		return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
 	}
 
-	// 查找或创建用户
+	// 查找或创建用户（密码只存数据库）
 	var user model.User
 	result := model.DB.Where("username = ?", req.Username).First(&user)
 	if result.Error != nil {
-		// 创建用户
-		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
+		}
+
+		// 首次启动/初始化：仅允许使用配置中的默认密码创建用户
+		if req.Password != ctrl.config.Password {
+			return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
+		}
+
+		// 首次启动/初始化：写入配置中的默认密码到数据库（哈希）
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
+		}
+
 		user = model.User{
 			ID:           uuid.New().String(),
 			Username:     req.Username,
 			PasswordHash: string(hashedPassword),
 		}
-		model.DB.Create(&user)
+		if err := model.DB.Create(&user).Error; err != nil {
+			// 并发场景下可能已被创建，兜底重新读取
+			if err := model.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
+			}
+		}
+	}
+
+	// 验证密码（从数据库读取password_hash进行bcrypt校验）
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
 	}
 
 	// 生成JWT Token
@@ -129,19 +153,31 @@ func (ctrl *AuthController) ChangePassword(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "New password must be at least 6 characters"})
 	}
 
-	// 验证旧密码
-	if req.OldPassword != ctrl.config.Password {
+	userID := c.Locals("userID")
+	if userID == nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
+	}
+
+	// 验证旧密码（从数据库读取password_hash进行bcrypt校验）
+	var user model.User
+	result := model.DB.Where("id = ?", userID).First(&user)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)); err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": "Old password is incorrect"})
 	}
 
-	// 更新配置文件中的密码（这里简化处理，实际应该更新配置文件）
-	ctrl.config.Password = req.NewPassword
-
 	// 更新数据库中的密码哈希
-	userID := c.Locals("userID")
-	if userID != nil {
-		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
-		model.DB.Model(&model.User{}).Where("id = ?", userID).Update("password_hash", string(hashedPassword))
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+	if err := model.DB.Model(&model.User{}).Where("id = ?", userID).Update("password_hash", string(hashedPassword)).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update password"})
 	}
 
 	return c.JSON(fiber.Map{"message": "Password changed successfully"})

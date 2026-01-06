@@ -112,11 +112,20 @@ const priorityType = computed(() => {
 })
 
 const aiStatus = computed(() => {
-  // TODO: 从关联的终端获取AI状态
+  // 从关联的终端获取AI状态
+  const terminal = relatedTerminals.value.find(t => t.metadata?.ai_assistant?.detected)
+  if (terminal?.metadata?.ai_assistant) {
+    return terminal.metadata.ai_assistant.state
+  }
   return null
 })
 
 const aiStatusType = computed(() => {
+  const status = aiStatus.value
+  if (status === 'idle') return 'default'
+  if (status === 'thinking') return 'warning'
+  if (status === 'executing') return 'info'
+  if (status === 'waiting_approval') return 'error'
   return 'success'
 })
 

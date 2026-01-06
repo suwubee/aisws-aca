@@ -38,16 +38,24 @@
         </div>
       </div>
     </div>
+
+    <TaskEditModal
+      v-if="editingTask"
+      v-model:show="showEditModal"
+      :task="editingTask"
+      @saved="handleTaskSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { useTaskStore, type Task } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import TaskCard from './TaskCard.vue'
+import TaskEditModal from './TaskEditModal.vue'
 
 const message = useMessage()
 const router = useRouter()
@@ -61,6 +69,14 @@ const columns = [
 ]
 
 const draggedTask = ref<Task | null>(null)
+const showEditModal = ref(false)
+const editingTask = ref<Task | null>(null)
+
+watch(showEditModal, (show) => {
+  if (!show) {
+    editingTask.value = null
+  }
+})
 
 function getTasksByStatus(status: string) {
   return taskStore.tasksByStatus[status as keyof typeof taskStore.tasksByStatus] || []
@@ -94,8 +110,12 @@ async function handleDrop(event: DragEvent, status: string) {
 }
 
 function handleEditTask(task: Task) {
-  // TODO: 打开编辑模态框
-  console.log('Edit task:', task)
+  editingTask.value = task
+  showEditModal.value = true
+}
+
+function handleTaskSaved() {
+  showEditModal.value = false
 }
 
 async function handleDeleteTask(task: Task) {
