@@ -318,6 +318,55 @@ Sprint 6
 ### 目标
 构建统一的基础设施层，为后续扩展功能提供公共服务
 
+> 参考: codex-sprint.md Sprint 0 平台加固
+
+### 7.0 平台加固 (Sprint 0 前置条件)
+
+| ID | 任务 | 技术栈 | 实施细节 |
+|----|------|--------|----------|
+| S7-0-1 | Auth持久化 | bcrypt + GORM | 密码存DB，不再依赖内存配置 |
+| S7-0-2 | WebSocket鉴权 | JWT | WS连接必须验证token |
+| S7-0-3 | API契约定义 | OpenAPI/TypeScript | 固化REST/WS schema |
+| S7-0-4 | 开发环境锁定 | package.json | 固定Node/TS版本 |
+
+**实施路径**:
+- **S7-0-1**: 登录从DB读取password_hash校验，改密仅更新DB
+- **S7-0-2**: `/api/terminal/ws` 纳入token校验，避免绕过认证
+- **S7-0-3**: 前端 `src/api/types.ts` 集中定义请求/响应类型
+
+### 7.1a 统一凭据管理 (Secrets)
+
+> 来源: codex-sprint.md - 统一 Secrets 模块
+
+| ID | 任务 | 技术栈 | 实施细节 |
+|----|------|--------|----------|
+| S7-1a-1 | Secrets数据模型 | GORM | 统一存储SSH密钥/密码/API Key |
+| S7-1a-2 | AES-GCM加密 | crypto/aes | 主密钥环境变量，加密存储 |
+| S7-1a-3 | Secrets API | REST | CRUD (不返回明文) |
+| S7-1a-4 | 密钥轮换 | Go | 支持主密钥更新 |
+
+**数据模型**:
+```go
+// 统一凭据
+type Secret struct {
+    ID         string    `gorm:"primaryKey" json:"id"`
+    Name       string    `json:"name"`
+    Type       string    `json:"type"` // ssh_password, ssh_key, api_key
+    Ciphertext string    `json:"-"`    // AES-GCM加密后base64
+    Meta       string    `json:"meta"` // JSON: 指纹/用途等
+    CreatedAt  time.Time `json:"created_at"`
+    UpdatedAt  time.Time `json:"updated_at"`
+}
+```
+
+**API设计**:
+```
+GET    /api/secrets          # 列表(仅meta，不返回明文)
+POST   /api/secrets          # 创建
+PUT    /api/secrets/:id      # 更新
+DELETE /api/secrets/:id      # 删除
+```
+
 ### 7.1 统一认证系统 v2 (Auth v2)
 
 | ID | 任务 | 技术栈 | 实施细节 |
@@ -643,6 +692,149 @@ type RoutingRule struct {
 
 ---
 
+## Sprint 12: Runbook运维手册 (依赖: Sprint 9)
+
+> 来源: codex-sprint.md Sprint 3
+
+### 目标
+实现参数化运维脚本模板和定时调度
+
+| ID | 任务 | 技术栈 | 实施细节 |
+|----|------|--------|----------|
+| S12-1 | Runbook模型 | GORM | 模板参数、目标选择 |
+| S12-2 | 参数化引擎 | text/template | 变量注入到steps |
+| S12-3 | 定时调度器 | robfig/cron | cron表达式支持 |
+| S12-4 | 并发控制 | Go Semaphore | 按标签限制并发 |
+
+**数据模型**:
+```go
+type Runbook struct {
+    ID          string `gorm:"primaryKey" json:"id"`
+    Name        string `json:"name"`
+    Description string `json:"description"`
+    WorkflowID  string `json:"workflow_id"` // 基于的工作流
+    Parameters  string `json:"parameters"`  // JSON: 参数定义
+    TargetTags  string `json:"target_tags"` // 目标服务器标签
+}
+
+type Schedule struct {
+    ID         string     `gorm:"primaryKey" json:"id"`
+    RunbookID  string     `json:"runbook_id"`
+    CronExpr   string     `json:"cron_expr"`
+    Enabled    bool       `json:"enabled"`
+    NextRunAt  *time.Time `json:"next_run_at"`
+    LastRunAt  *time.Time `json:"last_run_at"`
+}
+```
+
+---
+
+## Sprint 13: Project/Workspace (依赖: Sprint 8)
+
+> 来源: codex-sprint.md Sprint 4
+
+### 目标
+统一描述"在哪做事"，支持复杂项目开发
+
+| ID | 任务 | 技术栈 | 实施细节 |
+|----|------|--------|----------|
+| S13-1 | Project模型 | GORM | 本地/远程/Git仓库 |
+| S13-2 | CLI Profiles | GORM | CLI配置模板 |
+| S13-3 | 项目模板库 | JSON/YAML | 内置常用模板 |
+| S13-4 | 项目仪表盘 | Vue3 | 项目概览页面 |
+
+**数据模型**:
+```go
+// 项目/工作区
+type Project struct {
+    ID          string  `gorm:"primaryKey" json:"id"`
+    Name        string  `json:"name"`
+    Description string  `json:"description"`
+    Type        string  `json:"type"` // local, remote, git
+    LocalPath   string  `json:"local_path"`
+    TargetID    *string `json:"target_id"`
+    RemotePath  string  `json:"remote_path"`
+    GitRepo     string  `json:"git_repo"`
+    GitBranch   string  `json:"git_branch"`
+    EnvVars     string  `json:"env_vars"` // JSON
+}
+
+// CLI配置模板
+type CLIProfile struct {
+    ID             string `gorm:"primaryKey" json:"id"`
+    Name           string `json:"name"`
+    Type           string `json:"type"` // claude, codex, gemini, custom
+    Command        string `json:"command"`
+    DefaultArgs    string `json:"default_args"`
+    ResumeStrategy string `json:"resume_strategy"`
+    DetectPatterns string `json:"detect_patterns"` // JSON
+}
+```
+
+---
+
+## 第三部分：未来功能扩展 (Sprint 14+)
+
+### Sprint 14: 插件系统
+
+| ID | 任务 | 描述 |
+|----|------|------|
+| S14-1 | 插件接口定义 | Go Plugin / WASM |
+| S14-2 | 插件生命周期 | 加载/卸载/热更新 |
+| S14-3 | 插件市场UI | 浏览/安装/管理 |
+
+**扩展点**:
+- 自定义AI检测器
+- 自定义审批规则
+- 自定义工作流节点
+- 自定义监控指标
+
+### Sprint 15: 团队协作
+
+| ID | 任务 | 描述 |
+|----|------|------|
+| S15-1 | 多用户系统 | 用户注册/邀请/管理 |
+| S15-2 | 团队/组织 | 团队创建/成员管理 |
+| S15-3 | 资源共享 | 项目/工作流/模板共享 |
+| S15-4 | 实时协作 | 多人同时查看终端 |
+
+### Sprint 16: 外部集成
+
+| ID | 任务 | 描述 |
+|----|------|------|
+| S16-1 | Git集成 | GitHub/GitLab/Gitee |
+| S16-2 | CI/CD集成 | Jenkins/GitHub Actions |
+| S16-3 | 消息通知 | Slack/钉钉/飞书 |
+| S16-4 | 项目管理 | Jira/Linear/Notion |
+
+### Sprint 17: 审计与合规
+
+| ID | 任务 | 描述 |
+|----|------|------|
+| S17-1 | 操作审计日志 | 全量操作记录 |
+| S17-2 | 会话回放 | 终端操作回放 |
+| S17-3 | 合规报告 | 自动生成报告 |
+| S17-4 | 数据保留策略 | 自动清理/归档 |
+
+### Sprint 18: 移动端支持
+
+| ID | 任务 | 描述 |
+|----|------|------|
+| S18-1 | 响应式UI | 移动端适配 |
+| S18-2 | PWA支持 | 离线访问/推送 |
+| S18-3 | 移动终端 | 触屏终端交互 |
+
+### Sprint 19: AI增强
+
+| ID | 任务 | 描述 |
+|----|------|------|
+| S19-1 | 智能任务分解 | AI自动拆分任务 |
+| S19-2 | 代码审查助手 | AI代码Review |
+| S19-3 | 故障预测 | 基于历史数据预测 |
+| S19-4 | 自然语言运维 | 用自然语言执行运维 |
+
+---
+
 ## 技术栈汇总
 
 ### 后端新增依赖
@@ -705,6 +897,13 @@ frontend/src/
 | v3.1.0 | Sprint 9 | 工作流引擎 | Sprint 7 |
 | v3.2.0 | Sprint 10 | Agent编排 | Sprint 7 |
 | v3.3.0 | Sprint 11 | DevOps监控 | Sprint 8 |
+| v3.4.0 | Sprint 12 | Runbook运维 | Sprint 9 |
+| v3.5.0 | Sprint 13 | Project/Workspace | Sprint 8 |
+| v4.0.0 | Sprint 14 | 插件系统 | Sprint 13 |
+| v4.1.0 | Sprint 15 | 团队协作 | Sprint 14 |
+| v4.2.0 | Sprint 16 | 外部集成 | Sprint 15 |
+| v4.3.0 | Sprint 17 | 审计合规 | Sprint 15 |
+| v5.0.0 | Sprint 18-19 | 移动端+AI增强 | Sprint 17 |
 
 ---
 
@@ -714,13 +913,13 @@ frontend/src/
 Sprint 1-6 (现有功能)
         │
         ▼
-┌───────────────────────────────────────┐
-│         Sprint 7: 共享基础设施         │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐  │
-│  │ Auth v2 │ │Terminal │ │EventBus │  │
-│  │         │ │   v2    │ │         │  │
-│  └────┬────┘ └────┬────┘ └────┬────┘  │
-└───────┼───────────┼───────────┼───────┘
+┌───────────────────────────────────────────┐
+│         Sprint 7: 共享基础设施             │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐      │
+│  │ Auth v2 │ │Terminal │ │EventBus │      │
+│  │ Secrets │ │   v2    │ │         │      │
+│  └────┬────┘ └────┬────┘ └────┬────┘      │
+└───────┼───────────┼───────────┼───────────┘
         │           │           │
         └─────┬─────┴─────┬─────┘
               │           │
@@ -730,12 +929,22 @@ Sprint 1-6 (现有功能)
 │Sprint │ │Sprint │ │Sprint │ │Sprint │
 │   8   │ │   9   │ │  10   │ │  11   │
 │ SSH   │ │工作流 │ │Agent  │ │DevOps │
-│ 管理  │ │ 引擎  │ │ 编排  │ │ 监控  │
-└───┬───┘ └───────┘ └───────┘ └───┬───┘
-    │                             │
-    └──────────────┬──────────────┘
-                   ▼
-           (Sprint 8完成后)
+└───┬───┘ └───┬───┘ └───────┘ └───────┘
+    │         │
+    ▼         ▼
+┌───────┐ ┌───────┐
+│Sprint │ │Sprint │
+│  13   │ │  12   │
+│Project│ │Runbook│
+└───┬───┘ └───────┘
+    │
+    ▼
+┌───────────────────────────────────────────┐
+│         Sprint 14-19: 未来扩展             │
+│  插件系统 → 团队协作 → 外部集成 → 审计     │
+│                    ↓                       │
+│            移动端 + AI增强                 │
+└───────────────────────────────────────────┘
 ```
 
 ---
