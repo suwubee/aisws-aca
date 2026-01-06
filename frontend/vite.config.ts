@@ -10,11 +10,11 @@ export default defineConfig({
     }
   },
   server: {
-    port: 34001,
+    port: Number(process.env.ACA_FRONTEND_PORT || '34001'),
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:34007',
+        target: `http://${process.env.ACA_BACKEND_HOST || 'localhost'}:${process.env.ACA_BACKEND_PORT || '34007'}`,
         changeOrigin: true,
         ws: true
       }

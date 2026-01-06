@@ -9,6 +9,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 type AuthController struct {
@@ -148,20 +149,29 @@ func (ctrl *AuthController) ChangePassword(c *fiber.Ctx) error {
 
 // ResetData 重置所有数据
 func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
-	// 删除所有日志
-	model.DB.Exec("DELETE FROM logs")
-	// 删除所有终端会话
-	model.DB.Exec("DELETE FROM terminal_sessions")
-	// 删除所有任务
-	model.DB.Exec("DELETE FROM tasks")
-	// 删除所有AI会话
-	model.DB.Exec("DELETE FROM ai_sessions")
-	// 删除所有审批记录
-	model.DB.Exec("DELETE FROM approval_records")
-	// 删除所有消息
-	model.DB.Exec("DELETE FROM messages")
-	// 删除所有终端自动化配置
-	model.DB.Exec("DELETE FROM terminal_automations")
+	// 按依赖顺序清理（子表 -> 父表），并兼容旧库/旧表缺失的情况
+	tables := []string{
+		"logs",
+		"approval_records",
+		"ai_sessions",
+		"messages",
+		"terminal_sessions",
+		"tasks",
+	}
+
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		for _, table := range tables {
+			if !tx.Migrator().HasTable(table) {
+				continue
+			}
+			if err := tx.Exec("DELETE FROM " + table).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to reset data"})
+	}
 
 	return c.JSON(fiber.Map{"message": "All data has been reset"})
 }

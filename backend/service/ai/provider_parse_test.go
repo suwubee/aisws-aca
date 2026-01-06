@@ -9,8 +9,8 @@ func TestParseDecisionFromResponse_JSON(t *testing.T) {
 	if decision.Action != "approve" {
 		t.Fatalf("expected action approve, got %q", decision.Action)
 	}
-	if decision.Input != "yes\n" {
-		t.Fatalf("expected input yes\\n, got %q", decision.Input)
+	if decision.Input != "yes\r" {
+		t.Fatalf("expected input yes\\r, got %q", decision.Input)
 	}
 	if decision.Confidence != 0.92 {
 		t.Fatalf("expected confidence 0.92, got %v", decision.Confidence)
