@@ -80,6 +80,24 @@ export const taskApi = {
   start: (id: string) => api.post(`/tasks/${id}/start`)
 }
 
+export interface TaskComment {
+  id: string
+  task_id?: string
+  content: string
+  author?: string
+  created_at?: string
+  updated_at?: string
+}
+
+// Comment API
+export const commentApi = {
+  listByTask: (taskId: string) => api.get(`/tasks/${taskId}/comments`),
+  createForTask: (taskId: string, data: { content: string; author: string }) =>
+    api.post(`/tasks/${taskId}/comments`, data),
+  update: (commentId: string, data: { content: string }) => api.put(`/comments/${commentId}`, data),
+  delete: (commentId: string) => api.delete(`/comments/${commentId}`)
+}
+
 // Terminal API
 export const terminalApi = {
   list: (taskId?: string) =>
@@ -104,7 +122,13 @@ export const logApi = {
   list: (params?: { terminal_id?: string; type?: string; keyword?: string; limit?: number; offset?: number }) =>
     api.get('/logs', { params }),
   listSessions: () => api.get('/logs/sessions'),
-  delete: (id: string) => api.delete(`/logs/${id}`)
+  delete: (id: string) => api.delete(`/logs/${id}`),
+  exportLogs: (params: {
+    format: 'json' | 'csv'
+    start_date: string
+    end_date: string
+    terminal_id?: string
+  }) => api.get('/logs/export', { params, responseType: 'blob' })
 }
 
 // RuleSet 规则集类型
@@ -145,6 +169,13 @@ export interface RuleSetRequest {
   notify_on_approve?: boolean
 }
 
+export interface RuleSetImportResult {
+  message: string
+  created: number
+  updated: number
+  total: number
+}
+
 // ===== Agent Config =====
 export type AIAgentType = 'claude-code' | 'codex' | 'gemini' | 'copilot' | 'cursor'
 
@@ -169,6 +200,11 @@ export const automationApi = {
     api.post('/automation/rulesets', data, { params: { type } }),
   updateRuleSet: (id: string, data: RuleSetRequest) => api.put(`/automation/rulesets/${id}`, data),
   deleteRuleSet: (id: string) => api.delete(`/automation/rulesets/${id}`),
+
+  // 规则集导入/导出
+  exportRuleSets: () => api.get('/rule-sets/export', { responseType: 'blob' }),
+  importRuleSets: (data: { items?: RuleSet[]; rule_sets?: RuleSet[] } | RuleSet[]) =>
+    api.post('/rule-sets/import', data),
 
   // 终端规则模式
   getTerminalRuleMode: (terminalId: string) =>

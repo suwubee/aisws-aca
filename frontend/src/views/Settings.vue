@@ -142,6 +142,28 @@
         </div>
       </n-tab-pane>
 
+      <!-- 规则集导入导出 -->
+      <n-tab-pane name="rule-import-export" tab="规则导入/导出">
+        <div class="section">
+          <div class="section-header">
+            <span>规则集导入 / 导出</span>
+            <n-text depth="3">用于备份或迁移规则集配置</n-text>
+          </div>
+          <RuleImportExport />
+        </div>
+      </n-tab-pane>
+
+      <!-- 日志导出 -->
+      <n-tab-pane name="log-export" tab="日志导出">
+        <div class="section">
+          <div class="section-header">
+            <span>日志导出</span>
+            <n-text depth="3">按时间范围导出日志（JSON / CSV），可选按终端ID筛选</n-text>
+          </div>
+          <LogExport />
+        </div>
+      </n-tab-pane>
+
       <!-- AI 代理配置 -->
       <n-tab-pane name="agents" tab="AI代理">
         <div class="section">
@@ -280,6 +302,8 @@ import {
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
 import { automationApi, authApi } from '@/api'
 import AgentConfig from '@/components/AgentConfig.vue'
+import LogExport from '@/components/LogExport.vue'
+import RuleImportExport from '@/components/RuleImportExport.vue'
 
 // Types
 interface AIProvider {

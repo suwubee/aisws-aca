@@ -111,9 +111,17 @@ func main() {
 	taskController := api.NewTaskController(terminalManager)
 	taskController.RegisterRoutes(apiGroup)
 
+	// 评论API
+	commentController := api.NewCommentController()
+	commentController.RegisterRoutes(apiGroup)
+
 	// 自动化API
 	automationController := api.NewAutomationController(terminalManager)
 	automationController.RegisterRoutes(apiGroup)
+
+	// 日志导出API
+	logExportController := api.NewLogExportController()
+	logExportController.RegisterRoutes(apiGroup)
 
 	// 静态文件服务
 	staticFS, err := fs.Sub(staticFiles, "static")

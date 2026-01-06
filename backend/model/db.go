@@ -23,6 +23,7 @@ func InitDB(dsn string) error {
 	return DB.AutoMigrate(
 		&User{},
 		&Task{},
+		&Comment{},
 		&TerminalSession{},
 		&AISession{},
 		&ApprovalRecord{},
@@ -56,11 +57,11 @@ type Task struct {
 	CompletedAt *time.Time `json:"completed_at"`
 
 	// 自动化任务配置
-	WorkDir       string `json:"work_dir"`                              // 工作目录
-	CLIType       string `gorm:"default:claude" json:"cli_type"`        // CLI类型: claude, codex, gemini
-	InitialPrompt string `json:"initial_prompt"`                        // 初始提示/需求描述
-	AutoStart     bool   `gorm:"default:false" json:"auto_start"`       // 是否自动启动
-	AutoCreateDir bool   `gorm:"default:true" json:"auto_create_dir"`   // 是否自动创建目录
+	WorkDir       string `json:"work_dir"`                            // 工作目录
+	CLIType       string `gorm:"default:claude" json:"cli_type"`      // CLI类型: claude, codex, gemini
+	InitialPrompt string `json:"initial_prompt"`                      // 初始提示/需求描述
+	AutoStart     bool   `gorm:"default:false" json:"auto_start"`     // 是否自动启动
+	AutoCreateDir bool   `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
 }
 
 // TerminalSession 终端会话模型
@@ -71,8 +72,8 @@ type TerminalSession struct {
 	Shell       string     `gorm:"default:bash" json:"shell"`
 	Status      string     `gorm:"default:running;index" json:"status"` // running, exited, detached
 	PID         int        `json:"pid"`
-	TmuxSession string     `json:"tmux_session"`                        // tmux 会话名称
-	RuleMode    string     `gorm:"default:system" json:"rule_mode"`     // none, system, task, custom
+	TmuxSession string     `json:"tmux_session"`                    // tmux 会话名称
+	RuleMode    string     `gorm:"default:system" json:"rule_mode"` // none, system, task, custom
 	RuleSetID   *string    `gorm:"index" json:"rule_set_id"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ClosedAt    *time.Time `json:"closed_at"`
@@ -135,7 +136,7 @@ type AIProviderConfig struct {
 // RuleSet 规则集模型 - 可被系统、任务、终端复用
 type RuleSet struct {
 	ID   string `gorm:"primaryKey" json:"id"`
-	Name string `gorm:"not null" json:"name"` // 规则集名称
+	Name string `gorm:"not null" json:"name"`       // 规则集名称
 	Type string `gorm:"not null;index" json:"type"` // system, task, terminal
 
 	// 审批模式: manual(手动), auto_yes(全自动yes), smart(AI辅助)
@@ -171,7 +172,7 @@ type Message struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
 	TerminalID  *string    `gorm:"index" json:"terminal_id"`
 	TaskID      *string    `gorm:"index" json:"task_id"`
-	Type        string     `gorm:"not null;index" json:"type"`         // approval_needed, blocked, info, warning, error
+	Type        string     `gorm:"not null;index" json:"type"` // approval_needed, blocked, info, warning, error
 	Title       string     `gorm:"not null" json:"title"`
 	Content     string     `json:"content"`
 	Context     string     `json:"context"`                            // 相关上下文（终端输出等）

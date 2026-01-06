@@ -755,6 +755,10 @@ func toJSONArray(arr []string) string {
 
 // RegisterRoutes 注册路由
 func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
+	// 规则集导入/导出
+	app.Get("/rule-sets/export", ctrl.ExportRuleSets)
+	app.Post("/rule-sets/import", ctrl.ImportRuleSets)
+
 	automation := app.Group("/automation")
 
 	// 系统规则
