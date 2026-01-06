@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### v1.4.0 - Sprint 1-6 完成 (2026-01-07)
+
+#### Sprint 1: Bug修复 & 基础完善
+- **S1-1**: 修复ResetData引用不存在的表 (HasTable检查)
+- **S1-2**: 实现任务编辑模态框 (TaskEditModal.vue)
+- **S1-3**: 实现任务卡片AI状态显示 (从terminal.metadata.ai_assistant获取)
+- **S1-4**: 修复密码修改持久化问题 (改用数据库存储)
+
+#### Sprint 2: 审批UI完善
+- **S2-1**: 审批提示弹窗组件 (ApprovalPrompt.vue)
+- **S2-2/S2-3**: 快捷操作按钮 + 手动输入框
+- **S2-4**: WebSocket审批事件监听 (approval.ts store)
+- **S2-5**: 审批消息中心组件 (ApprovalCenter.vue)
+
+#### Sprint 3: AI集成增强
+- **S3-1**: AI决策结果展示组件 (AIDecisionDisplay.vue)
+- **S3-2**: 审批置信度可视化 (进度条+颜色分级)
+- **S3-3**: AI决策日志面板 (AIDecisionLog.vue)
+- **S3-4**: 智能建议展示 (SmartSuggestion.vue)
+
+#### Sprint 4: 多代理支持
+- **S4-3**: 多代理状态监控面板 (AgentMonitor.vue)
+- **S4-4**: 代理配置管理界面 (AgentConfig.vue)
+- **S4-5**: 代理性能统计 (AgentStats.vue)
+
+#### Sprint 5: 高级功能
+- **S5-1/S5-2**: 任务评论API + 前端组件 (TaskComments.vue)
+- **S5-3/S5-4**: 日志导出API + 前端功能 (LogExport.vue)
+- **S5-5**: 规则导入导出 (RuleImportExport.vue)
+
+#### Sprint 6: 部署优化
+- **S6-1**: Docker镜像优化 (多阶段构建Dockerfile)
+- **S6-2**: docker-compose配置
+- **S6-3**: 多用户数据模型设计 (User扩展Email/Role/Status)
+- **S6-4**: 多用户认证改造 (RequireRole中间件)
+- **S6-5**: 用户管理界面 (UserManagement.vue)
+
+---
+
 ### v1.1.0 - 规则系统重构 (2026-01-05)
 
 #### Bug Fixes
