@@ -27,6 +27,10 @@
         <n-button quaternary size="small" @click="emit('close')">关闭</n-button>
       </template>
 
+      <div v-if="aiDecision" class="ai-decision-section">
+        <AIDecisionDisplay :decision="aiDecision" />
+      </div>
+
       <pre class="prompt-content">{{ normalizedPrompt }}</pre>
 
       <div class="actions">
@@ -66,12 +70,20 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import AIDecisionDisplay from './AIDecisionDisplay.vue'
 
 const props = defineProps<{
   show: boolean
   terminalId: string
   promptContent: string
   promptType: string
+  aiDecision?: {
+    action: string
+    confidence: number
+    reasoning: string
+    rule_matched: string
+    ai_decision: boolean
+  }
 }>()
 
 const emit = defineEmits<{
@@ -183,5 +195,8 @@ watch(
 .manual {
   margin-top: 12px;
 }
-</style>
 
+.ai-decision-section {
+  margin-bottom: 12px;
+}
+</style>
