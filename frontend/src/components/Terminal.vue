@@ -8,6 +8,7 @@ import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
 import 'xterm/css/xterm.css'
+import { useApprovalStore } from '@/stores/approval'
 
 const props = defineProps<{
   sessionId: string
@@ -16,6 +17,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'metadata-update', metadata: any): void
 }>()
+
+const approvalStore = useApprovalStore()
 
 const terminalRef = ref<HTMLElement>()
 let terminal: Terminal | null = null
@@ -143,6 +146,20 @@ function handleMessage(msg: any) {
     case 'metadata':
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
+      }
+      break
+
+    case 'approval_needed':
+      if (msg.terminal_id) {
+        approvalStore.addPendingApproval({
+          id: msg.terminal_id,
+          terminalId: msg.terminal_id,
+          promptContent: msg.prompt_content || '',
+          promptType: msg.prompt_type || '',
+          receivedAt: Date.now()
+        })
+      } else {
+        console.warn('Invalid approval_needed message:', msg)
       }
       break
 
