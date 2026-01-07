@@ -933,7 +933,12 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			i++
 			continue
 		case '\r':
-			// 回车：回到行首（不换行）
+			// 回车：回到行首
+			// 检查下一个字符是否是 \n（\r\n 是正常换行）
+			if i+1 < len(buf) && buf[i+1] != '\n' {
+				// 不是 \r\n，说明是进度条等动态输出，清空当前行避免叠加
+				s.outputLineBuf = s.outputLineBuf[:0]
+			}
 			s.outputCursor = 0
 			i++
 			continue
