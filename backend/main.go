@@ -128,6 +128,10 @@ func main() {
 	secretController := api.NewSecretController(cfg.Auth.JWTSecret)
 	secretController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
 
+	// SSH服务器管理API（仅管理员）
+	sshServerController := api.NewSSHServerController(cfg.Auth.JWTSecret, terminalManager)
+	sshServerController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+
 	// 静态文件服务
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err == nil {

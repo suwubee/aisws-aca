@@ -29,6 +29,11 @@ const routes = [
         component: () => import('@/views/LogManagement.vue')
       },
       {
+        path: 'servers',
+        name: 'Servers',
+        component: () => import('@/views/Servers.vue')
+      },
+      {
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/Settings.vue')

@@ -1,0 +1,615 @@
+<template>
+  <div class="servers-page">
+    <div class="page-header">
+      <h2>服务器管理</h2>
+      <p class="page-desc">管理 SSH 服务器配置，支持连接、测试与分组</p>
+    </div>
+
+    <div class="content-area">
+      <n-card size="small">
+        <div class="toolbar">
+          <n-space justify="space-between" align="center">
+            <n-space size="small" align="center">
+              <n-input
+                v-model:value="keyword"
+                size="small"
+                clearable
+                placeholder="搜索名称 / 主机 / 用户名..."
+                style="width: 240px"
+              />
+              <n-select
+                v-model:value="statusFilter"
+                size="small"
+                :options="statusOptions"
+                style="width: 120px"
+              />
+              <n-select
+                v-model:value="groupFilter"
+                size="small"
+                :options="groupFilterOptions"
+                style="width: 180px"
+              />
+            </n-space>
+
+            <n-space size="small">
+              <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
+              <n-button size="small" @click="showBatchExecute = true">批量执行</n-button>
+              <n-button size="small" @click="openCreateGroup">新建分组</n-button>
+              <n-button size="small" type="primary" @click="openCreate">添加服务器</n-button>
+            </n-space>
+          </n-space>
+        </div>
+
+        <n-data-table
+          :columns="columns"
+          :data="filteredServers"
+          :loading="loading"
+          :row-key="(row: SSHServer) => row.id"
+          size="small"
+          striped
+        />
+      </n-card>
+    </div>
+
+    <ServerForm
+      v-model:show="showServerForm"
+      :mode="serverFormMode"
+      :server="editingServer"
+      :groups="groups"
+      @saved="handleServerSaved"
+    />
+
+    <BatchExecute
+      v-model:show="showBatchExecute"
+      :servers="servers"
+    />
+
+    <n-modal
+      v-model:show="showGroupModal"
+      preset="dialog"
+      title="新建分组"
+      positive-text="创建"
+      negative-text="取消"
+      style="width: 520px"
+      @positive-click="createGroup"
+    >
+      <n-form
+        ref="groupFormRef"
+        :model="groupForm"
+        :rules="groupRules"
+        label-placement="left"
+        label-width="90"
+      >
+        <n-form-item label="名称" path="name">
+          <n-input v-model:value="groupForm.name" placeholder="例如: 生产环境 / 测试环境" />
+        </n-form-item>
+        <n-form-item label="描述" path="description">
+          <n-input v-model:value="groupForm.description" placeholder="可选" />
+        </n-form-item>
+      </n-form>
+    </n-modal>
+
+    <!-- SSH Terminal Window -->
+    <n-modal
+      v-model:show="showSshTerminal"
+      preset="card"
+      :title="sshTerminalTitle"
+      style="width: min(980px, calc(100vw - 32px)); position: fixed; right: 16px; bottom: 16px; margin: 0"
+      :bordered="false"
+      :show-mask="false"
+      :block-scroll="false"
+      :mask-closable="false"
+      @close="closeAllSshTerminals"
+    >
+      <div class="ssh-terminal-window">
+        <div class="ssh-terminal-tabs">
+          <button
+            v-for="tab in sshTerminals"
+            :key="tab.key"
+            class="ssh-terminal-tab"
+            :class="{ active: tab.key === activeSshKey }"
+            @click="setActiveSshTerminal(tab.key)"
+          >
+            <span class="status-dot" :class="getSshStatusDotClass(tab.status)"></span>
+            <span class="tab-title">{{ tab.title }}</span>
+            <span class="close-btn" @click.stop="closeSshTerminal(tab.key)">×</span>
+          </button>
+        </div>
+
+        <div class="ssh-terminal-content">
+          <div
+            v-for="tab in sshTerminals"
+            :key="tab.key"
+            v-show="tab.key === activeSshKey"
+            class="ssh-terminal-wrapper"
+          >
+            <SSHTerminal
+              :server-id="tab.serverId"
+              @status-change="(s) => updateSshTerminalStatus(tab.key, s)"
+            />
+          </div>
+          <div v-if="sshTerminals.length === 0" class="empty-terminal">
+            <n-empty description="暂无SSH终端" />
+          </div>
+        </div>
+      </div>
+    </n-modal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, h, onMounted, reactive, ref } from 'vue'
+import {
+  NButton,
+  NDataTable,
+  NPopconfirm,
+  NSpace,
+  NTag,
+  useMessage
+} from 'naive-ui'
+import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
+import type { SSHServer, ServerGroup } from '@/api/server'
+import {
+  createServerGroup,
+  deleteServer,
+  getServerGroups,
+  getServers,
+  testConnection
+} from '@/api/server'
+import BatchExecute from '@/components/BatchExecute.vue'
+import ServerForm from '@/components/ServerForm.vue'
+import SSHTerminal from '@/components/SSHTerminal.vue'
+
+const message = useMessage()
+
+const loading = ref(false)
+const servers = ref<SSHServer[]>([])
+const groups = ref<ServerGroup[]>([])
+
+const keyword = ref('')
+const statusFilter = ref<string | null>(null)
+const groupFilter = ref<string | null>(null)
+
+const showServerForm = ref(false)
+const serverFormMode = ref<'create' | 'edit'>('create')
+const editingServer = ref<SSHServer | null>(null)
+
+const showBatchExecute = ref(false)
+
+const testingId = ref<string | null>(null)
+const deletingId = ref<string | null>(null)
+
+const showGroupModal = ref(false)
+const groupFormRef = ref<FormInst | null>(null)
+const groupForm = reactive({
+  name: '',
+  description: ''
+})
+
+const groupRules: FormRules = {
+  name: { required: true, message: '请输入分组名称' }
+}
+
+const statusOptions = [
+  { label: '全部状态', value: null },
+  { label: '在线', value: 'online' },
+  { label: '离线', value: 'offline' },
+  { label: '未知', value: 'unknown' }
+]
+
+const groupFilterOptions = computed(() => ([
+  { label: '全部分组', value: null },
+  { label: '未分组', value: '__none__' },
+  ...groups.value.map(g => ({ label: g.name, value: g.id }))
+]))
+
+const groupNameMap = computed(() => {
+  const map = new Map<string, string>()
+  groups.value.forEach(g => map.set(g.id, g.name))
+  return map
+})
+
+const filteredServers = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+
+  return servers.value.filter((s) => {
+    if (statusFilter.value && String(s.last_status) !== statusFilter.value) return false
+
+    if (groupFilter.value === '__none__') {
+      if (s.group_id) return false
+    } else if (groupFilter.value) {
+      if (s.group_id !== groupFilter.value) return false
+    }
+
+    if (!kw) return true
+    const hay = `${s.name} ${s.host} ${s.username}`.toLowerCase()
+    return hay.includes(kw)
+  })
+})
+
+function statusTagType(status: string) {
+  if (status === 'online') return 'success'
+  if (status === 'offline') return 'error'
+  if (status === 'unknown') return 'warning'
+  return 'default'
+}
+
+function statusLabel(status: string) {
+  if (status === 'online') return '在线'
+  if (status === 'offline') return '离线'
+  if (status === 'unknown') return '未知'
+  return status || '未知'
+}
+
+const columns: DataTableColumns<SSHServer> = [
+  { title: '名称', key: 'name', width: 160, ellipsis: { tooltip: true } },
+  { title: '主机', key: 'host', ellipsis: { tooltip: true } },
+  { title: '端口', key: 'port', width: 80 },
+  {
+    title: '状态',
+    key: 'last_status',
+    width: 90,
+    render: (row) => h(NTag, {
+      size: 'small',
+      bordered: false,
+      type: statusTagType(String(row.last_status))
+    }, () => statusLabel(String(row.last_status)))
+  },
+  {
+    title: '分组',
+    key: 'group_id',
+    width: 160,
+    ellipsis: { tooltip: true },
+    render: (row) => groupNameMap.value.get(row.group_id || '') || '—'
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 280,
+    render: (row) => h(NSpace, { size: 'small' }, () => [
+      h(NButton, {
+        size: 'tiny',
+        type: 'primary',
+        quaternary: true,
+        onClick: () => openSshTerminal(row)
+      }, () => '连接'),
+      h(NButton, {
+        size: 'tiny',
+        quaternary: true,
+        loading: testingId.value === row.id,
+        onClick: () => test(row)
+      }, () => '测试连接'),
+      h(NButton, {
+        size: 'tiny',
+        quaternary: true,
+        onClick: () => openEdit(row)
+      }, () => '编辑'),
+      h(NPopconfirm, {
+        onPositiveClick: () => remove(row),
+        positiveText: '确定',
+        negativeText: '取消'
+      }, {
+        trigger: () => h(NButton, {
+          size: 'tiny',
+          type: 'error',
+          quaternary: true,
+          loading: deletingId.value === row.id
+        }, () => '删除'),
+        default: () => `确定删除服务器「${row.name}」吗？`
+      })
+    ])
+  }
+]
+
+type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
+
+interface SSHTerminalTab {
+  key: string
+  serverId: string
+  title: string
+  status: ConnectionStatus
+}
+
+const showSshTerminal = ref(false)
+const sshTerminals = ref<SSHTerminalTab[]>([])
+const activeSshKey = ref<string | null>(null)
+
+const sshTerminalTitle = computed(() => {
+  if (sshTerminals.value.length <= 1) return 'SSH 终端'
+  return `SSH 终端（${sshTerminals.value.length}）`
+})
+
+function getSshStatusDotClass(status: ConnectionStatus) {
+  if (status === 'connected') return 'connected'
+  if (status === 'disconnected') return 'disconnected'
+  return 'connecting'
+}
+
+function openSshTerminal(server: SSHServer) {
+  const existing = sshTerminals.value.find(t => t.serverId === server.id)
+  if (existing) {
+    activeSshKey.value = existing.key
+    showSshTerminal.value = true
+    return
+  }
+
+  const key = `${server.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  sshTerminals.value.push({
+    key,
+    serverId: server.id,
+    title: server.name || server.host,
+    status: 'connecting'
+  })
+  activeSshKey.value = key
+  showSshTerminal.value = true
+}
+
+function setActiveSshTerminal(key: string) {
+  activeSshKey.value = key
+}
+
+function updateSshTerminalStatus(key: string, status: ConnectionStatus) {
+  const tab = sshTerminals.value.find(t => t.key === key)
+  if (tab) tab.status = status
+}
+
+function closeSshTerminal(key: string) {
+  const idx = sshTerminals.value.findIndex(t => t.key === key)
+  if (idx < 0) return
+
+  sshTerminals.value.splice(idx, 1)
+
+  if (activeSshKey.value === key) {
+    activeSshKey.value =
+      sshTerminals.value[idx - 1]?.key ||
+      sshTerminals.value[idx]?.key ||
+      sshTerminals.value[0]?.key ||
+      null
+  }
+
+  if (sshTerminals.value.length === 0) {
+    closeAllSshTerminals()
+  }
+}
+
+function closeAllSshTerminals() {
+  showSshTerminal.value = false
+  sshTerminals.value = []
+  activeSshKey.value = null
+}
+
+async function fetchAll() {
+  loading.value = true
+  try {
+    const [serversResp, groupsResp] = await Promise.all([
+      getServers(),
+      getServerGroups()
+    ])
+    servers.value = serversResp.data.items || []
+    groups.value = groupsResp.data.items || []
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '加载服务器数据失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+function openCreate() {
+  serverFormMode.value = 'create'
+  editingServer.value = null
+  showServerForm.value = true
+}
+
+function openEdit(server: SSHServer) {
+  serverFormMode.value = 'edit'
+  editingServer.value = server
+  showServerForm.value = true
+}
+
+function handleServerSaved(server: SSHServer) {
+  const idx = servers.value.findIndex(s => s.id === server.id)
+  if (idx >= 0) {
+    servers.value[idx] = server
+  } else {
+    servers.value = [server, ...servers.value]
+  }
+}
+
+async function test(server: SSHServer) {
+  if (testingId.value) return
+  testingId.value = server.id
+  try {
+    await testConnection(server.id)
+    const idx = servers.value.findIndex(s => s.id === server.id)
+    if (idx >= 0) servers.value[idx] = { ...servers.value[idx], last_status: 'online' }
+    message.success('连接成功')
+  } catch (e: any) {
+    const idx = servers.value.findIndex(s => s.id === server.id)
+    if (idx >= 0) servers.value[idx] = { ...servers.value[idx], last_status: 'offline' }
+    message.error(e.response?.data?.error || '连接失败')
+  } finally {
+    testingId.value = null
+  }
+}
+
+async function remove(server: SSHServer) {
+  if (deletingId.value) return
+  deletingId.value = server.id
+  try {
+    await deleteServer(server.id)
+    servers.value = servers.value.filter(s => s.id !== server.id)
+    message.success('服务器已删除')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '删除服务器失败')
+  } finally {
+    deletingId.value = null
+  }
+}
+
+function openCreateGroup() {
+  groupForm.name = ''
+  groupForm.description = ''
+  showGroupModal.value = true
+}
+
+async function createGroup() {
+  try {
+    await groupFormRef.value?.validate()
+  } catch {
+    return false
+  }
+
+  try {
+    const { data } = await createServerGroup({
+      name: groupForm.name.trim(),
+      description: groupForm.description.trim()
+    })
+    groups.value = [...groups.value, data.item as ServerGroup].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    message.success('分组创建成功')
+    showGroupModal.value = false
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '创建分组失败')
+    return false
+  }
+}
+
+onMounted(() => {
+  fetchAll()
+})
+</script>
+
+<style scoped>
+.servers-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.page-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #333;
+  background: #252525;
+}
+
+.page-header h2 {
+  margin: 0 0 4px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.page-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #888;
+}
+
+.content-area {
+  flex: 1;
+  padding: 16px;
+}
+
+.toolbar {
+  margin-bottom: 12px;
+}
+
+.ssh-terminal-window {
+  height: min(640px, calc(100vh - 140px));
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  overflow: hidden;
+}
+
+.ssh-terminal-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px;
+  background: #2d2d2d;
+  overflow-x: auto;
+  align-items: center;
+  border-bottom: 1px solid #333;
+}
+
+.ssh-terminal-tab {
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: #888;
+  border: none;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ssh-terminal-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.ssh-terminal-tab.active {
+  background: #1e1e1e;
+  color: #fff;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.status-dot.connecting {
+  background: #f0a020;
+  animation: pulse 1.5s infinite;
+}
+
+.status-dot.connected {
+  background: #18a058;
+  animation: pulse 1.5s infinite;
+}
+
+.status-dot.disconnected {
+  background: #666;
+}
+
+.tab-title {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.close-btn {
+  margin-left: 4px;
+  opacity: 0.5;
+  font-size: 14px;
+}
+
+.close-btn:hover {
+  opacity: 1;
+  color: #f87171;
+}
+
+.ssh-terminal-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.ssh-terminal-wrapper {
+  height: 100%;
+}
+
+.empty-terminal {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+</style>

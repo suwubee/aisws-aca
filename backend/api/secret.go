@@ -1,17 +1,13 @@
 package api
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	secretservice "github.com/ai-coding-assistant/service/secret"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -22,14 +18,10 @@ type SecretController struct {
 }
 
 func NewSecretController(masterKey string) *SecretController {
-	trimmed := strings.TrimSpace(masterKey)
-	if trimmed == "" {
+	key := secretservice.DeriveKey(masterKey)
+	if len(key) == 0 {
 		return &SecretController{}
 	}
-
-	sum := sha256.Sum256([]byte(trimmed))
-	key := make([]byte, len(sum))
-	copy(key, sum[:])
 
 	return &SecretController{
 		encryptionKey: key,
@@ -57,68 +49,6 @@ func isValidSecretType(value string) bool {
 	default:
 		return false
 	}
-}
-
-func encryptAESGCMBase64(key []byte, plaintext string) (string, error) {
-	if len(key) == 0 {
-		return "", errors.New("missing encryption key")
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return "", err
-	}
-
-	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
-	combined := append(nonce, ciphertext...)
-
-	return base64.StdEncoding.EncodeToString(combined), nil
-}
-
-func decryptAESGCMBase64(key []byte, encoded string) (string, error) {
-	if len(key) == 0 {
-		return "", errors.New("missing encryption key")
-	}
-
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", err
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(raw) < nonceSize {
-		return "", errors.New("invalid ciphertext")
-	}
-
-	nonce := raw[:nonceSize]
-	ciphertext := raw[nonceSize:]
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
 }
 
 func validateMeta(meta string) bool {
@@ -168,7 +98,7 @@ func (ctrl *SecretController) CreateSecret(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid meta JSON"})
 	}
 
-	ciphertext, err := encryptAESGCMBase64(ctrl.encryptionKey, req.Plaintext)
+	ciphertext, err := secretservice.EncryptAESGCMBase64(ctrl.encryptionKey, req.Plaintext)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to encrypt secret"})
 	}
@@ -239,7 +169,7 @@ func (ctrl *SecretController) UpdateSecret(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": "Plaintext is required"})
 		}
 
-		ciphertext, err := encryptAESGCMBase64(ctrl.encryptionKey, *req.Plaintext)
+		ciphertext, err := secretservice.EncryptAESGCMBase64(ctrl.encryptionKey, *req.Plaintext)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to encrypt secret"})
 		}

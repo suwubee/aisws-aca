@@ -24,6 +24,16 @@ import (
 	"go.uber.org/zap"
 )
 
+var execCommand = exec.Command
+var ptyStart = pty.Start
+
+func applyTerminalEnv(cmd *exec.Cmd) {
+	if len(cmd.Env) == 0 {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+}
+
 // StreamEventType 流事件类型
 type StreamEventType string
 
@@ -85,6 +95,7 @@ type Session struct {
 	title       string
 	taskID      *string
 	shell       string
+	backend     sessionBackend
 	pty         *os.File
 	cmd         *exec.Cmd
 	status      string
@@ -128,6 +139,12 @@ type Session struct {
 	recentLogsMu     sync.Mutex
 	recentLogs       map[string]time.Time // 最近记录的日志内容 -> 时间
 	recentLogsWindow time.Duration        // 去重时间窗口
+}
+
+type sessionBackend interface {
+	Write(data []byte) error
+	Resize(cols, rows uint16) error
+	Close() error
 }
 
 // LogEntry 日志条目
@@ -204,36 +221,41 @@ func (s *Session) Start() error {
 	return s.StartWithTmux(false)
 }
 
+// RecoverFromTmux 从已有 tmux 会话恢复连接
+func (s *Session) RecoverFromTmux() error {
+	return s.StartWithTmux(true)
+}
+
 // StartWithTmux 使用 tmux 启动会话
 func (s *Session) StartWithTmux(attach bool) error {
 	var cmd *exec.Cmd
 
 	if attach {
 		// 重新连接到已有的 tmux 会话
-		cmd = exec.Command("tmux", "attach-session", "-t", s.id)
+		cmd = execCommand("tmux", "attach-session", "-t", s.id)
 	} else {
 		// 创建新的 tmux 会话
 		// 先检查会话是否已存在
-		checkCmd := exec.Command("tmux", "has-session", "-t", s.id)
+		checkCmd := execCommand("tmux", "has-session", "-t", s.id)
 		if checkCmd.Run() == nil {
 			// 会话已存在，直接 attach
-			cmd = exec.Command("tmux", "attach-session", "-t", s.id)
+			cmd = execCommand("tmux", "attach-session", "-t", s.id)
 		} else {
 			// 创建新会话
-			cmd = exec.Command("tmux", "new-session", "-d", "-s", s.id, "-x", "120", "-y", "30")
-			cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+			cmd = execCommand("tmux", "new-session", "-d", "-s", s.id, "-x", "120", "-y", "30")
+			applyTerminalEnv(cmd)
 			if err := cmd.Run(); err != nil {
 				utils.Warn("Failed to create tmux session, falling back to direct shell", zap.Error(err))
 				return s.startDirectShell()
 			}
 			// 然后 attach 到新创建的会话
-			cmd = exec.Command("tmux", "attach-session", "-t", s.id)
+			cmd = execCommand("tmux", "attach-session", "-t", s.id)
 		}
 	}
 
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	applyTerminalEnv(cmd)
 
-	ptmx, err := pty.Start(cmd)
+	ptmx, err := ptyStart(cmd)
 	if err != nil {
 		return err
 	}
@@ -260,10 +282,10 @@ func (s *Session) StartWithTmux(attach bool) error {
 
 // startDirectShell 直接启动 shell（fallback）
 func (s *Session) startDirectShell() error {
-	cmd := exec.Command(s.shell)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd := execCommand(s.shell)
+	applyTerminalEnv(cmd)
 
-	ptmx, err := pty.Start(cmd)
+	ptmx, err := ptyStart(cmd)
 	if err != nil {
 		return err
 	}
@@ -671,12 +693,23 @@ func (s *Session) broadcastMetadata() {
 
 // Write 写入数据到PTY
 func (s *Session) Write(data []byte) error {
+	// 记录输入日志
+	s.addInputLog(data)
+
+	if s.backend != nil {
+		err := s.backend.Write(data)
+		utils.Info("Terminal backend write result",
+			zap.String("terminal", s.id),
+			zap.Int("bytes", len(data)),
+			zap.String("data", string(data)),
+			zap.Error(err))
+		return err
+	}
+
 	if s.pty == nil {
 		utils.Warn("Write failed: pty is nil", zap.String("terminal", s.id))
 		return nil
 	}
-	// 记录输入日志
-	s.addInputLog(data)
 	n, err := s.pty.Write(data)
 	utils.Info("PTY Write result",
 		zap.String("terminal", s.id),
@@ -688,6 +721,9 @@ func (s *Session) Write(data []byte) error {
 
 // Resize 调整PTY大小
 func (s *Session) Resize(cols, rows uint16) error {
+	if s.backend != nil {
+		return s.backend.Resize(cols, rows)
+	}
 	if s.pty == nil {
 		return nil
 	}
@@ -712,6 +748,15 @@ func (s *Session) Resize(cols, rows uint16) error {
 
 // Close 关闭会话
 func (s *Session) Close() error {
+	if s.backend != nil {
+		err := s.backend.Close()
+		if s.pty != nil {
+			_ = s.pty.Close()
+			s.pty = nil
+		}
+		return err
+	}
+
 	if s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Signal(syscall.SIGTERM)
 		time.Sleep(100 * time.Millisecond)

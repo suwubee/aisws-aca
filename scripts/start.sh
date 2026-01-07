@@ -1,0 +1,200 @@
+#!/bin/bash
+# AI Coding Assistant - 启动脚本
+# 用法: ./scripts/start.sh [backend|frontend|all|restart|stop|status]
+
+set -e
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND_DIR="$PROJECT_ROOT/backend"
+FRONTEND_DIR="$PROJECT_ROOT/frontend"
+BACKEND_LOG="/tmp/aca-backend.log"
+FRONTEND_LOG="/tmp/aca-frontend.log"
+BACKEND_PID_FILE="/tmp/aca-backend.pid"
+FRONTEND_PID_FILE="/tmp/aca-frontend.pid"
+
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# 检查进程是否运行
+is_running() {
+    local pid_file=$1
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 启动后端
+start_backend() {
+    if is_running "$BACKEND_PID_FILE"; then
+        log_warn "Backend already running (PID: $(cat $BACKEND_PID_FILE))"
+        return 0
+    fi
+
+    log_info "Starting backend..."
+    cd "$BACKEND_DIR"
+    nohup ./ai-coding-assistant > "$BACKEND_LOG" 2>&1 &
+    echo $! > "$BACKEND_PID_FILE"
+    sleep 2
+
+    if is_running "$BACKEND_PID_FILE"; then
+        log_info "Backend started (PID: $(cat $BACKEND_PID_FILE))"
+    else
+        log_error "Failed to start backend. Check $BACKEND_LOG"
+        return 1
+    fi
+}
+
+# 启动前端
+start_frontend() {
+    if is_running "$FRONTEND_PID_FILE"; then
+        log_warn "Frontend already running (PID: $(cat $FRONTEND_PID_FILE))"
+        return 0
+    fi
+
+    log_info "Starting frontend..."
+    cd "$FRONTEND_DIR"
+    nohup npm run dev -- --host 0.0.0.0 > "$FRONTEND_LOG" 2>&1 &
+    echo $! > "$FRONTEND_PID_FILE"
+    sleep 3
+
+    if is_running "$FRONTEND_PID_FILE"; then
+        log_info "Frontend started (PID: $(cat $FRONTEND_PID_FILE))"
+        log_info "Frontend URL: http://localhost:34001/"
+    else
+        log_error "Failed to start frontend. Check $FRONTEND_LOG"
+        return 1
+    fi
+}
+
+# 停止后端
+stop_backend() {
+    if is_running "$BACKEND_PID_FILE"; then
+        local pid=$(cat "$BACKEND_PID_FILE")
+        log_info "Stopping backend (PID: $pid)..."
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+        kill -9 "$pid" 2>/dev/null || true
+        rm -f "$BACKEND_PID_FILE"
+        log_info "Backend stopped"
+    else
+        log_warn "Backend not running"
+        # 清理可能残留的进程
+        pkill -f "ai-coding-assistant" 2>/dev/null || true
+    fi
+}
+
+# 停止前端
+stop_frontend() {
+    if is_running "$FRONTEND_PID_FILE"; then
+        local pid=$(cat "$FRONTEND_PID_FILE")
+        log_info "Stopping frontend (PID: $pid)..."
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+        kill -9 "$pid" 2>/dev/null || true
+        rm -f "$FRONTEND_PID_FILE"
+        log_info "Frontend stopped"
+    else
+        log_warn "Frontend not running"
+        # 清理可能残留的进程
+        pkill -f "vite" 2>/dev/null || true
+    fi
+}
+
+# 显示状态
+show_status() {
+    echo "=== AI Coding Assistant Status ==="
+
+    if is_running "$BACKEND_PID_FILE"; then
+        echo -e "Backend:  ${GREEN}Running${NC} (PID: $(cat $BACKEND_PID_FILE))"
+    else
+        echo -e "Backend:  ${RED}Stopped${NC}"
+    fi
+
+    if is_running "$FRONTEND_PID_FILE"; then
+        echo -e "Frontend: ${GREEN}Running${NC} (PID: $(cat $FRONTEND_PID_FILE))"
+    else
+        echo -e "Frontend: ${RED}Stopped${NC}"
+    fi
+
+    # 检查端口
+    echo ""
+    echo "=== Port Status ==="
+    netstat -tlnp 2>/dev/null | grep -E "34001|3000" || echo "No services listening on expected ports"
+}
+
+# 显示日志
+show_logs() {
+    local service=$1
+    case $service in
+        backend)
+            tail -50 "$BACKEND_LOG"
+            ;;
+        frontend)
+            tail -50 "$FRONTEND_LOG"
+            ;;
+        *)
+            echo "=== Backend Logs (last 20 lines) ==="
+            tail -20 "$BACKEND_LOG" 2>/dev/null || echo "No backend logs"
+            echo ""
+            echo "=== Frontend Logs (last 20 lines) ==="
+            tail -20 "$FRONTEND_LOG" 2>/dev/null || echo "No frontend logs"
+            ;;
+    esac
+}
+
+# 主命令处理
+case "${1:-all}" in
+    backend)
+        start_backend
+        ;;
+    frontend)
+        start_frontend
+        ;;
+    all)
+        start_backend
+        start_frontend
+        show_status
+        ;;
+    restart)
+        stop_backend
+        stop_frontend
+        sleep 2
+        start_backend
+        start_frontend
+        show_status
+        ;;
+    stop)
+        stop_backend
+        stop_frontend
+        ;;
+    status)
+        show_status
+        ;;
+    logs)
+        show_logs "${2:-all}"
+        ;;
+    *)
+        echo "Usage: $0 {backend|frontend|all|restart|stop|status|logs [backend|frontend]}"
+        echo ""
+        echo "Commands:"
+        echo "  backend   - Start backend only"
+        echo "  frontend  - Start frontend only"
+        echo "  all       - Start both (default)"
+        echo "  restart   - Restart both services"
+        echo "  stop      - Stop both services"
+        echo "  status    - Show service status"
+        echo "  logs      - Show logs (optionally specify backend/frontend)"
+        exit 1
+        ;;
+esac

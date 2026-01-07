@@ -1,21 +1,32 @@
 package terminal
 
 import (
-	"os/exec"
+	"errors"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
+	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	cryptossh "golang.org/x/crypto/ssh"
 )
 
 // Manager 终端管理器
 type Manager struct {
 	sessions sync.Map
 	config   *config.TerminalConfig
+
+	sshMu      sync.Mutex
+	sshManager sshSessionProvider
+}
+
+type sshSessionProvider interface {
+	GetSession(serverID string) (*cryptossh.Session, error)
 }
 
 // NewManager 创建管理器
@@ -24,10 +35,61 @@ func NewManager(cfg *config.TerminalConfig) *Manager {
 		config: cfg,
 	}
 
+	// 恢复重启前仍标记为 running 的会话
+	if err := m.RecoverSessions(); err != nil {
+		utils.Warn("Failed to recover terminal sessions", zap.Error(err))
+	}
+
 	// 启动空闲会话清理
 	go m.reapIdleSessions()
 
 	return m
+}
+
+// RecoverSessions 恢复数据库中仍标记为 running 的会话
+func (m *Manager) RecoverSessions() error {
+	var dbSessions []model.TerminalSession
+	if err := model.DB.Where("status = ?", "running").Find(&dbSessions).Error; err != nil {
+		return err
+	}
+
+	for _, dbSession := range dbSessions {
+		sessionID := dbSession.ID
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := m.sessions.Load(sessionID); ok {
+			continue
+		}
+
+		checkCmd := execCommand("tmux", "has-session", "-t", sessionID)
+		if err := checkCmd.Run(); err != nil {
+			now := time.Now()
+			if err := model.DB.Model(&model.TerminalSession{}).Where("id = ?", sessionID).Updates(map[string]interface{}{
+				"status":    "exited",
+				"closed_at": now,
+			}).Error; err != nil {
+				utils.Warn("Failed to update session status to exited", zap.String("id", sessionID), zap.Error(err))
+			}
+			continue
+		}
+
+		session := NewSession(sessionID, m.config.DefaultShell, m.config.ScrollbackBytes)
+		session.SetTitle(dbSession.Title)
+		if dbSession.TaskID != nil {
+			session.SetTaskID(dbSession.TaskID)
+		}
+
+		if err := session.RecoverFromTmux(); err != nil {
+			utils.Warn("Failed to recover session from tmux", zap.String("id", sessionID), zap.Error(err))
+			continue
+		}
+
+		m.sessions.Store(sessionID, session)
+		utils.Info("Recovered terminal session", zap.String("id", sessionID))
+	}
+
+	return nil
 }
 
 // CreateSession 创建会话
@@ -62,6 +124,153 @@ func (m *Manager) CreateSession(title string, taskID *string) (*Session, error) 
 	return session, nil
 }
 
+func (m *Manager) getSSHManager() (sshSessionProvider, error) {
+	m.sshMu.Lock()
+	defer m.sshMu.Unlock()
+
+	if m.sshManager != nil {
+		return m.sshManager, nil
+	}
+
+	cfg := config.Load()
+	if strings.TrimSpace(cfg.Auth.JWTSecret) == "" {
+		return nil, errors.New("missing ssh master key")
+	}
+
+	m.sshManager = sshservice.NewSSHManager(cfg.Auth.JWTSecret)
+	return m.sshManager, nil
+}
+
+// CreateSSHSession 创建SSH终端会话，并注册到 sessions map。
+func (m *Manager) CreateSSHSession(serverID string) (*Session, error) {
+	id := uuid.New().String()
+	session := NewSession(id, "ssh", m.config.ScrollbackBytes)
+
+	serverName := strings.TrimSpace(serverID)
+	var server model.SSHServer
+	if err := model.DB.First(&server, "id = ?", serverID).Error; err == nil {
+		if strings.TrimSpace(server.Name) != "" {
+			serverName = server.Name
+		}
+	}
+	if serverName != "" {
+		session.SetTitle("SSH: " + serverName)
+	} else {
+		session.SetTitle("SSH")
+	}
+
+	sshManager, err := m.getSSHManager()
+	if err != nil {
+		return nil, err
+	}
+
+	sshSession, err := sshManager.GetSession(serverID)
+	if err != nil {
+		return nil, err
+	}
+	if sshSession == nil {
+		return nil, errors.New("failed to create ssh session")
+	}
+
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		_ = sshSession.Close()
+		return nil, err
+	}
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdinReader.Close()
+		_ = stdinWriter.Close()
+		_ = sshSession.Close()
+		return nil, err
+	}
+
+	sshSession.Stdin = stdinReader
+	sshSession.Stdout = stdoutWriter
+	sshSession.Stderr = stdoutWriter
+
+	adapter := sshservice.NewSSHTerminalSession(sshSession, stdinReader, stdinWriter, stdoutReader, stdoutWriter)
+
+	if err := sshSession.RequestPty("xterm-256color", 30, 120, cryptossh.TerminalModes{
+		cryptossh.ECHO:          1,
+		cryptossh.TTY_OP_ISPEED: 14400,
+		cryptossh.TTY_OP_OSPEED: 14400,
+	}); err != nil {
+		_ = adapter.Close()
+		return nil, err
+	}
+
+	if err := sshSession.Shell(); err != nil {
+		_ = adapter.Close()
+		return nil, err
+	}
+
+	session.backend = adapter
+	session.pty = adapter.StdoutPipe()
+	session.metadata.PID = 0
+
+	session.loadAutomationConfig()
+	go session.readPTY()
+	go session.flushLogs()
+	go m.waitSSHSession(session, adapter)
+
+	m.sessions.Store(id, session)
+
+	// 保存到数据库（用于日志关联等），但不支持重启后恢复 SSH 会话。
+	dbSession := session.ToDBModel()
+	if err := model.DB.Create(dbSession).Error; err != nil {
+		utils.Warn("Failed to save ssh session to database", zap.Error(err))
+	}
+
+	utils.Info("Created ssh terminal session",
+		zap.String("id", id),
+		zap.String("server_id", serverID),
+	)
+
+	return session, nil
+}
+
+func (m *Manager) waitSSHSession(session *Session, adapter *sshservice.SSHTerminalSession) {
+	err := adapter.Session.Wait()
+
+	exitCode := 0
+	message := "SSH session exited"
+
+	if err != nil {
+		var exitErr *cryptossh.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitStatus()
+		} else {
+			var missing *cryptossh.ExitMissingError
+			if errors.As(err, &missing) {
+				exitCode = 0
+			} else {
+				exitCode = -1
+				message = err.Error()
+			}
+		}
+	}
+
+	// 确保关闭管道，解除 readPTY 阻塞
+	_ = adapter.Close()
+
+	session.metaMutex.Lock()
+	session.status = "exited"
+	session.metadata.Status = "exited"
+	now := time.Now()
+	session.closedAt = &now
+	session.metaMutex.Unlock()
+
+	session.broadcast(StreamEvent{
+		Type:     StreamEventExit,
+		ExitCode: exitCode,
+		Message:  message,
+	})
+
+	close(session.done)
+}
+
 // GetSession 获取会话
 func (m *Manager) GetSession(id string) *Session {
 	if v, ok := m.sessions.Load(id); ok {
@@ -84,7 +293,7 @@ func (m *Manager) GetOrResumeSession(id string) (*Session, error) {
 	}
 
 	// 检查 tmux 会话是否存在
-	checkCmd := exec.Command("tmux", "has-session", "-t", id)
+	checkCmd := execCommand("tmux", "has-session", "-t", id)
 	if checkCmd.Run() != nil {
 		// tmux 会话不存在
 		return nil, nil
@@ -98,7 +307,7 @@ func (m *Manager) GetOrResumeSession(id string) (*Session, error) {
 	}
 
 	// 使用 attach 模式启动
-	if err := session.StartWithTmux(true); err != nil {
+	if err := session.RecoverFromTmux(); err != nil {
 		return nil, err
 	}
 

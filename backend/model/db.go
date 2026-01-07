@@ -25,6 +25,8 @@ func InitDB(dsn string) error {
 		&Task{},
 		&Comment{},
 		&Secret{},
+		&SSHServer{},
+		&ServerGroup{},
 		&TerminalSession{},
 		&AISession{},
 		&ApprovalRecord{},

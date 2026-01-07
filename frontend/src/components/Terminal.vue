@@ -14,8 +14,11 @@ const props = defineProps<{
   sessionId: string
 }>()
 
+type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
+
 const emit = defineEmits<{
   (e: 'metadata-update', metadata: any): void
+  (e: 'connection-change', status: ConnectionStatus): void
 }>()
 
 const approvalStore = useApprovalStore()
@@ -93,6 +96,7 @@ function initTerminal() {
 }
 
 function connectWebSocket() {
+  emit('connection-change', 'connecting')
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token')
   const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws?sessionId=${props.sessionId}&token=${token}`
@@ -101,6 +105,7 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     console.log('WebSocket connected')
+    emit('connection-change', 'connected')
     didInitialScroll = false
     // 发送初始大小
     if (terminal) {
@@ -115,10 +120,12 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     console.log('WebSocket disconnected')
+    emit('connection-change', 'disconnected')
   }
 
   ws.onerror = (error) => {
     console.error('WebSocket error:', error)
+    emit('connection-change', 'disconnected')
   }
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	secretservice "github.com/ai-coding-assistant/service/secret"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -80,7 +81,7 @@ func TestSecretController_CRUD(t *testing.T) {
 	if stored.Ciphertext == "abc123" {
 		t.Fatalf("expected stored ciphertext not equal plaintext")
 	}
-	plaintext, err := decryptAESGCMBase64(ctrl.encryptionKey, stored.Ciphertext)
+	plaintext, err := secretservice.DecryptAESGCMBase64(ctrl.encryptionKey, stored.Ciphertext)
 	if err != nil {
 		t.Fatalf("decrypt stored ciphertext failed: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestSecretController_CRUD(t *testing.T) {
 	if err := model.DB.First(&storedAfterUpdate, "id = ?", createBody.Item.ID).Error; err != nil {
 		t.Fatalf("query stored secret after update failed: %v", err)
 	}
-	updatedPlaintext, err := decryptAESGCMBase64(ctrl.encryptionKey, storedAfterUpdate.Ciphertext)
+	updatedPlaintext, err := secretservice.DecryptAESGCMBase64(ctrl.encryptionKey, storedAfterUpdate.Ciphertext)
 	if err != nil {
 		t.Fatalf("decrypt updated ciphertext failed: %v", err)
 	}
