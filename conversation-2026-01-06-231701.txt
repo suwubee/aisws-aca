@@ -1,0 +1,2530 @@
+
+╭─── Claude Code v2.0.76 ──────────────────────────────────────────────────────╮
+│                                    │ Tips for getting started                │
+│            Welcome back!           │ Run /init to create a CLAUDE.md file w… │
+│                                    │ ─────────────────────────────────────── │
+│             * ▐▛███▜▌ *            │ Recent activity                         │
+│            * ▝▜█████▛▘ *           │ No recent activity                      │
+│             *  ▘▘ ▝▝  *            │                                         │
+│                                    │                                         │
+│    Opus 4.5 · API Usage Billing    │                                         │
+│   ~/aicoding/ai-coding-assistant   │                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+  Welcome to Opus 4.5
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read docs/PRD.md (627 lines)
+  ⎿  Read ../../../tmp/claude/-root-aicoding/tasks/b63283f.output (7 lines)
+  ⎿  Read ../../../tmp/frontend.log (11 lines)
+  ⎿  Read backend/main.go (138 lines)
+  ⎿  Read frontend/src/views/Dashboard.vue (190 lines)
+
+> 继续 
+
+● 我将继续完成项目分析并创建敏捷开发计划。让我先检查一些关键文件的当前状态。
+
+● Search(pattern: "backend/**/*.go")
+  ⎿  Found 0 files 
+
+● Search(pattern: "frontend/src/**/*.vue")
+  ⎿  Found 0 files 
+
+● Search(pattern: "frontend/src/**/*.ts")
+  ⎿  Found 0 files 
+
+● Bash(ls -la /root/aicoding/ai-coding-assistant/)
+  ⎿  total 76                                     
+     drwxr-xr-x  6 root root  4096 Jan  5 21:49 .
+     drwxr-xr-x  9 root root  4096 Jan  6 22:33 ..
+     … +12 lines (ctrl+o to expand)
+
+● Bash(find /root/aicoding/ai-coding-assistant/backend -name "*.go" | head -30)
+  ⎿  /root/aicoding/ai-coding-assistant/backend/middleware/auth.go    
+     /root/aicoding/ai-coding-assistant/backend/utils/logger.go
+     /root/aicoding/ai-coding-assistant/backend/service/ai/provider.go
+     … +21 lines (ctrl+o to expand)
+
+● Bash(find /root/aicoding/ai-coding-assistant/frontend/src -name "*.vue" -o
+      -name "*.ts" | head -30)
+  ⎿  /root/aicoding/ai-coding-assistant/frontend/src/stores/terminal.ts
+     /root/aicoding/ai-coding-assistant/frontend/src/stores/auth.ts
+     /root/aicoding/ai-coding-assistant/frontend/src/stores/task.ts
+     … +25 lines (ctrl+o to expand)
+
+● Read(backend/model/db.go)
+  ⎿  Read 187 lines
+
+● Read(backend/api/task.go)
+  ⎿  Read 362 lines
+
+● Read(backend/api/auth.go)
+  ⎿  Read 178 lines
+
+● Read(frontend/src/components/TaskCard.vue)
+  ⎿  Read 238 lines
+
+● Read(frontend/src/components/Kanban.vue)
+  ⎿  Read 201 lines
+
+● Read(backend/service/detector/detector.go)
+  ⎿  Read 438 lines
+
+● 我已经完成了代码分析。现在让我更新进度并创建开发计划。
+
+● 好的，我将分段输出项目分析和开发计划。
+
+  项目分析报告
+
+  一、当前代码结构概览
+
+  后端 (Go + Fiber)
+  | 模块      | 文件数 | 状态    |
+  |-----------|--------|---------|
+  | API控制器 | 4个    | ✅ 完成 |
+  | 数据模型  | 9个    | ✅ 完成 |
+  | 服务层    | 5个    | ✅ 完成 |
+  | 中间件    | 1个    | ✅ 完成 |
+
+  前端 (Vue3 + TypeScript)
+  | 模块     | 文件数 | 状态    |
+  |----------|--------|---------|
+  | 视图页面 | 6个    | ✅ 完成 |
+  | 组件     | 7个    | ✅ 完成 |
+  | 状态管理 | 3个    | ✅ 完成 |
+  | API层    | 1个    | ✅ 完成 |
+
+  ---
+  二、已识别的Bug列表
+
+● Read(docs/DEVELOPMENT_PLAN.md)
+  ⎿  Read 666 lines
+
+● 好的，我已经完成了代码分析。现在让我输出完整的分析报告和敏捷开发计划。
+
+  ---
+  项目分析报告
+
+  一、已识别的Bug列表
+
+  | #   | 严重程度 | 文件位置                                     | 问题描述                                          |
+  |-----|----------|----------------------------------------------|---------------------------------------------------|
+  | 1   | 高       | backend/api/auth.go:164                      | ResetData 函数引用不存在的表 terminal_automations |
+  | 2   | 中       | frontend/src/components/TaskCard.vue:115-116 | AI状态显示未实现 (TODO注释)                       |
+  | 3   | 中       | frontend/src/components/Kanban.vue:96-99     | 任务编辑功能未实现 (TODO注释)                     |
+  | 4   | 低       | backend/api/auth.go:136-137                  | 密码修改未持久化到配置文件                        |
+
+  ---
+  二、功能完成度分析
+
+  核心功能 (Core Features)
+
+  | 模块                | 完成度 | 状态          |
+  |---------------------|--------|---------------|
+  | 用户认证            | 100%   | ✅            |
+  | 终端托管 (PTY/tmux) | 100%   | ✅            |
+  | WebSocket通信       | 100%   | ✅            |
+  | Kanban任务管理      | 95%    | ⚠️ 缺编辑功能 |
+  | 任务-终端关联       | 100%   | ✅            |
+  | AI代理检测          | 100%   | ✅            |
+  | 审批引擎 (后端)     | 100%   | ✅            |
+  | 规则系统            | 100%   | ✅            |
+  | 任务自动化          | 100%   | ✅            |
+
+  组件功能 (Component Features)
+
+  | 模块           | 完成度 | 状态      |
+  |----------------|--------|-----------|
+  | 审批UI弹窗     | 0%     | ❌ 待开发 |
+  | 任务卡片AI状态 | 0%     | ❌ 待开发 |
+  | 任务编辑模态框 | 0%     | ❌ 待开发 |
+  | 日志导出       | 0%     | ❌ 待开发 |
+  | 任务评论       | 0%     | ❌ 待开发 |
+  | 多用户支持     | 0%     | ❌ 待开发 |
+
+  ---
+  三、敏捷开发计划 (Sprint Backlog)
+
+● Write(docs/SPRINT_BACKLOG.md)
+  ⎿  Wrote 267 lines to docs/SPRINT_BACKLOG.md   
+     # AI Coding Assistant - Sprint Backlog
+     ## 当前版本: v1.3.x (任务自动化已完成)
+     ---
+     ## Sprint 1: Bug修复 & 基础完善 (优先级: P0)
+     ### 目标
+     修复已知Bug，完善核心功能缺失部分
+     … +257 lines (ctrl+o to expand)
+
+● ##分析完成总结
+
+  我已完成项目分析并创建了敏捷开发计划文档：docs/SPRINT_BACKLOG.md
+
+  ---
+  识别的Bug (4个)
+
+  | 严重度 | 位置             | 问题                                |
+  |--------|------------------|-------------------------------------|
+  | 高     | auth.go:164      | 引用不存在的表 terminal_automations |
+  | 中     | TaskCard.vue:115 | AI状态显示未实现                    |
+  | 中     | Kanban.vue:97    | 任务编辑功能未实现                  |
+  | 低     | auth.go:137      | 密码修改未持久化                    |
+
+  ---
+  Sprint规划概览
+
+  | Sprint   | 主题               | 任务数 | 优先级 |
+  |----------|--------------------|--------|--------|
+  | Sprint 1 | Bug修复 + 基础完善 | 4      | P0     |
+  | Sprint 2 | 审批UI完善         | 5      | P0     |
+  | Sprint 3 | AI集成增强         | 4      | P1     |
+  | Sprint 4 | 多代理支持         | 5      | P1     |
+  | Sprint 5 | 高级功能           | 5      | P2     |
+  | Sprint 6 | 部署优化           | 5      | P2     |
+
+  ---
+  立即可并行执行的任务
+
+  后端开发者:
+  - S1-1: 修复 ResetData 表引用
+  - S1-4: 修复密码持久化
+
+  前端开发者:
+  - S1-2: 实现任务编辑模态框
+  - S1-3: 实现AI状态显示
+
+  ---
+  是否需要我立即开始修复这些Bug？
+
+> 是否还可以加入其他功能，例如使用ssh接入不同的服务器进行管理，例如自动化运
+维，基于单点的任务，形成workflow处理复杂项目开发，或者不同cli会话管理，以及
+搜索网上其他可能的实现途径。 
+
+● 好的，让我搜索一下相关的实现方案和功能扩展思路。
+
+● Web Search("AI coding assistant multi-server SSH terminal management workflow
+            automation 2025")
+  ⎿  Did 1 search in 17s                                                   
+
+● Web Search("Claude Code Codex Gemini CLI orchestration workflow parallel tasks
+             2025")
+  ⎿  Did 1 search in 22s                                                   
+
+● 让我继续搜索更多相关工具和实现方案。
+
+● Web Search("Wave Terminal Chaterm open source AI terminal SSH features GitHub
+            2025")
+  ⎿  Did 1 search in 19s                                                   
+
+● Web Search("n8n workflow automation AI agent orchestration self-hosted 2025")
+  ⎿  Did 1 search in 13s                                                   
+
+● 根据搜索结果，我发现了很多可以借鉴的方案。让我分段输出功能扩展分析。
+
+  ---
+  功能扩展分析报告 (Part 1)
+
+  一、参考项目对比
+
+  | 项目                 | 类型         | 核心特点                    | 参考价值   |
+  |----------------------|--------------|-----------------------------|------------|
+  | https://waveterm.dev | AI终端       | 多模型AI、SSH管理、文件预览 | ⭐⭐⭐⭐⭐ |
+  | https://chaterm.ai   | AI SSH客户端 | 自然语言交互、Agent自动化   | ⭐⭐⭐⭐   |
+  | https://n8n.io       | 工作流自动化 | 可视化编排、70+ AI节点      | ⭐⭐⭐⭐⭐ |
+  | https://github.com   | Tmux增强     | 上下文感知、命令建议        | ⭐⭐⭐     |
+
+  ---
+  二、建议新增功能模块
+
+  模块1: SSH多服务器管理
+
+  功能描述: 支持通过SSH连接到远程服务器，在统一界面管理多台机器
+
+  核心功能:
+  ┌─────────────────────────────────────────────────────────┐
+  │  服务器管理                │
+  ├─────────────────────────────────────────────────────────┤
+  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
+  │  │🖥️ Server-1  │  │ 🖥️ Server-2  │  │ 🖥️ Server-3  │     │
+  │  │ 192.168.1.1│  │ 10.0.0.5    │  │ prod.example│     │
+  │  │ ●在线      │  │ ● 在线      │  │ ○ 离线      │     │
+  │  └─────────────┘  └─────────────┘  └─────────────┘     │
+  ││
+  │  [+ 添加服务器]  [批量执行]  [服务器组]                │
+  └─────────────────────────────────────────────────────────┘
+
+  技术实现:
+  - 使用 golang.org/x/crypto/ssh 库
+  - 支持密码/密钥认证
+  - SSH隧道和端口转发
+  - 会话持久化 (结合tmux)
+
+  ---
+  模块2: Workflow工作流引擎
+
+  功能描述: 将多个任务串联成工作流，支持条件分支、并行执行
+
+  工作流示例:
+  ┌──────────┐     ┌──────────┐     ┌──────────┐
+  │  Clone   │────▶│  Build   │────▶│  Test    │
+  │  Repo    │     │  Project │     │  Suite   │
+  └──────────┘     └──────────┘     └────┬─────┘
+                                         │
+                        ┌────────────────┼────────────────┐
+                  ▼                ▼                ▼
+                  ┌──────────┐        ┌──────────┐
+                  │ Deploy│    │ Deploy   │    │ Notify│
+                  │ Staging  │    │ Prod     │    │ Team     │
+                  └──────────┘    └──────────┘    └──────────┘
+
+  核心能力:
+  - 可视化工作流编辑器
+  - 任务依赖管理
+  - 条件分支 (if/else)
+  - 并行执行
+  - 失败重试
+  - 定时触发
+
+  ---
+  我继续输出更多功能模块...
+
+  功能扩展分析报告 (Part 2)
+
+  模块3: AI Agent编排系统
+
+  功能描述: 多个AI CLI工具协同工作，形成Agent团队
+
+  架构设计:
+  ┌─────────────────────────────────────────────────────────────┐
+  │                AI Agent Orchestrator│
+  ├─────────────────────────────────────────────────────────────┤
+  │                │
+  │   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐      │
+  │   │ Claude Code │   │   Codex     │   │ Gemini CLI  │      │
+  │   │Agent     │   │   Agent     │   │   Agent     │      │
+  │   │ (架构设计)  │   │ (快速原型)  │   │ (文档生成)  │      │
+  │   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘      │
+  │          │                 │                 │              │
+  │          └────────────┬────┴────────────────┘              │
+  │                       ▼│
+  │              ┌─────────────────┐                           │
+  │              │  Task Router    │                           │
+  │              │  (任务分发器)   │                           │
+  │              └─────────────────┘                           │
+  │                                                              │
+  └─────────────────────────────────────────────────────────────┘
+
+  使用场景:
+  | 场景       | Agent分工                                   |
+  |------------|---------------------------------------------|
+  | 新功能开发 | Claude: 架构 → Codex: 实现 → Gemini: 文档   |
+  | Bug修复    | Claude: 分析 → Codex: 修复 → Claude: Review |
+  | 代码重构   | Claude: 规划 → 多Agent并行重构 → 合并       |
+
+  ---
+  模块4: DevOps自动化运维
+
+  功能描述: 基于AI的服务器运维自动化
+
+  核心功能:
+  # 运维任务示例
+  tasks:
+    - name: "服务器健康检查"
+      type: scheduled
+      cron: "*/5 * * * *"
+      servers: ["prod-*"]
+      commands:
+        - "df -h"
+        - "free -m"
+        - "docker ps"
+      alerts:
+        disk_usage: "> 80%"
+        memory_usage: "> 90%"
+
+    - name: "日志分析"
+      type: ai_analysis
+      agent: claude
+      prompt: "分析最近1小时的错误日志，找出异常模式"
+      source: "/var/log/app/*.log"
+
+  AI增强能力:
+  - 异常检测和预警
+  - 日志智能分析
+  - 故障自动诊断
+  - 修复建议生成
+
+  ---
+  功能扩展分析报告 (Part 3)
+
+  模块5: 项目模板和脚手架
+
+  功能描述: 预设项目模板，一键初始化复杂项目
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  项目模板库                                              │
+  ├─────────────────────────────────────────────────────────┤
+  │                                                          │
+  │  📦 Web全栈项目          📦 微服务架构                │
+  │  ├── Vue3 + Go├── Go + gRPC                │
+  │  ├── React + Node├── Docker Compose             │
+  │  └── Next.js + Python└── Kubernetes                 │
+  │                                                          │
+  │📦 AI/ML项目            📦 移动端项目                   │
+  │  ├── Python + FastAPI    ├── Flutter    │
+  │  ├── LangChain           ├── React Native│
+  │  └── RAG Pipeline        └── Expo                       │
+  │                                                          │
+  │  [创建自定义模板]  [从Git导入]  [社区模板]               │
+  └─────────────────────────────────────────────────────────┘
+
+  ---
+  模块6: 智能会话管理
+
+  功能描述: 不同CLI工具的会话统一管理和上下文共享
+
+  数据模型扩展:
+  -- 会话组(多个终端组成一个会话组)
+  CREATE TABLE session_groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      workflow_id TEXT,  -- 关联的工作流
+      created_at DATETIME
+  );
+
+  -- 会话上下文 (跨终端共享)
+  CREATE TABLE session_contexts (
+      id TEXT PRIMARY KEY,
+      group_id TEXT,
+      key TEXT NOT NULL,      -- 如 "current_branch", "target_env"
+      value TEXT,
+      source_terminal_id TEXT,
+      created_at DATETIME
+  );
+
+  上下文共享示例:
+  Terminal-1 (Claude): 分析代码，发现需要修改auth.go↓ 共享上下文: {file: "auth.go", issue: "SQL注入风险"}
+  Terminal-2 (Codex): 自动接收上下文，开始修复
+      ↓ 共享上下文: {fixed: true, changes: [...]}
+  Terminal-3 (Claude): Review修复结果
+
+  ---
+  我继续输出技术架构和实现计划...
+
+  功能扩展分析报告 (Part 4)
+
+  三、技术架构扩展
+
+  新增后端服务
+
+  backend/
+  ├── service/
+  │   ├── ssh/    # SSH管理服务
+  │   │   ├── manager.go          # SSH连接管理器
+  │   │   ├── session.go          # SSH会话
+  │   │   ├── tunnel.go           # SSH隧道
+  │   │   └── key_manager.go      # 密钥管理
+  │   │
+  │   ├── workflow/               # 工作流引擎
+  │   │   ├── engine.go           # 工作流执行引擎
+  │   │   ├── parser.go           # YAML/JSON解析
+  │   │   ├── scheduler.go        # 定时调度
+  │   │   └── executor.go         # 任务执行器
+  │   │
+  │   ├── orchestrator/           # Agent编排
+  │   │   ├── router.go           # 任务路由
+  │   │   ├── coordinator.go      # 多Agent协调
+  │   │   └── context_share.go    # 上下文共享
+  │   │
+  │   └── devops/                 # DevOps自动化
+  │       ├── monitor.go          # 服务器监控
+  │       ├── analyzer.go         # 日志分析
+  │       └── alerter.go          # 告警通知
+
+  新增数据模型
+
+  // SSH服务器配置
+  type SSHServer struct {
+      ID          string `gorm:"primaryKey" json:"id"`
+      Name        string `json:"name"`
+      Host        string `json:"host"`
+      Port        int    `gorm:"default:22" json:"port"`
+      Username    string `json:"username"`
+      AuthType    string `json:"auth_type"` // password, key, agent
+      GroupID     string `json:"group_id"`
+      Tags        string `json:"tags"`      // JSON数组
+      LastStatus  string `json:"last_status"`
+      LastCheckAt *time.Time `json:"last_check_at"`
+  }
+
+  // 工作流定义
+  type Workflow struct {
+      ID          string `gorm:"primaryKey" json:"id"`
+      Name        string `json:"name"`
+      Description string `json:"description"`
+      Definition  string `json:"definition"` // YAML/JSON
+      Status      string `json:"status"`     // draft, active, paused
+      TriggerType string `json:"trigger_type"` // manual, scheduled, webhook
+      CronExpr    string `json:"cron_expr"`
+  }
+
+  // 工作流执行记录
+  type WorkflowRun struct {
+      ID         string `gorm:"primaryKey" json:"id"`
+      WorkflowID string `json:"workflow_id"`
+      Status     string `json:"status"` // running, success, failed
+      StartedAt  time.Time `json:"started_at"`
+      FinishedAt *time.Time `json:"finished_at"`
+      Logs       string `json:"logs"`
+  }
+
+  ---
+  四、前端扩展
+
+  新增页面
+
+  | 页面         | 路由          | 功能                    |
+  |--------------|---------------|-------------------------|
+  | 服务器管理   | /servers      | SSH服务器列表、连接管理 |
+  | 工作流编辑器 | /workflows    | 可视化工作流设计        |
+  | Agent编排    | /orchestrator | 多Agent任务分配         |
+  | 监控面板     | /monitor      | 服务器状态、告警        |
+
+  工作流编辑器组件
+
+  <!-- components/WorkflowEditor.vue -->
+  <template>
+    <div class="workflow-editor">
+      <!-- 节点面板 -->
+      <div class="node-palette">
+        <div class="node-item" draggable @dragstart="onDragStart('terminal')">
+          终端任务
+        </div>
+        <div class="node-item" draggable @dragstart="onDragStart('ai_agent')">
+          AI Agent
+        </div>
+        <div class="node-item" draggable @dragstart="onDragStart('condition')">
+          条件分支
+        </div>
+        <div class="node-item" draggable @dragstart="onDragStart('parallel')">
+          并行执行
+        </div>
+      </div>
+
+      <!-- 画布 -->
+      <div class="canvas" ref="canvasRef">
+        <!-- 使用 vue-flow 或自定义实现 -->
+      </div>
+
+      <!-- 属性面板 -->
+      <div class="properties-panel">
+        <!-- 选中节点的配置 -->
+      </div>
+    </div>
+  </template>
+
+  ---
+  功能扩展分析报告 (Part 5)
+
+  五、扩展功能Sprint规划
+
+  | Sprint    | 功能模块           | 优先级 | 复杂度 |
+  |-----------|--------------------|--------|--------|
+  | Sprint 7  | SSH多服务器管理    | P1     | 中     |
+  | Sprint 8  | 工作流引擎 (基础)  | P1     | 高     |
+  | Sprint 9  | Agent编排系统      | P1     | 高     |
+  | Sprint 10 | DevOps监控         | P2     | 中     |
+  | Sprint 11 | 工作流可视化编辑器 | P2     | 高     |
+  | Sprint 12 | 项目模板系统       | P2     | 低     |
+
+  ---
+  六、与现有系统集成点
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                AI Coding Assistant                       │
+  ├─────────────────────────────────────────────────────────────┤
+  │                                                              │
+  │  现有功能                新增功能                        │
+  │  ┌─────────────┐            ┌─────────────┐                │
+  │  │ 终端托管    │◄──────────▶│ SSH管理     │                │
+  │  │ (PTY/tmux)  │            │ (远程终端)  │                │
+  │  └─────────────┘            └─────────────┘                │
+  │         ││                        │
+  │         ▼                          ▼                        │
+  │  ┌─────────────┐            ┌─────────────┐                │
+  │  │ 任务管理    │◄──────────▶│ 工作流引擎  │                │
+  │  │ (Kanban)    │            │ (编排)      │                │
+  │  └─────────────┘            └─────────────┘                │
+  │         │                          │                        │
+  │         ▼                          ▼                        │
+  │  ┌─────────────┐            ┌─────────────┐                │
+  │  │ AI检测      │◄──────────▶│ Agent编排   │                │
+  │  │ (单Agent)   │            │ (多Agent)   │                │
+  │  └─────────────┘            └─────────────┘                │
+  │                                                              │
+  └─────────────────────────────────────────────────────────────┘
+
+  ---
+  七、参考资源
+
+  开源项目:
+  - https://waveterm.dev - AI终端 + SSH管理
+  - https://chaterm.ai - AI SSH客户端
+  - https://n8n.io - 工作流自动化平台
+  - https://github.com/wavetermdev/waveterm
+  - https://github.com/chaterm/Chaterm
+
+  技术文档:
+  - https://addyosmani.com - AI编码助手最佳实践
+  - https://dev.to - CLI工具开发教程
+
+  ---
+  是否需要我将这些扩展功能加入到 SPRINT_BACKLOG.md 中，形成完整的长期开发路线图？
+
+> 是的，但是最好给每个任务给出一些规划路径和实施细节，尤其是技术栈。并且需要
+有公用的系统，例如统一的账户密码，或者统一的终端服务，api等，然后才可以并行
+开发。 
+
+● 好的，我来规划共享基础设施和详细的实施路径。先分析依赖关系。
+
+  基础设施依赖分析
+
+  共享系统识别
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    共享基础设施层(必须先完成)                    │
+  ├─────────────────────────────────┤
+  │                                                                │
+  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+  │  │ 统一认证系统  │  │ 统一终端服务  │  │ 统一事件总线  │          │
+  │  │ (Auth v2)    │  │ (Terminal v2)│  │ (EventBus)   │          │
+  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
+  │         │                 │                 │                │
+  │         └────────────┬────┴────────────────┘                   │
+  │                      ▼                                          │
+  │              ┌──────────────┐                                   │
+  │              │ 统一API网关   │                                   │
+  │              │ (Gateway)    │                                   │
+  │              └──────────────┘                                   │
+  │                                                                  │
+  └─────────────────────────────────────────────────────────────────┘│┌─────────────────────┼─────────────────────┐▼                     ▼                     ▼
+  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+  │ SSH管理模块   │      │ 工作流引擎   │      │ Agent编排    │
+  │ (可并行)      │      │ (可并行)     │      │ (可并行)     │
+  └──────────────┘      └──────────────┘
+
+  ---
+  让我更新SPRINT_BACKLOG.md，分段输出：
+
+● Read(docs/SPRINT_BACKLOG.md)
+  ⎿  Read 267 lines
+
+● 好的，我将分段更新文档。先写入共享基础设施部分：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 46 lines                                                        
+      264  中优先级 (P1): Sprint 3 + Sprint 4                               
+      
+
+      265  低优先级 (P2): Sprint 5 + Sprint 6                               
+      
+
+      266  ```                                                           
+      267 +                                                              
+      268 +---                                                           
+      269 +                                                              
+      270 +# 第二部分：功能扩展路线图                                       
+              
+
+      271 +                                                              
+      272 +## 共享基础设施 (Foundation Layer)                               
+        
+
+      273 +                                                              
+      274 +> **重要**: 以下基础设施必须先完成，才能并行开发扩展功能模块     
+                            
+
+      275 +                                                              
+      276 +### 架构总览                                                     
+      
+
+      277 +                                                              
+      278 +```                                                           
+      279 +┌──────────────────────────────────────────────────────────── 
+          +─────────┐                                                    
+      280 +│                      共享基础设施层 (Sprint 7)                 
+         
+
+          +          │                                                   
+      281 +├──────────────────────────────────────────────────────────── 
+          +─────────┤                                                    
+      282 +│                                                             
+          +          │                                                   
+      283 +│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐ 
+          +         │                                                    
+      284 +│  │  统一认证系统   │  │  统一终端服务   │  │  统一事件总线     
+                    
+
+          +  │         │                                                 
+      285 +│  │  (Auth v2)     │  │  (Terminal v2) │  │  (EventBus)    │ 
+          +         │                                                    
+      286 +│  │                │  │                │  │                │ 
+          +         │                                                    
+      287 +│  │ • 多用户       │  │ • 本地PTY      │  │ • WebSocket    │    
+       
+
+          +         │                                                    
+      288 +│  │ • RBAC权限     │  │ • SSH远程      │  │ • Redis PubSub │    
+      
+
+          +         │                                                    
+      289 +│  │ • API Key      │  │ • 统一接口     │  │ • 事件订阅     │    
+          
+
+          +         │                                                    
+      290 +│  └───────┬────────┘  └───────┬────────┘  └───────┬────────┘ 
+          +         │                                                    
+      291 +│          │                   │                   │          
+          +          │                                                   
+      292 +│          └───────────────────┼───────────────────┘          
+          +          │                                                   
+      293 +│                              ▼                              
+          +          │                                                   
+      294 +│                    ┌────────────────┐                       
+          +          │                                                   
+      295 +│                    │  统一API网关    │                         
+      
+
+          +           │                                                  
+      296 +│                    │  (Gateway)     │                       
+          +          │                                                   
+      297 +│                    │                │                       
+          +          │                                                   
+      298 +│                    │ • 路由分发     │                          
+      
+
+          +          │                                                   
+      299 +│                    │ • 限流熔断     │                          
+      
+
+          +          │                                                   
+      300 +│                    │ • 日志追踪     │                          
+      
+
+          +          │                                                   
+      301 +│                    └────────────────┘                       
+          +          │                                                   
+      302 +│                                                             
+          +          │                                                   
+      303 +└──────────────────────────────────────────────────────────── 
+          +─────────┘                                                    
+      304 +                                 │                            
+      305 +         ┌───────────────────────┼───────────────────────┐    
+      306 +         ▼                       ▼                       ▼    
+      307 +┌────────────────┐     ┌────────────────┐                     
+          +┌────────────────┐                                            
+      308 +│  SSH管理模块    │     │  工作流引擎     │     │  Agent编排     
+             
+
+          +    │                                                         
+      309 +│  (Sprint 8)    │     │  (Sprint 9)    │     │  (Sprint 10)  
+          +  │                                                           
+      310 +│  [可并行开发]   │     │  [可并行开发]   │     │                
+            
+
+          +[可并行开发]   │                                                 
+       
+
+      311 +└────────────────┘     └────────────────┘                     
+          +└────────────────┘                                            
+      312 +```                                                           
+
+● 继续添加Sprint 7共享基础设施的详细内容：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 41 lines                                                        
+      310  │  [可并行开发]   │     │  [可并行开发]   │     │                
+            
+
+           [可并行开发]   │                                                 
+       
+
+      311  └────────────────┘     └────────────────┘                     
+           └────────────────┘                                            
+      312  ```                                                           
+      313 +                                                              
+      314 +---                                                           
+      315 +                                                              
+      316 +## Sprint 7: 共享基础设施 (优先级: P0 - 阻塞后续开发)            
+                 
+
+      317 +                                                              
+      318 +### 目标                                                        
+      319 +构建统一的基础设施层，为后续扩展功能提供公共服务                 
+                          
+
+      320 +                                                              
+      321 +### 7.1 统一认证系统 v2 (Auth v2)                                
+        
+
+      322 +                                                              
+      323 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      324 +|----|------|--------|----------|                             
+      325 +| S7-1-1 | 多用户数据模型 | GORM |                               
+         
+
+          +扩展User表，添加角色、权限字段 |                                 
+               
+
+      326 +| S7-1-2 | RBAC权限系统 | Casbin | 集成Casbin实现角色权限控制    
+                
+
+          + |                                                            
+      327 +| S7-1-3 | API Key认证 | JWT+UUID | 支持长期有效的API            
+           
+
+          +Key用于自动化 |                                                  
+       
+
+      328 +| S7-1-4 | OAuth2集成 | golang.org/x/oauth2 |                   
+          +支持GitHub/Google登录(可选) |                                    
+        
+
+      329 +                                                              
+      330 +**数据模型设计**:                                                
+        
+
+      331 +```go                                                         
+      332 +// 用户角色                                                      
+      
+
+      333 +type Role struct {                                            
+      334 +    ID          string `gorm:"primaryKey"`                    
+      335 +    Name        string `gorm:"uniqueIndex"` // admin, user,   
+          +viewer                                                        
+      336 +    Permissions string // JSON数组                              
+      337 +}                                                             
+      338 +                                                              
+      339 +// API Key                                                    
+      340 +type APIKey struct {                                          
+      341 +    ID        string `gorm:"primaryKey"`                      
+      342 +    UserID    string `gorm:"index"`                           
+      343 +    Name      string                                          
+      344 +    KeyHash   string // bcrypt哈希                              
+      345 +    Scopes    string // JSON数组: ["terminal:read",             
+          +"task:write"]                                                 
+      346 +    ExpiresAt *time.Time                                      
+      347 +    LastUsed  *time.Time                                      
+      348 +}                                                             
+      349 +```                                                           
+      350 +                                                              
+      351 +**技术选型理由**:                                                
+        
+
+      352 +- **Casbin**: Go生态最成熟的RBAC库，支持多种权限模型             
+                  
+
+      353 +- **API Key**: 便于CI/CD和自动化脚本调用                         
+            
+
+
+● 继续添加统一终端服务部分：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 41 lines                                                        
+      351  **技术选型理由**:                                                
+        
+
+      352  - **Casbin**: Go生态最成熟的RBAC库，支持多种权限模型             
+                  
+
+      353  - **API Key**: 便于CI/CD和自动化脚本调用                         
+            
+
+      354 +                                                              
+      355 +---                                                           
+      356 +                                                              
+      357 +### 7.2 统一终端服务 v2 (Terminal v2)                            
+        
+
+      358 +                                                              
+      359 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      360 +|----|------|--------|----------|                             
+      361 +| S7-2-1 | 终端接口抽象 | Go Interface |                         
+        
+
+          +定义统一的Terminal接口 |                                         
+         
+
+      362 +| S7-2-2 | 本地PTY适配器 | creack/pty | 封装现有PTY实现 |        
+             
+
+      363 +| S7-2-3 | SSH远程适配器 | golang.org/x/crypto/ssh |             
+       
+
+          +实现SSH终端适配器 |                                              
+         
+
+      364 +| S7-2-4 | 终端工厂模式 | Factory Pattern |                      
+        
+
+          +根据类型创建不同终端 |                                           
+            
+
+      365 +                                                              
+      366 +**接口设计**:                                                    
+      
+
+      367 +```go                                                         
+      368 +// 统一终端接口                                                  
+        
+
+      369 +type Terminal interface {                                     
+      370 +    ID() string                                               
+      371 +    Type() TerminalType  // local, ssh, docker                
+      372 +                                                              
+      373 +    // 生命周期                                                  
+      
+
+      374 +    Start() error                                             
+      375 +    Close() error                                             
+      376 +                                                              
+      377 +    // IO操作                                                   
+      378 +    Read() ([]byte, error)                                    
+      379 +    Write(data []byte) error                                  
+      380 +    Resize(cols, rows uint16) error                           
+      381 +                                                              
+      382 +    // 状态                                                     
+      383 +    Status() TerminalStatus                                   
+      384 +    Metadata() map[string]interface{}                         
+      385 +}                                                             
+      386 +                                                              
+      387 +// 终端类型                                                      
+      
+
+      388 +type TerminalType string                                      
+      389 +const (                                                       
+      390 +    TerminalTypeLocal  TerminalType = "local"                 
+      391 +    TerminalTypeSSH    TerminalType = "ssh"                   
+      392 +    TerminalTypeDocker TerminalType = "docker"                
+      393 +)                                                             
+      394 +```                                                           
+
+● 继续添加事件总线部分：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 31 lines                                                        
+      392      TerminalTypeDocker TerminalType = "docker"                
+      393  )                                                             
+      394  ```                                                           
+      395 +                                                              
+      396 +---                                                           
+      397 +                                                              
+      398 +### 7.3 统一事件总线 (EventBus)                                  
+        
+
+      399 +                                                              
+      400 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      401 +|----|------|--------|----------|                             
+      402 +| S7-3-1 | 事件定义 | Go Struct | 定义标准事件结构 |             
+              
+
+      403 +| S7-3-2 | 内存事件总线 | Go Channel | 单机模式事件分发 |        
+                
+
+      404 +| S7-3-3 | Redis PubSub | go-redis | 分布式事件分发(可选) |      
+           
+
+      405 +| S7-3-4 | WebSocket广播 | gorilla/websocket | 前端实时推送 |    
+          
+
+      406 +                                                              
+      407 +**事件结构**:                                                    
+      
+
+      408 +```go                                                         
+      409 +type Event struct {                                           
+      410 +    ID        string                 `json:"id"`              
+      411 +    Type      string                 `json:"type"`            
+      412 +    Source    string                 `json:"source"`          
+      413 +    Timestamp time.Time              `json:"timestamp"`       
+      414 +    Data      map[string]interface{} `json:"data"`            
+      415 +}                                                             
+      416 +                                                              
+      417 +// 事件类型常量                                                  
+        
+
+      418 +const (                                                       
+      419 +    EventTerminalOutput   = "terminal.output"                 
+      420 +    EventTerminalStatus   = "terminal.status"                 
+      421 +    EventApprovalRequired = "approval.required"               
+      422 +    EventTaskUpdated      = "task.updated"                    
+      423 +    EventWorkflowStep     = "workflow.step"                   
+      424 +)                                                             
+      425 +```                                                           
+
+● 继续添加Sprint 7任务汇总和Sprint 8 SSH管理模块：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 16 lines                                                        
+      423      EventWorkflowStep     = "workflow.step"                   
+      424  )                                                             
+      425  ```                                                           
+      426 +                                                              
+      427 +### 7.4 Sprint 7 任务汇总                                        
+      
+
+      428 +                                                              
+      429 +| ID | 任务 | 可并行 | 依赖 |                                    
+         
+
+      430 +|----|------|--------|------|                                 
+      431 +| S7-1-1 | 多用户数据模型 | ✅ | - |                             
+          
+
+      432 +| S7-1-2 | RBAC权限系统 | ❌ | S7-1-1 |                          
+       
+
+      433 +| S7-2-1 | 终端接口抽象 | ✅ | - |                               
+         
+
+      434 +| S7-2-2 | 本地PTY适配器 | ❌ | S7-2-1 |                         
+        
+
+      435 +| S7-3-1 | 事件定义 | ✅ | - |                                   
+       
+
+      436 +| S7-3-2 | 内存事件总线 | ❌ | S7-3-1 |                          
+         
+
+      437 +                                                              
+      438 +**并行开发建议**:                                                
+        
+
+      439 +- **开发者A**: S7-1-1 → S7-1-2 (认证系统)                        
+         
+
+      440 +- **开发者B**: S7-2-1 → S7-2-2 (终端服务)                        
+         
+
+      441 +- **开发者C**: S7-3-1 → S7-3-2 (事件总线)                        
+         
+
+
+● 继续添加Sprint 8 SSH管理模块：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 17 lines                                                        
+      439  - **开发者A**: S7-1-1 → S7-1-2 (认证系统)                        
+         
+
+      440  - **开发者B**: S7-2-1 → S7-2-2 (终端服务)                        
+         
+
+      441  - **开发者C**: S7-3-1 → S7-3-2 (事件总线)                        
+         
+
+      442 +                                                              
+      443 +---                                                           
+      444 +                                                              
+      445 +## Sprint 8: SSH多服务器管理 (依赖: Sprint 7)                    
+          
+
+      446 +                                                              
+      447 +### 目标                                                        
+      448 +实现SSH远程服务器连接和管理功能                                  
+                
+
+      449 +                                                              
+      450 +### 8.1 后端实现                                                 
+      
+
+      451 +                                                              
+      452 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      453 +|----|------|--------|----------|                             
+      454 +| S8-1-1 | SSH服务器模型 | GORM | 服务器配置存储 |               
+              
+
+      455 +| S8-1-2 | SSH连接管理器 | golang.org/x/crypto/ssh |             
+       
+
+          +连接池、会话管理 |                                               
+          
+
+      456 +| S8-1-3 | 密钥管理服务 | AES-256加密 | 安全存储SSH密钥 |        
+                
+
+      457 +| S8-1-4 | SSH终端适配器 | Terminal接口 | 实现统一终端接口 |     
+                 
+
+      458 +| S8-1-5 | 服务器分组API | REST | 服务器分组CRUD |               
+            
+
+
+● 继续添加SSH数据模型：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 28 lines                                                        
+      456  | S8-1-3 | 密钥管理服务 | AES-256加密 | 安全存储SSH密钥 |        
+                
+
+      457  | S8-1-4 | SSH终端适配器 | Terminal接口 | 实现统一终端接口 |     
+                 
+
+      458  | S8-1-5 | 服务器分组API | REST | 服务器分组CRUD |               
+            
+
+      459 +                                                              
+      460 +**数据模型**:                                                    
+      
+
+      461 +```go                                                         
+      462 +// SSH服务器                                                     
+
+      463 +type SSHServer struct {                                       
+      464 +    ID          string     `gorm:"primaryKey" json:"id"`      
+      465 +    Name        string     `json:"name"`                      
+      466 +    Host        string     `json:"host"`                      
+      467 +    Port        int        `gorm:"default:22" json:"port"`    
+      468 +    Username    string     `json:"username"`                  
+      469 +    AuthType    string     `json:"auth_type"` // password,    
+          +key                                                           
+      470 +    Password    string     `json:"-"`         // 加密存储        
+      
+
+      471 +    PrivateKey  string     `json:"-"`         // 加密存储        
+      
+
+      472 +    Passphrase  string     `json:"-"`                         
+      473 +    GroupID     *string    `json:"group_id"`                  
+      474 +    Tags        string     `json:"tags"`      // JSON数组       
+      475 +    LastStatus  string     `json:"last_status"`               
+      476 +    CreatedAt   time.Time  `json:"created_at"`                
+      477 +}                                                             
+      478 +                                                              
+      479 +// 服务器分组                                                    
+       
+
+      480 +type ServerGroup struct {                                     
+      481 +    ID          string `gorm:"primaryKey" json:"id"`          
+      482 +    Name        string `json:"name"`                          
+      483 +    Description string `json:"description"`                   
+      484 +    ParentID    *string `json:"parent_id"` // 支持嵌套分组       
+        
+
+      485 +}                                                             
+      486 +```                                                           
+
+● 继续添加SSH前端和API设计：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 22 lines                                                        
+      484      ParentID    *string `json:"parent_id"` // 支持嵌套分组       
+        
+
+      485  }                                                             
+      486  ```                                                           
+      487 +                                                              
+      488 +### 8.2 前端实现                                                 
+      
+
+      489 +                                                              
+      490 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      491 +|----|------|--------|----------|                             
+      492 +| S8-2-1 | 服务器列表页面 | Vue3 + NaiveUI | 服务器管理界面 |    
+                
+
+      493 +| S8-2-2 | 服务器配置表单 | NaiveUI Form | 添加/编辑服务器 |     
+                
+
+      494 +| S8-2-3 | SSH终端组件 | xterm.js | 复用现有终端组件 |           
+              
+
+      495 +| S8-2-4 | 批量执行面板 | Vue3 | 多服务器命令执行 |              
+                
+
+      496 +                                                              
+      497 +### 8.3 API设计                                                 
+      498 +                                                              
+      499 +```                                                           
+      500 +POST   /api/servers              # 添加服务器                    
+       
+
+      501 +GET    /api/servers              # 服务器列表                    
+       
+
+      502 +GET    /api/servers/:id          # 服务器详情                    
+       
+
+      503 +PUT    /api/servers/:id          # 更新服务器                    
+       
+
+      504 +DELETE /api/servers/:id          # 删除服务器                    
+       
+
+      505 +POST   /api/servers/:id/test     # 测试连接                      
+      
+
+      506 +POST   /api/servers/:id/terminal # 创建SSH终端                   
+      
+
+      507 +GET    /api/server-groups        # 分组列表                      
+      
+
+      508 +```                                                           
+
+● 继续添加Sprint 9工作流引擎：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 17 lines                                                        
+      506  POST   /api/servers/:id/terminal # 创建SSH终端                   
+      
+
+      507  GET    /api/server-groups        # 分组列表                      
+      
+
+      508  ```                                                           
+      509 +                                                              
+      510 +---                                                           
+      511 +                                                              
+      512 +## Sprint 9: 工作流引擎 (依赖: Sprint 7)                         
+         
+
+      513 +                                                              
+      514 +### 目标                                                        
+      515 +实现可视化工作流编排，支持任务串联和并行执行                     
+                        
+
+      516 +                                                              
+      517 +### 9.1 后端实现                                                 
+      
+
+      518 +                                                              
+      519 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      520 +|----|------|--------|----------|                             
+      521 +| S9-1-1 | 工作流数据模型 | GORM | 工作流定义存储 |              
+                
+
+      522 +| S9-1-2 | YAML/JSON解析器 | gopkg.in/yaml.v3 |                  
+
+          +解析工作流定义 |                                                 
+         
+
+      523 +| S9-1-3 | 执行引擎核心 | Go Goroutine | 任务调度执行 |          
+              
+
+      524 +| S9-1-4 | 条件分支处理 | expr-lang/expr | 表达式求值 |          
+             
+
+      525 +| S9-1-5 | 定时调度器 | robfig/cron | Cron表达式支持 |           
+            
+
+
+● 继续添加工作流数据模型：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 25 lines                                                        
+      523  | S9-1-3 | 执行引擎核心 | Go Goroutine | 任务调度执行 |          
+              
+
+      524  | S9-1-4 | 条件分支处理 | expr-lang/expr | 表达式求值 |          
+             
+
+      525  | S9-1-5 | 定时调度器 | robfig/cron | Cron表达式支持 |           
+            
+
+      526 +                                                              
+      527 +**数据模型**:                                                    
+      
+
+      528 +```go                                                         
+      529 +// 工作流定义                                                    
+       
+
+      530 +type Workflow struct {                                        
+      531 +    ID          string    `gorm:"primaryKey" json:"id"`       
+      532 +    Name        string    `json:"name"`                       
+      533 +    Description string    `json:"description"`                
+      534 +    Definition  string    `json:"definition"` // YAML/JSON    
+      535 +    Status      string    `json:"status"`     // draft,       
+          +active, paused                                                
+      536 +    TriggerType string    `json:"trigger_type"` // manual,    
+          +scheduled, webhook                                            
+      537 +    CronExpr    string    `json:"cron_expr"`                  
+      538 +    CreatedAt   time.Time `json:"created_at"`                 
+      539 +}                                                             
+      540 +                                                              
+      541 +// 工作流执行记录                                                
+         
+
+      542 +type WorkflowRun struct {                                     
+      543 +    ID         string     `gorm:"primaryKey" json:"id"`       
+      544 +    WorkflowID string     `gorm:"index" json:"workflow_id"`   
+      545 +    Status     string     `json:"status"` // pending,         
+          +running, success, failed                                      
+      546 +    StartedAt  time.Time  `json:"started_at"`                 
+      547 +    FinishedAt *time.Time `json:"finished_at"`                
+      548 +    Context    string     `json:"context"` // 执行上下文JSON     
+       
+
+      549 +}                                                             
+      550 +```                                                           
+
+● 继续添加工作流YAML示例：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 31 lines                                                        
+      548      Context    string     `json:"context"` // 执行上下文JSON     
+       
+
+      549  }                                                             
+      550  ```                                                           
+      551 +                                                              
+      552 +**工作流定义示例**:                                              
+         
+
+      553 +```yaml                                                       
+      554 +name: "部署流水线"                                               
+       
+
+      555 +trigger: manual                                               
+      556 +steps:                                                        
+      557 +  - id: clone                                                 
+      558 +    type: terminal                                            
+      559 +    command: "git clone $REPO_URL"                            
+      560 +                                                              
+      561 +  - id: build                                                 
+      562 +    type: terminal                                            
+      563 +    depends_on: [clone]                                       
+      564 +    command: "npm run build"                                  
+      565 +                                                              
+      566 +  - id: test                                                  
+      567 +    type: parallel                                            
+      568 +    depends_on: [build]                                       
+      569 +    steps:                                                    
+      570 +      - id: unit_test                                         
+      571 +        command: "npm test"                                   
+      572 +      - id: lint                                              
+      573 +        command: "npm run lint"                               
+      574 +                                                              
+      575 +  - id: deploy                                                
+      576 +    type: condition                                           
+      577 +    depends_on: [test]                                        
+      578 +    condition: "$TEST_RESULT == 'success'"                    
+      579 +    then:                                                     
+      580 +      command: "npm run deploy"                               
+      581 +```                                                           
+
+● 继续添加工作流前端实现：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 9 lines                                                         
+      579      then:                                                     
+      580        command: "npm run deploy"                               
+      581  ```                                                           
+      582 +                                                              
+      583 +### 9.2 前端实现                                                 
+      
+
+      584 +                                                              
+      585 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      586 +|----|------|--------|----------|                             
+      587 +| S9-2-1 | 工作流列表页 | Vue3 | 工作流管理 |                    
+             
+
+      588 +| S9-2-2 | 可视化编辑器 | vue-flow | 拖拽式流程设计 |            
+               
+
+      589 +| S9-2-3 | 节点配置面板 | NaiveUI | 节点属性编辑 |               
+              
+
+      590 +| S9-2-4 | 执行监控面板 | Vue3 | 实时执行状态 |                  
+              
+
+
+● 继续添加Sprint 10 Agent编排系统：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 16 lines                                                        
+      588  | S9-2-2 | 可视化编辑器 | vue-flow | 拖拽式流程设计 |            
+               
+
+      589  | S9-2-3 | 节点配置面板 | NaiveUI | 节点属性编辑 |               
+              
+
+      590  | S9-2-4 | 执行监控面板 | Vue3 | 实时执行状态 |                  
+              
+
+      591 +                                                              
+      592 +---                                                           
+      593 +                                                              
+      594 +## Sprint 10: AI Agent编排 (依赖: Sprint 7)                      
+      
+
+      595 +                                                              
+      596 +### 目标                                                        
+      597 +实现多AI Agent协同工作，任务智能分发                             
+                
+
+      598 +                                                              
+      599 +### 10.1 后端实现                                                
+      
+
+      600 +                                                              
+      601 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      602 +|----|------|--------|----------|                             
+      603 +| S10-1-1 | Agent注册表 | GORM | Agent配置管理 |                 
+         
+
+      604 +| S10-1-2 | 任务路由器 | Go | 根据任务类型分发 |                 
+               
+
+      605 +| S10-1-3 | 上下文共享服务 | Redis/内存 | 跨Agent数据共享 |      
+                
+
+      606 +| S10-1-4 | 结果聚合器 | Go | 多Agent结果合并 |                  
+            
+
+
+● 继续添加Agent编排数据模型：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 22 lines                                                        
+      604  | S10-1-2 | 任务路由器 | Go | 根据任务类型分发 |                 
+               
+
+      605  | S10-1-3 | 上下文共享服务 | Redis/内存 | 跨Agent数据共享 |      
+                
+
+      606  | S10-1-4 | 结果聚合器 | Go | 多Agent结果合并 |                  
+            
+
+      607 +                                                              
+      608 +**Agent配置模型**:                                               
+      
+
+      609 +```go                                                         
+      610 +// Agent配置                                                    
+      611 +type AgentConfig struct {                                     
+      612 +    ID          string `gorm:"primaryKey" json:"id"`          
+      613 +    Name        string `json:"name"`                          
+      614 +    Type        string `json:"type"` // claude, codex, gemini 
+      615 +    Capabilities string `json:"capabilities"` // JSON:        
+          +["code", "review", "docs"]                                    
+      616 +    Priority    int    `json:"priority"`                      
+      617 +    MaxConcurrent int  `json:"max_concurrent"`                
+      618 +    Enabled     bool   `json:"enabled"`                       
+      619 +}                                                             
+      620 +                                                              
+      621 +// 任务分发规则                                                  
+        
+
+      622 +type RoutingRule struct {                                     
+      623 +    ID        string `gorm:"primaryKey" json:"id"`            
+      624 +    Pattern   string `json:"pattern"`   // 任务匹配模式          
+        
+
+      625 +    AgentID   string `json:"agent_id"`                        
+      626 +    Priority  int    `json:"priority"`                        
+      627 +}                                                             
+      628 +```                                                           
+
+● 继续添加Sprint 11 DevOps监控：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 14 lines                                                        
+      626      Priority  int    `json:"priority"`                        
+      627  }                                                             
+      628  ```                                                           
+      629 +                                                              
+      630 +---                                                           
+      631 +                                                              
+      632 +## Sprint 11: DevOps监控 (依赖: Sprint 8)                        
+      
+
+      633 +                                                              
+      634 +### 目标                                                        
+      635 +实现服务器监控和AI辅助运维                                       
+              
+
+      636 +                                                              
+      637 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      638 +|----|------|--------|----------|                             
+      639 +| S11-1 | 服务器指标采集 | SSH + 命令 | CPU/内存/磁盘 |          
+               
+
+      640 +| S11-2 | 告警规则引擎 | expr-lang | 阈值告警 |                  
+            
+
+      641 +| S11-3 | AI日志分析 | OpenAI API | 异常检测 |                   
+          
+
+      642 +| S11-4 | 监控仪表盘 | Vue3 + ECharts | 可视化展示 |             
+            
+
+
+● 继续添加技术栈汇总和版本规划：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 18 lines                                                        
+      640  | S11-2 | 告警规则引擎 | expr-lang | 阈值告警 |                  
+            
+
+      641  | S11-3 | AI日志分析 | OpenAI API | 异常检测 |                   
+          
+
+      642  | S11-4 | 监控仪表盘 | Vue3 + ECharts | 可视化展示 |             
+            
+
+      643 +                                                              
+      644 +---                                                           
+      645 +                                                              
+      646 +## 技术栈汇总                                                    
+       
+
+      647 +                                                              
+      648 +### 后端新增依赖                                                 
+        
+
+      649 +                                                              
+      650 +```go                                                         
+      651 +// go.mod 新增                                                  
+      652 +require (                                                     
+      653 +    github.com/casbin/casbin/v2 v2.77.0    // RBAC权限          
+      654 +    golang.org/x/crypto v0.14.0             // SSH支持          
+      655 +    github.com/robfig/cron/v3 v3.0.1        // 定时任务          
+      
+
+      656 +    github.com/expr-lang/expr v1.15.0       // 表达式求值        
+       
+
+      657 +    github.com/go-redis/redis/v8 v8.11.5    // Redis(可选)      
+      658 +    gopkg.in/yaml.v3 v3.0.1                 // YAML解析         
+      659 +)                                                             
+      660 +```                                                           
+
+● 继续添加前端依赖：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Error editing file
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 13 lines                                                        
+      658      gopkg.in/yaml.v3 v3.0.1                 // YAML解析         
+      659  )                                                             
+      660  ```                                                           
+      661 +                                                              
+      662 +### 前端新增依赖                                                 
+        
+
+      663 +                                                              
+      664 +```json                                                       
+      665 +{                                                             
+      666 +  "dependencies": {                                           
+      667 +    "@vue-flow/core": "^1.26.0",                              
+      668 +    "@vue-flow/background": "^1.3.0",                         
+      669 +    "echarts": "^5.4.3",                                      
+      670 +    "vue-echarts": "^6.6.1"                                   
+      671 +  }                                                           
+      672 +}                                                             
+      673 +```                                                           
+
+● 继续添加目录结构和版本规划：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 22 lines                                                        
+      671    }                                                           
+      672  }                                                             
+      673  ```                                                           
+      674 +                                                              
+      675 +### 新增目录结构                                                 
+        
+
+      676 +                                                              
+      677 +```                                                           
+      678 +backend/                                                      
+      679 +├── service/                                                  
+      680 +│   ├── ssh/              # SSH管理 (Sprint 8)                  
+      681 +│   ├── workflow/         # 工作流引擎 (Sprint 9)                
+       
+
+      682 +│   ├── orchestrator/     # Agent编排 (Sprint 10)               
+      683 +│   └── monitor/          # DevOps监控 (Sprint 11)              
+      684 +├── model/                                                    
+      685 +│   ├── ssh.go            # SSH服务器模型                        
+       
+
+      686 +│   ├── workflow.go       # 工作流模型                           
+       
+
+      687 +│   └── agent.go          # Agent配置模型                        
+      
+
+      688 +                                                              
+      689 +frontend/src/                                                 
+      690 +├── views/                                                    
+      691 +│   ├── Servers.vue       # 服务器管理                           
+       
+
+      692 +│   ├── Workflows.vue     # 工作流列表                           
+       
+
+      693 +│   ├── WorkflowEditor.vue # 工作流编辑器                        
+        
+
+      694 +│   └── Monitor.vue       # 监控仪表盘                           
+       
+
+      695 +```                                                           
+
+● 继续添加扩展版本规划：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 12 lines                                                        
+      693  │   ├── WorkflowEditor.vue # 工作流编辑器                        
+        
+
+      694  │   └── Monitor.vue       # 监控仪表盘                           
+       
+
+      695  ```                                                           
+      696 +                                                              
+      697 +---                                                           
+      698 +                                                              
+      699 +## 扩展版本规划                                                  
+        
+
+      700 +                                                              
+      701 +| 版本 | Sprint | 功能 | 依赖 |                                  
+        
+
+      702 +|------|--------|------|------|                               
+      703 +| v2.3.0 | Sprint 7 | 共享基础设施 | Sprint 6 |                  
+        
+
+      704 +| v3.0.0 | Sprint 8 | SSH多服务器管理 | Sprint 7 |               
+        
+
+      705 +| v3.1.0 | Sprint 9 | 工作流引擎 | Sprint 7 |                    
+       
+
+      706 +| v3.2.0 | Sprint 10 | Agent编排 | Sprint 7 |                   
+      707 +| v3.3.0 | Sprint 11 | DevOps监控 | Sprint 8 |                  
+
+● 继续添加依赖关系图：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 32 lines                                                        
+      705  | v3.1.0 | Sprint 9 | 工作流引擎 | Sprint 7 |                    
+       
+
+      706  | v3.2.0 | Sprint 10 | Agent编排 | Sprint 7 |                   
+      707  | v3.3.0 | Sprint 11 | DevOps监控 | Sprint 8 |                  
+      708 +                                                              
+      709 +---                                                           
+      710 +                                                              
+      711 +## 扩展功能依赖图                                                
+         
+
+      712 +                                                              
+      713 +```                                                           
+      714 +Sprint 1-6 (现有功能)                                            
+      
+
+      715 +        │                                                     
+      716 +        ▼                                                     
+      717 +┌───────────────────────────────────────┐                     
+      718 +│         Sprint 7: 共享基础设施         │                       
+        
+
+      719 +│  ┌─────────┐ ┌─────────┐ ┌─────────┐  │                     
+      720 +│  │ Auth v2 │ │Terminal │ │EventBus │  │                     
+      721 +│  │         │ │   v2    │ │         │  │                     
+      722 +│  └────┬────┘ └────┬────┘ └────┬────┘  │                     
+      723 +└───────┼───────────┼───────────┼───────┘                     
+      724 +        │           │           │                             
+      725 +        └─────┬─────┴─────┬─────┘                             
+      726 +              │           │                                   
+      727 +    ┌─────────┼───────────┼─────────┐                         
+      728 +    ▼         ▼           ▼         ▼                         
+      729 +┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐                       
+      730 +│Sprint │ │Sprint │ │Sprint │ │Sprint │                       
+      731 +│   8   │ │   9   │ │  10   │ │  11   │                       
+      732 +│ SSH   │ │工作流 │ │Agent  │ │DevOps │                          
+
+      733 +│ 管理  │ │ 引擎  │ │ 编排  │ │ 监控  │                          
+          
+
+      734 +└───┬───┘ └───────┘ └───────┘ └───┬───┘                       
+      735 +    │                             │                           
+      736 +    └──────────────┬──────────────┘                           
+      737 +                   ▼                                          
+      738 +           (Sprint 8完成后)                                      
+
+      739 +```                                                           
+
+● 继续添加并行开发指南：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 27 lines                                                        
+      737                     ▼                                          
+      738             (Sprint 8完成后)                                      
+
+      739  ```                                                           
+      740 +                                                              
+      741 +---                                                           
+      742 +                                                              
+      743 +## 并行开发指南                                                  
+        
+
+      744 +                                                              
+      745 +### Sprint 7 完成后可并行的任务                                  
+           
+
+      746 +                                                              
+      747 +| 开发者 | Sprint | 模块 | 前置条件 |                            
+           
+
+      748 +|--------|--------|------|----------|                         
+      749 +| A | Sprint 8 | SSH管理 | Terminal v2接口 |                     
+      
+
+      750 +| B | Sprint 9 | 工作流引擎 | EventBus |                         
+       
+
+      751 +| C | Sprint 10 | Agent编排 | EventBus + Auth v2 |              
+      752 +                                                              
+      753 +### 团队分工建议                                                 
+        
+
+      754 +                                                              
+      755 +**3人团队**:                                                     
+
+      756 +```                                                           
+      757 +开发者A: Sprint 7(Auth) → Sprint 8(SSH) → Sprint 11(DevOps)      
+
+      758 +开发者B: Sprint 7(Terminal) → Sprint 9(工作流)                   
+        
+
+      759 +开发者C: Sprint 7(EventBus) → Sprint 10(Agent编排)               
+       
+
+      760 +```                                                           
+      761 +                                                              
+      762 +**2人团队**:                                                     
+
+      763 +```                                                           
+      764 +开发者A: Sprint 7(Auth+Terminal) → Sprint 8 → Sprint 11          
+
+      765 +开发者B: Sprint 7(EventBus) → Sprint 9 → Sprint 10               
+
+      766 +```                                                           
+
+● 继续添加参考资源：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 19 lines                                                        
+      764  开发者A: Sprint 7(Auth+Terminal) → Sprint 8 → Sprint 11          
+
+      765  开发者B: Sprint 7(EventBus) → Sprint 9 → Sprint 10               
+
+      766  ```                                                           
+      767 +                                                              
+      768 +---                                                           
+      769 +                                                              
+      770 +## 参考资源                                                      
+      
+
+      771 +                                                              
+      772 +### 开源项目参考                                                 
+        
+
+      773 +                                                              
+      774 +| 项目 | 用途 | 链接 |                                           
+        
+
+      775 +|------|------|------|                                        
+      776 +| Wave Terminal | AI终端+SSH | https://waveterm.dev |           
+      777 +| Chaterm | AI SSH客户端 | https://chaterm.ai |                  
+
+      778 +| n8n | 工作流自动化 | https://n8n.io |                          
+        
+
+      779 +| vue-flow | 流程图编辑器 | https://vueflow.dev |                
+        
+
+      780 +                                                              
+      781 +### 技术文档                                                     
+      
+
+      782 +                                                              
+      783 +- [golang.org/x/crypto/ssh](https://pkg.go.dev/golang.org/x/c 
+          +rypto/ssh) - Go SSH库                                          
+      784 +- [Casbin](https://casbin.org/) - RBAC权限管理                   
+      
+
+      785 +- [robfig/cron](https://github.com/robfig/cron) - Go定时任务     
+      
+
+
+● 文档更新完成。让我提交这些更改：
+
+● Bash(git add docs/SPRINT_BACKLOG.md && git commit -m "docs: add extended
+      feature roadmap with shared infrastructure…)
+  ⎿ [main ccabb32] docs: add extended feature roadmap with shared infrastru
+    cture
+     1 file changed, 785 insertions(+)
+    … +5 lines (ctrl+o to expand)
+
+
+● 文档已提交。以下是扩展功能路线图的总结：
+
+  ---
+  扩展功能路线图总结
+
+  共享基础设施 (Sprint 7) - 必须先完成
+
+  | 模块        | 技术栈           | 作用                  |
+  |-------------|------------------|-----------------------|
+  | Auth v2     | Casbin + JWT     | 多用户、RBAC、API Key |
+  | Terminal v2 | Go Interface     | 统一本地/SSH终端接口  |
+  | EventBus    | Go Channel/Redis | 跨模块事件通信        |
+
+  可并行开发的扩展模块
+
+  | Sprint | 模块        | 核心技术                |
+  |--------|-------------|-------------------------|
+  | 8      | SSH多服务器 | golang.org/x/crypto/ssh |
+  | 9      | 工作流引擎  | vue-flow + robfig/cron  |
+  | 10     | Agent编排   | 任务路由 + 上下文共享   |
+  | 11     | DevOps监控  | ECharts + AI分析        |
+
+  关键依赖关系
+
+  Sprint 7 (基础设施)│
+      ├── Sprint 8 (SSH)──► Sprint 11 (DevOps)
+      ├── Sprint 9 (工作流)
+      └── Sprint 10 (Agent编排)
+
+  ---
+  是否需要我开始实现某个Sprint的具体功能？建议从 Sprint 1Bug修复 或 Sprint 7 共享基础设施 开始。
+
+> 以你这个路线图为准，辅助参考 
+codex-sprint.md，完善SPRINT_BACKLOG.md，并且衍生扩展后续可能的功能。 
+
+● 好的，让我先读取 codex-sprint.md 文件来参考其中的内容。
+
+● Search(pattern: "**/*codex*sprint*.md")
+  ⎿  Found 1 file (ctrl+o to expand)
+
+● Search(pattern: "**/codex*.md")
+  ⎿  Found 1 file (ctrl+o to expand)
+
+● Read(docs/codex-sprint.md)
+  ⎿  Read 269 lines
+
+● 好的，我已经阅读了 codex-sprint.md。它提供了很多有价值的补充内容，包括：
+
+  1. Secrets 模块 - 统一凭据管理
+  2. Runbook 概念 - 参数化工作流模板
+  3. Project/Workspace - 项目工作区概念
+  4. CLI Profiles - CLI配置文件
+  5. 更详细的API契约
+
+  让我分段更新 SPRINT_BACKLOG.md，整合这些内容并扩展未来功能。
+
+● 好的，我将分段更新文档。首先添加 Sprint 0 平台加固部分：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 16 lines                                                        
+      318  ### 目标                                                        
+      319  构建统一的基础设施层，为后续扩展功能提供公共服务                 
+                          
+
+      320                                                                
+      321 +> 参考: codex-sprint.md Sprint 0 平台加固                        
+        
+
+      322 +                                                              
+      323 +### 7.0 平台加固 (Sprint 0 前置条件)                             
+          
+
+      324 +                                                              
+      325 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      326 +|----|------|--------|----------|                             
+      327 +| S7-0-1 | Auth持久化 | bcrypt + GORM |                          
+
+          +密码存DB，不再依赖内存配置 |                                     
+              
+
+      328 +| S7-0-2 | WebSocket鉴权 | JWT | WS连接必须验证token |           
+          
+
+      329 +| S7-0-3 | API契约定义 | OpenAPI/TypeScript | 固化REST/WS        
+        
+
+          +schema |                                                      
+      330 +| S7-0-4 | 开发环境锁定 | package.json | 固定Node/TS版本 |       
+            
+
+      331 +                                                              
+      332 +**实施路径**:                                                    
+      
+
+      333 +- **S7-0-1**: 登录从DB读取password_hash校验，改密仅更新DB        
+               
+
+      334 +- **S7-0-2**: `/api/terminal/ws` 纳入token校验，避免绕过认证     
+             
+
+      335 +- **S7-0-3**: 前端 `src/api/types.ts` 集中定义请求/响应类型      
+              
+
+      336 +                                                              
+      337  ### 7.1 统一认证系统 v2 (Auth v2)                                
+        
+
+      338                                                                
+      339  | ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+
+● 继续添加 Secrets 统一凭据模块：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 33 lines                                                        
+      334  - **S7-0-2**: `/api/terminal/ws` 纳入token校验，避免绕过认证     
+             
+
+      335  - **S7-0-3**: 前端 `src/api/types.ts` 集中定义请求/响应类型      
+              
+
+      336                                                                
+      337 +### 7.1a 统一凭据管理 (Secrets)                                  
+        
+
+      338 +                                                              
+      339 +> 来源: codex-sprint.md - 统一 Secrets 模块                      
+        
+
+      340 +                                                              
+      341 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      342 +|----|------|--------|----------|                             
+      343 +| S7-1a-1 | Secrets数据模型 | GORM | 统一存储SSH密钥/密码/API    
+              
+
+          + Key |                                                        
+      344 +| S7-1a-2 | AES-GCM加密 | crypto/aes |                          
+          +主密钥环境变量，加密存储 |                                       
+              
+
+      345 +| S7-1a-3 | Secrets API | REST | CRUD (不返回明文) |             
+       
+
+      346 +| S7-1a-4 | 密钥轮换 | Go | 支持主密钥更新 |                     
+             
+
+      347 +                                                              
+      348 +**数据模型**:                                                    
+      
+
+      349 +```go                                                         
+      350 +// 统一凭据                                                      
+      
+
+      351 +type Secret struct {                                          
+      352 +    ID         string    `gorm:"primaryKey" json:"id"`        
+      353 +    Name       string    `json:"name"`                        
+      354 +    Type       string    `json:"type"` // ssh_password,       
+          +ssh_key, api_key                                              
+      355 +    Ciphertext string    `json:"-"`    // AES-GCM加密后base64    
+
+      356 +    Meta       string    `json:"meta"` // JSON: 指纹/用途等      
+       
+
+      357 +    CreatedAt  time.Time `json:"created_at"`                  
+      358 +    UpdatedAt  time.Time `json:"updated_at"`                  
+      359 +}                                                             
+      360 +```                                                           
+      361 +                                                              
+      362 +**API设计**:                                                    
+      363 +```                                                           
+      364 +GET    /api/secrets          # 列表(仅meta，不返回明文)          
+           
+
+      365 +POST   /api/secrets          # 创建                             
+      366 +PUT    /api/secrets/:id      # 更新                             
+      367 +DELETE /api/secrets/:id      # 删除                             
+      368 +```                                                           
+      369 +                                                              
+      370  ### 7.1 统一认证系统 v2 (Auth v2)                                
+        
+
+      371                                                                
+      372  | ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+
+● 继续添加 Runbook 运维手册模块（在 Sprint 11 后面）：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 37 lines                                                        
+      692                                                                
+      693  ---                                                           
+      694                                                                
+      695 +## Sprint 12: Runbook运维手册 (依赖: Sprint 9)                   
+        
+
+      696 +                                                              
+      697 +> 来源: codex-sprint.md Sprint 3                                
+      698 +                                                              
+      699 +### 目标                                                        
+      700 +实现参数化运维脚本模板和定时调度                                 
+                  
+
+      701 +                                                              
+      702 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      703 +|----|------|--------|----------|                             
+      704 +| S12-1 | Runbook模型 | GORM | 模板参数、目标选择 |              
+             
+
+      705 +| S12-2 | 参数化引擎 | text/template | 变量注入到steps |         
+            
+
+      706 +| S12-3 | 定时调度器 | robfig/cron | cron表达式支持 |            
+            
+
+      707 +| S12-4 | 并发控制 | Go Semaphore | 按标签限制并发 |             
+             
+
+      708 +                                                              
+      709 +**数据模型**:                                                    
+      
+
+      710 +```go                                                         
+      711 +type Runbook struct {                                         
+      712 +    ID          string `gorm:"primaryKey" json:"id"`          
+      713 +    Name        string `json:"name"`                          
+      714 +    Description string `json:"description"`                   
+      715 +    WorkflowID  string `json:"workflow_id"` // 基于的工作流      
+        
+
+      716 +    Parameters  string `json:"parameters"`  // JSON: 参数定义    
+      
+
+      717 +    TargetTags  string `json:"target_tags"` // 目标服务器标签    
+         
+
+      718 +}                                                             
+      719 +                                                              
+      720 +type Schedule struct {                                        
+      721 +    ID         string     `gorm:"primaryKey" json:"id"`       
+      722 +    RunbookID  string     `json:"runbook_id"`                 
+      723 +    CronExpr   string     `json:"cron_expr"`                  
+      724 +    Enabled    bool       `json:"enabled"`                    
+      725 +    NextRunAt  *time.Time `json:"next_run_at"`                
+      726 +    LastRunAt  *time.Time `json:"last_run_at"`                
+      727 +}                                                             
+      728 +```                                                           
+      729 +                                                              
+      730 +---                                                           
+      731 +                                                              
+      732  ## 技术栈汇总                                                    
+       
+
+      733                                                                
+      734  ### 后端新增依赖                                                 
+        
+
+
+● 继续添加 Sprint 13 Project/Workspace 和 CLI Profiles：
+
+● 继续添加 Sprint 13 Project/Workspace 模块：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 16 lines                                                        
+      729                                                                
+      730  ---                                                           
+      731                                                                
+      732 +## Sprint 13: Project/Workspace (依赖: Sprint 8)                
+      733 +                                                              
+      734 +> 来源: codex-sprint.md Sprint 4                                
+      735 +                                                              
+      736 +### 目标                                                        
+      737 +统一描述"在哪做事"，支持复杂项目开发                             
+                   
+
+      738 +                                                              
+      739 +| ID | 任务 | 技术栈 | 实施细节 |                                
+           
+
+      740 +|----|------|--------|----------|                             
+      741 +| S13-1 | Project模型 | GORM | 本地/远程/Git仓库 |               
+          
+
+      742 +| S13-2 | CLI Profiles | GORM | CLI配置模板 |                    
+      
+
+      743 +| S13-3 | 项目模板库 | JSON/YAML | 内置常用模板 |                
+             
+
+      744 +| S13-4 | 项目仪表盘 | Vue3 | 项目概览页面 |                     
+             
+
+      745 +                                                              
+      746 +---                                                           
+      747 +                                                              
+      748  ## 技术栈汇总                                                    
+       
+
+      749                                                                
+      750  ### 后端新增依赖                                                 
+        
+
+
+● 继续添加 Project数据模型：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 28 lines                                                        
+      743  | S13-3 | 项目模板库 | JSON/YAML | 内置常用模板 |                
+             
+
+      744  | S13-4 | 项目仪表盘 | Vue3 | 项目概览页面 |                     
+             
+
+      745                                                                
+      746 +**数据模型**:                                                    
+      
+
+      747 +```go                                                         
+      748 +// 项目/工作区                                                   
+       
+
+      749 +type Project struct {                                         
+      750 +    ID          string  `gorm:"primaryKey" json:"id"`         
+      751 +    Name        string  `json:"name"`                         
+      752 +    Description string  `json:"description"`                  
+      753 +    Type        string  `json:"type"` // local, remote, git   
+      754 +    LocalPath   string  `json:"local_path"`                   
+      755 +    TargetID    *string `json:"target_id"`                    
+      756 +    RemotePath  string  `json:"remote_path"`                  
+      757 +    GitRepo     string  `json:"git_repo"`                     
+      758 +    GitBranch   string  `json:"git_branch"`                   
+      759 +    EnvVars     string  `json:"env_vars"` // JSON             
+      760 +}                                                             
+      761 +                                                              
+      762 +// CLI配置模板                                                   
+      
+
+      763 +type CLIProfile struct {                                      
+      764 +    ID             string `gorm:"primaryKey" json:"id"`       
+      765 +    Name           string `json:"name"`                       
+      766 +    Type           string `json:"type"` // claude, codex,     
+          +gemini, custom                                                
+      767 +    Command        string `json:"command"`                    
+      768 +    DefaultArgs    string `json:"default_args"`               
+      769 +    ResumeStrategy string `json:"resume_strategy"`            
+      770 +    DetectPatterns string `json:"detect_patterns"` // JSON    
+      771 +}                                                             
+      772 +```                                                           
+      773 +                                                              
+      774  ---                                                           
+      775                                                                
+      776  ## 技术栈汇总                                                    
+       
+
+
+● 继续添加未来功能扩展规划（Sprint 14+）：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 18 lines                                                        
+      773                                                                
+      774  ---                                                           
+      775                                                                
+      776 +## 第三部分：未来功能扩展 (Sprint 14+)                           
+             
+
+      777 +                                                              
+      778 +### Sprint 14: 插件系统                                          
+      
+
+      779 +                                                              
+      780 +| ID | 任务 | 描述 |                                             
+      
+
+      781 +|----|------|------|                                          
+      782 +| S14-1 | 插件接口定义 | Go Plugin / WASM |                      
+        
+
+      783 +| S14-2 | 插件生命周期 | 加载/卸载/热更新 |                      
+               
+
+      784 +| S14-3 | 插件市场UI | 浏览/安装/管理 |                          
+            
+
+      785 +                                                              
+      786 +**扩展点**:                                                      
+
+      787 +- 自定义AI检测器                                                 
+        
+
+      788 +- 自定义审批规则                                                 
+         
+
+      789 +- 自定义工作流节点                                               
+          
+
+      790 +- 自定义监控指标                                                 
+         
+
+      791 +                                                              
+      792 +---                                                           
+      793 +                                                              
+      794  ## 技术栈汇总                                                    
+       
+
+      795                                                                
+      796  ### 后端新增依赖                                                 
+        
+
+
+● 继续添加更多未来功能扩展：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 9 lines                                                         
+      789  - 自定义工作流节点                                               
+          
+
+      790  - 自定义监控指标                                                 
+         
+
+      791                                                                
+      792 +### Sprint 15: 团队协作                                          
+      
+
+      793 +                                                              
+      794 +| ID | 任务 | 描述 |                                             
+      
+
+      795 +|----|------|------|                                          
+      796 +| S15-1 | 多用户系统 | 用户注册/邀请/管理 |                      
+               
+
+      797 +| S15-2 | 团队/组织 | 团队创建/成员管理 |                        
+              
+
+      798 +| S15-3 | 资源共享 | 项目/工作流/模板共享 |                      
+               
+
+      799 +| S15-4 | 实时协作 | 多人同时查看终端 |                          
+              
+
+      800 +                                                              
+      801  ---                                                           
+      802                                                                
+      803  ## 技术栈汇总                                                    
+       
+
+
+● 继续添加更多未来功能：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 9 lines                                                         
+      798  | S15-3 | 资源共享 | 项目/工作流/模板共享 |                      
+               
+
+      799  | S15-4 | 实时协作 | 多人同时查看终端 |                          
+              
+
+      800                                                                
+      801 +### Sprint 16: 外部集成                                          
+      
+
+      802 +                                                              
+      803 +| ID | 任务 | 描述 |                                             
+      
+
+      804 +|----|------|------|                                          
+      805 +| S16-1 | Git集成 | GitHub/GitLab/Gitee |                       
+      806 +| S16-2 | CI/CD集成 | Jenkins/GitHub Actions |                  
+      807 +| S16-3 | 消息通知 | Slack/钉钉/飞书 |                           
+          
+
+      808 +| S16-4 | 项目管理 | Jira/Linear/Notion |                        
+      
+
+      809 +                                                              
+      810  ---                                                           
+      811                                                                
+      812  ## 技术栈汇总                                                    
+       
+
+
+● 继续添加更多未来功能：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 9 lines                                                         
+      807  | S16-3 | 消息通知 | Slack/钉钉/飞书 |                           
+          
+
+      808  | S16-4 | 项目管理 | Jira/Linear/Notion |                        
+      
+
+      809                                                                
+      810 +### Sprint 17: 审计与合规                                        
+       
+
+      811 +                                                              
+      812 +| ID | 任务 | 描述 |                                             
+      
+
+      813 +|----|------|------|                                          
+      814 +| S17-1 | 操作审计日志 | 全量操作记录 |                          
+              
+
+      815 +| S17-2 | 会话回放 | 终端操作回放 |                              
+            
+
+      816 +| S17-3 | 合规报告 | 自动生成报告 |                              
+            
+
+      817 +| S17-4 | 数据保留策略 | 自动清理/归档 |                         
+              
+
+      818 +                                                              
+      819  ---                                                           
+      820                                                                
+      821  ## 技术栈汇总                                                    
+       
+
+
+● 继续添加更多未来功能：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 17 lines                                                        
+      816  | S17-3 | 合规报告 | 自动生成报告 |                              
+            
+
+      817  | S17-4 | 数据保留策略 | 自动清理/归档 |                         
+              
+
+      818                                                                
+      819 +### Sprint 18: 移动端支持                                        
+       
+
+      820 +                                                              
+      821 +| ID | 任务 | 描述 |                                             
+      
+
+      822 +|----|------|------|                                          
+      823 +| S18-1 | 响应式UI | 移动端适配 |                                
+          
+
+      824 +| S18-2 | PWA支持 | 离线访问/推送 |                              
+          
+
+      825 +| S18-3 | 移动终端 | 触屏终端交互 |                              
+            
+
+      826 +                                                              
+      827 +### Sprint 19: AI增强                                           
+      828 +                                                              
+      829 +| ID | 任务 | 描述 |                                             
+      
+
+      830 +|----|------|------|                                          
+      831 +| S19-1 | 智能任务分解 | AI自动拆分任务 |                        
+              
+
+      832 +| S19-2 | 代码审查助手 | AI代码Review |                          
+          
+
+      833 +| S19-3 | 故障预测 | 基于历史数据预测 |                          
+              
+
+      834 +| S19-4 | 自然语言运维 | 用自然语言执行运维 |                    
+                 
+
+      835 +                                                              
+      836  ---                                                           
+      837                                                                
+      838  ## 技术栈汇总                                                    
+       
+
+
+● 继续更新版本规划表：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 7 lines                                                         
+      897  | v3.1.0 | Sprint 9 | 工作流引擎 | Sprint 7 |                    
+       
+
+      898  | v3.2.0 | Sprint 10 | Agent编排 | Sprint 7 |                   
+      899  | v3.3.0 | Sprint 11 | DevOps监控 | Sprint 8 |                  
+      900 +| v3.4.0 | Sprint 12 | Runbook运维 | Sprint 9 |                 
+      901 +| v3.5.0 | Sprint 13 | Project/Workspace | Sprint 8 |         
+      902 +| v4.0.0 | Sprint 14 | 插件系统 | Sprint 13 |                    
+      
+
+      903 +| v4.1.0 | Sprint 15 | 团队协作 | Sprint 14 |                    
+      
+
+      904 +| v4.2.0 | Sprint 16 | 外部集成 | Sprint 15 |                    
+      
+
+      905 +| v4.3.0 | Sprint 17 | 审计合规 | Sprint 15 |                    
+      
+
+      906 +| v5.0.0 | Sprint 18-19 | 移动端+AI增强 | Sprint 17 |            
+       
+
+      907                                                                
+      908  ---                                                           
+      909                                                                
+
+● 继续更新依赖图：
+
+● Update(docs/SPRINT_BACKLOG.md)
+  ⎿  Added 23 lines, removed 13 lines                                      
+      913  Sprint 1-6 (现有功能)                                            
+      
+
+      914          │                                                     
+      915          ▼                                                     
+      916 -┌───────────────────────────────────────┐                     
+      917 -│         Sprint 7: 共享基础设施         │                       
+        
+
+      918 -│  ┌─────────┐ ┌─────────┐ ┌─────────┐  │                     
+      919 -│  │ Auth v2 │ │Terminal │ │EventBus │  │                     
+      920 -│  │         │ │   v2    │ │         │  │                     
+      921 -│  └────┬────┘ └────┬────┘ └────┬────┘  │                     
+      922 -└───────┼───────────┼───────────┼───────┘                     
+      916 +┌───────────────────────────────────────────┐                 
+      917 +│         Sprint 7: 共享基础设施             │                   
+        
+
+      918 +│  ┌─────────┐ ┌─────────┐ ┌─────────┐      │                 
+      919 +│  │ Auth v2 │ │Terminal │ │EventBus │      │                 
+      920 +│  │ Secrets │ │   v2    │ │         │      │                 
+      921 +│  └────┬────┘ └────┬────┘ └────┬────┘      │                 
+      922 +└───────┼───────────┼───────────┼───────────┘                 
+      923          │           │           │                             
+      924          └─────┬─────┴─────┬─────┘                             
+      925                │           │                                   
+     ...
+      929  │Sprint │ │Sprint │ │Sprint │ │Sprint │                       
+      930  │   8   │ │   9   │ │  10   │ │  11   │                       
+      931  │ SSH   │ │工作流 │ │Agent  │ │DevOps │                          
+
+      932 -│ 管理  │ │ 引擎  │ │ 编排  │ │ 监控  │                          
+          
+
+      933 -└───┬───┘ └───────┘ └───────┘ └───┬───┘                       
+      934 -    │                             │                           
+      935 -    └──────────────┬──────────────┘                           
+      936 -                   ▼                                          
+      937 -           (Sprint 8完成后)                                      
+
+      932 +└───┬───┘ └───┬───┘ └───────┘ └───────┘                       
+      933 +    │         │                                               
+      934 +    ▼         ▼                                               
+      935 +┌───────┐ ┌───────┐                                           
+      936 +│Sprint │ │Sprint │                                           
+      937 +│  13   │ │  12   │                                           
+      938 +│Project│ │Runbook│                                           
+      939 +└───┬───┘ └───────┘                                           
+      940 +    │                                                         
+      941 +    ▼                                                         
+      942 +┌───────────────────────────────────────────┐                 
+      943 +│         Sprint 14-19: 未来扩展             │                   
+      
+
+      944 +│  插件系统 → 团队协作 → 外部集成 → 审计     │                   
+                
+
+      945 +│                    ↓                       │                
+      946 +│            移动端 + AI增强                 │                   
+       
+
+      947 +└───────────────────────────────────────────┘                 
+      948  ```                                                           
+      949                                                                
+      950  ---                                                           
+
+● 更新todo并提交更改：
+
+● 好的，让我提交更改并给出总结：
+
+● Bash(git add docs/SPRINT_BACKLOG.md && git commit -m "docs: enhance sprint
+      backlog with codex-sprint integration…)
+  ⎿ [main 2e71cd9] docs: enhance sprint backlog with codex-sprint integrati
+    on
+     1 file changed, 222 insertions(+), 13 deletions(-)
+    … +4 lines (ctrl+o to expand)
+
+
+● 文档更新完成并已提交。以下是完整的路线图总结：
+
+  ---
+  SPRINT_BACKLOG.md 更新总结
+
+  新增内容 (来自 codex-sprint.md)
+
+  | Sprint | 模块     | 核心功能                    |
+  |--------|----------|-----------------------------|
+  | 7.0    | 平台加固 | Auth持久化、WS鉴权、API契约 |
+  | 7.1a   | Secrets  | 统一凭据管理、AES-GCM加密   |
+  | 12     | Runbook  | 参数化模板、定时调度        |
+  | 13     | Project  | 工作区概念、CLI Profiles    |
+
+  未来功能扩展 (Sprint 14-19)
+
+  | Sprint | 功能     | 描述                         |
+  |--------|----------|------------------------------|
+  | 14     | 插件系统 | 自定义检测器/规则/节点       |
+  | 15     | 团队协作 | 多用户、资源共享、实时协作   |
+  | 16     | 外部集成 | Git/CI/CD/消息/项目管理      |
+  | 17     | 审计合规 | 操作日志、会话回放、报告     |
+  | 18     | 移动端   | 响应式UI、PWA                |
+  | 19     | AI增强   | 智能分解、代码审查、故障预测 |
+
+  ---
+  完整版本规划
+
+  v1.x→现有功能 (Sprint 1-6)
+  v2.3  → 共享基础设施 (Sprint 7)
+  v3.x  → SSH/工作流/Agent/DevOps/Runbook/Project (Sprint 8-13)
+  v4.x  → 插件/团队/集成/审计(Sprint 14-17)
+  v5.0  → 移动端 + AI增强 (Sprint 18-19)
+
+  ---
+  是否需要我开始实现某个具体的Sprint？建议从 Sprint 1Bug修复 或 Sprint 7 共享基础设施 开始。
+
+
+

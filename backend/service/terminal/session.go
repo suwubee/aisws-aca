@@ -124,6 +124,10 @@ type Session struct {
 	dataBatchMaxWait time.Duration // 最大等待时间
 	metaThrottleMu   sync.Mutex
 	metaThrottleLast time.Time // 上次元数据广播时间
+	// 日志去重相关（避免动态输出重复记录）
+	recentLogsMu     sync.Mutex
+	recentLogs       map[string]time.Time // 最近记录的日志内容 -> 时间
+	recentLogsWindow time.Duration        // 去重时间窗口
 }
 
 // LogEntry 日志条目
@@ -186,6 +190,8 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 		approvalEngine:    approval.NewEngine(),
 		dataBatchBuf:      make([]byte, 0, 8192),
 		dataBatchMaxWait:  16 * time.Millisecond, // 约60fps
+		recentLogs:        make(map[string]time.Time),
+		recentLogsWindow:  3 * time.Second, // 3秒内相同内容不重复记录
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -1176,11 +1182,32 @@ func (s *Session) addLog(logType, content string) {
 		return
 	}
 
+	// 日志去重：在时间窗口内相同内容不重复记录
+	now := time.Now()
+	dedupeKey := logType + ":" + strings.TrimSpace(cleanContent)
+	s.recentLogsMu.Lock()
+	if lastTime, exists := s.recentLogs[dedupeKey]; exists {
+		if now.Sub(lastTime) < s.recentLogsWindow {
+			s.recentLogsMu.Unlock()
+			return // 重复内容，跳过
+		}
+	}
+	s.recentLogs[dedupeKey] = now
+	// 清理过期条目（避免内存泄漏）
+	if len(s.recentLogs) > 100 {
+		for k, t := range s.recentLogs {
+			if now.Sub(t) > s.recentLogsWindow {
+				delete(s.recentLogs, k)
+			}
+		}
+	}
+	s.recentLogsMu.Unlock()
+
 	s.logMutex.Lock()
 	s.logBuffer = append(s.logBuffer, LogEntry{
 		LogType:   logType,
 		Content:   cleanContent,
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 	})
 	shouldFlush := len(s.logBuffer) >= 50 // 缓冲区达到50条时触发刷新
 	s.logMutex.Unlock()
