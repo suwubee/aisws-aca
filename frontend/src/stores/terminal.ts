@@ -34,6 +34,7 @@ export const useTerminalStore = defineStore('terminal', () => {
   const terminals = ref<TerminalTab[]>([])
   const activeTerminalId = ref<string | null>(null)
   const loading = ref(false)
+  const hiddenTerminalIds = ref<Set<string>>(new Set())
 
   const activeTerminal = computed(() =>
     terminals.value.find(t => t.id === activeTerminalId.value)
@@ -43,10 +44,12 @@ export const useTerminalStore = defineStore('terminal', () => {
     loading.value = true
     try {
       const { data } = await terminalApi.list()
-      terminals.value = data.items.map((t: TerminalSession) => ({
-        ...t,
-        connected: false
-      }))
+      terminals.value = data.items
+        .filter((t: TerminalSession) => !hiddenTerminalIds.value.has(t.id))
+        .map((t: TerminalSession) => ({
+          ...t,
+          connected: false
+        }))
     } finally {
       loading.value = false
     }
@@ -58,13 +61,26 @@ export const useTerminalStore = defineStore('terminal', () => {
       ...data.item,
       connected: false
     }
+    hiddenTerminalIds.value.delete(newTerminal.id)
     terminals.value.push(newTerminal)
     activeTerminalId.value = newTerminal.id
     return newTerminal
   }
 
+  function hideTerminal(id: string) {
+    hiddenTerminalIds.value.add(id)
+    const index = terminals.value.findIndex(t => t.id === id)
+    if (index !== -1) {
+      terminals.value.splice(index, 1)
+    }
+    if (activeTerminalId.value === id) {
+      activeTerminalId.value = terminals.value[0]?.id || null
+    }
+  }
+
   async function closeTerminal(id: string) {
     await terminalApi.close(id)
+    hiddenTerminalIds.value.delete(id)
     const index = terminals.value.findIndex(t => t.id === id)
     if (index !== -1) {
       const terminal = terminals.value[index]
@@ -114,6 +130,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     loading,
     fetchTerminals,
     createTerminal,
+    hideTerminal,
     closeTerminal,
     renameTerminal,
     linkTask,

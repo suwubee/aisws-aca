@@ -19,7 +19,8 @@
         </span>
         <span
           class="close-btn"
-          @click.stop="closeTerminal(terminal.id)"
+          title="隐藏终端"
+          @click.stop="hideTerminal(terminal.id)"
         >×</span>
       </button>
       <button class="terminal-tab add-tab" @click="createNewTerminal">
@@ -277,12 +278,12 @@ async function confirmCreateTerminal() {
   }
 }
 
-async function closeTerminal(id: string) {
+function hideTerminal(id: string) {
   try {
-    await terminalStore.closeTerminal(id)
-    message.success('终端已关闭')
+    terminalStore.hideTerminal(id)
+    message.success('终端已隐藏')
   } catch (error) {
-    message.error('关闭终端失败')
+    message.error('隐藏终端失败')
   }
 }
 

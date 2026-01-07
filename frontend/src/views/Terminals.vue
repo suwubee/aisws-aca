@@ -80,6 +80,7 @@
 import { computed, h, onMounted, ref, watch } from 'vue'
 import {
   NButton,
+  NPopconfirm,
   NSpace,
   NTag,
   useMessage
@@ -93,6 +94,7 @@ const message = useMessage()
 
 const loading = ref(false)
 const terminals = ref<TerminalSession[]>([])
+const closingId = ref<string | null>(null)
 
 const keyword = ref('')
 const statusFilter = ref<string | null>(null)
@@ -183,6 +185,21 @@ function closeLogs() {
   logsTerminal.value = null
 }
 
+async function closeTerminal(row: TerminalSession) {
+  if (closingId.value) return
+
+  closingId.value = row.id
+  try {
+    await terminalApi.close(row.id)
+    message.success('终端已关闭')
+    await fetchTerminals()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '关闭终端失败')
+  } finally {
+    closingId.value = null
+  }
+}
+
 const columns: DataTableColumns<TerminalSession> = [
   {
     title: '标题',
@@ -237,7 +254,21 @@ const columns: DataTableColumns<TerminalSession> = [
         size: 'tiny',
         quaternary: true,
         onClick: () => openLogs(row)
-      }, () => '查看日志')
+      }, () => '查看日志'),
+      h(NPopconfirm, {
+        onPositiveClick: () => closeTerminal(row),
+        positiveText: '关闭',
+        negativeText: '取消'
+      }, {
+        trigger: () => h(NButton, {
+          size: 'tiny',
+          type: 'error',
+          quaternary: true,
+          disabled: row.status !== 'running',
+          loading: closingId.value === row.id
+        }, () => '关闭'),
+        default: () => `确定关闭终端「${row.title || row.metadata?.title || row.id.slice(0, 8)}」吗？`
+      })
     ])
   }
 ]
