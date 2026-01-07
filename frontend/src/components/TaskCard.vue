@@ -31,6 +31,9 @@
         >
           {{ priorityLabel }}
         </n-tag>
+        <n-tag v-if="serverLabel" size="small">
+          {{ serverLabel }}
+        </n-tag>
         <n-tag v-if="task.cli_type" size="small" type="info">
           {{ task.cli_type }}
         </n-tag>
@@ -79,6 +82,7 @@
 import { ref, computed } from 'vue'
 import type { Task } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
+import { useServerStore } from '@/stores/server'
 
 const props = defineProps<{
   task: Task
@@ -94,6 +98,7 @@ const emit = defineEmits<{
 
 const isDragging = ref(false)
 const terminalStore = useTerminalStore()
+const serverStore = useServerStore()
 
 const relatedTerminals = computed(() =>
   terminalStore.terminals.filter(t => t.task_id === props.task.id)
@@ -127,6 +132,12 @@ const aiStatusType = computed(() => {
   if (status === 'executing') return 'info'
   if (status === 'waiting_approval') return 'error'
   return 'success'
+})
+
+const serverLabel = computed(() => {
+  if (props.task.server?.name) return props.task.server.name
+  if (!props.task.server_id) return null
+  return serverStore.getServerName(props.task.server_id) || props.task.server_id
 })
 
 function activateTerminal(id: string) {

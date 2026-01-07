@@ -20,7 +20,7 @@ func InitDB(dsn string) error {
 	}
 
 	// 自动迁移
-	return DB.AutoMigrate(
+	if err := DB.AutoMigrate(
 		&User{},
 		&Task{},
 		&Comment{},
@@ -35,7 +35,11 @@ func InitDB(dsn string) error {
 		&AgentConfig{},
 		&RuleSet{},
 		&Message{},
-	)
+	); err != nil {
+		return err
+	}
+
+	return RunMigrations(DB)
 }
 
 // User 用户模型
@@ -55,6 +59,7 @@ type User struct {
 type Task struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
 	UserID      string     `gorm:"index" json:"user_id"`
+	ServerID    *string    `gorm:"index" json:"server_id"`
 	Title       string     `gorm:"not null" json:"title"`
 	Description string     `json:"description"`
 	Status      string     `gorm:"default:todo;index" json:"status"` // todo, in_progress, done, archived
@@ -107,6 +112,7 @@ type AISession struct {
 type ApprovalRecord struct {
 	ID            string    `gorm:"primaryKey" json:"id"`
 	TerminalID    string    `gorm:"not null;index" json:"terminal_id"`
+	ServerID      *string   `gorm:"index" json:"server_id"`
 	AISessionID   *string   `gorm:"index" json:"ai_session_id"`
 	PromptType    string    `json:"prompt_type"` // yes_no, permission, other
 	PromptContent string    `json:"prompt_content"`
@@ -182,6 +188,7 @@ type Message struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
 	TerminalID  *string    `gorm:"index" json:"terminal_id"`
 	TaskID      *string    `gorm:"index" json:"task_id"`
+	ServerID    *string    `gorm:"index" json:"server_id"`
 	Type        string     `gorm:"not null;index" json:"type"` // approval_needed, blocked, info, warning, error
 	Title       string     `gorm:"not null" json:"title"`
 	Content     string     `json:"content"`

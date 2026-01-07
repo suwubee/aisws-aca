@@ -29,6 +29,11 @@ const routes = [
         component: () => import('@/views/LogManagement.vue')
       },
       {
+        path: 'terminals',
+        name: 'Terminals',
+        component: () => import('@/views/Terminals.vue')
+      },
+      {
         path: 'servers',
         name: 'Servers',
         component: () => import('@/views/Servers.vue')

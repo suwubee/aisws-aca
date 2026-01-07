@@ -107,6 +107,11 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '📋')
   },
   {
+    label: '终端管理',
+    key: 'terminals',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
+  },
+  {
     label: '系统设置',
     key: 'settings',
     icon: () => h('span', { style: 'font-size: 18px' }, '⚙️')
@@ -124,6 +129,7 @@ const activeMenu = computed(() => {
   if (path === '/') return 'dashboard'
   if (path.startsWith('/servers')) return 'servers'
   if (path.startsWith('/logs')) return 'logs'
+  if (path.startsWith('/terminals')) return 'terminals'
   if (path.startsWith('/settings')) return 'settings'
   return 'dashboard'
 })
@@ -133,6 +139,7 @@ const currentPageName = computed(() => {
   if (path === '/') return null
   if (path.startsWith('/servers')) return '服务器管理'
   if (path.startsWith('/logs')) return '日志管理'
+  if (path.startsWith('/terminals')) return '终端管理'
   if (path.startsWith('/settings')) return '系统设置'
   return null
 })
@@ -147,6 +154,9 @@ function handleMenuChange(key: string) {
       break
     case 'logs':
       router.push('/logs')
+      break
+    case 'terminals':
+      router.push('/terminals')
       break
     case 'settings':
       router.push('/settings')

@@ -24,6 +24,10 @@
             <n-descriptions-item label="优先级">
               <n-tag :type="priorityType">{{ priorityLabel }}</n-tag>
             </n-descriptions-item>
+            <n-descriptions-item label="服务器">
+              <n-tag v-if="serverLabel" type="info">{{ serverLabel }}</n-tag>
+              <span v-else>-</span>
+            </n-descriptions-item>
             <n-descriptions-item label="创建时间">
               {{ formatTime(task.created_at) }}
             </n-descriptions-item>
@@ -119,12 +123,14 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, NTag } from 'naive-ui'
 import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
+import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
 
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const taskStore = useTaskStore()
+const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
 
 const loading = ref(true)
@@ -163,6 +169,12 @@ const priorityLabel = computed(() => {
 const priorityType = computed(() => {
   const types: ('default' | 'info' | 'warning' | 'error')[] = ['default', 'info', 'warning', 'error']
   return types[task.value?.priority || 0]
+})
+
+const serverLabel = computed(() => {
+  if (task.value?.server?.name) return task.value.server.name
+  if (!task.value?.server_id) return null
+  return serverStore.getServerName(task.value.server_id) || task.value.server_id
 })
 
 const approvalColumns = [
@@ -230,6 +242,7 @@ function handleOpenTerminal(terminalId: string) {
 }
 
 onMounted(() => {
+  serverStore.fetchServers().catch(() => {})
   loadTaskDetail()
 })
 </script>

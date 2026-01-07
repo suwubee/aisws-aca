@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
@@ -8,6 +10,7 @@ import (
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type TaskController struct {
@@ -26,6 +29,7 @@ type CreateTaskRequest struct {
 	Priority    int     `json:"priority"`
 	Status      string  `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
+	ServerID    *string `json:"server_id"`
 	// 自动化配置
 	WorkDir       string `json:"work_dir"`
 	CLIType       string `json:"cli_type"`
@@ -51,6 +55,16 @@ type UpdateTaskRequest struct {
 type MoveTaskRequest struct {
 	Status     string  `json:"status"`
 	OrderIndex float64 `json:"order_index"`
+}
+
+type TaskServerInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type TaskListItem struct {
+	model.Task
+	Server *TaskServerInfo `json:"server,omitempty"`
 }
 
 // CreateTask 创建任务
@@ -79,6 +93,21 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		autoCreateDir = *req.AutoCreateDir
 	}
 
+	var serverID *string
+	if req.ServerID != nil {
+		trimmed := strings.TrimSpace(*req.ServerID)
+		if trimmed != "" {
+			var server model.SSHServer
+			if err := model.DB.First(&server, "id = ?", trimmed).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Server not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
+			}
+			serverID = &trimmed
+		}
+	}
+
 	task := model.Task{
 		ID:            uuid.New().String(),
 		Title:         req.Title,
@@ -86,6 +115,7 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		Status:        status,
 		Priority:      req.Priority,
 		RuleSetID:     req.RuleSetID,
+		ServerID:      serverID,
 		OrderIndex:    float64(time.Now().UnixNano()),
 		WorkDir:       req.WorkDir,
 		CLIType:       cliType,
@@ -99,6 +129,52 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 	}
 
 	return c.Status(201).JSON(fiber.Map{"item": task})
+}
+
+func enrichTasksWithServerInfo(tasks []model.Task) ([]TaskListItem, error) {
+	serverInfoByID := map[string]*TaskServerInfo{}
+	uniqueServerIDs := map[string]struct{}{}
+	serverIDs := make([]string, 0)
+
+	for _, t := range tasks {
+		if t.ServerID == nil {
+			continue
+		}
+		serverID := strings.TrimSpace(*t.ServerID)
+		if serverID == "" {
+			continue
+		}
+		if _, ok := uniqueServerIDs[serverID]; ok {
+			continue
+		}
+		uniqueServerIDs[serverID] = struct{}{}
+		serverIDs = append(serverIDs, serverID)
+	}
+
+	if len(serverIDs) > 0 {
+		var servers []model.SSHServer
+		if err := model.DB.Select("id", "name").Where("id IN ?", serverIDs).Find(&servers).Error; err != nil {
+			return nil, err
+		}
+
+		for _, s := range servers {
+			serverInfoByID[s.ID] = &TaskServerInfo{ID: s.ID, Name: s.Name}
+		}
+	}
+
+	items := make([]TaskListItem, len(tasks))
+	for i, t := range tasks {
+		item := TaskListItem{Task: t}
+		if t.ServerID != nil {
+			serverID := strings.TrimSpace(*t.ServerID)
+			if serverID != "" {
+				item.Server = serverInfoByID[serverID]
+			}
+		}
+		items[i] = item
+	}
+
+	return items, nil
 }
 
 // ListTasks 获取任务列表
@@ -120,9 +196,16 @@ func (ctrl *TaskController) ListTasks(c *fiber.Ctx) error {
 	}
 
 	var tasks []model.Task
-	query.Order("status, order_index").Find(&tasks)
+	if err := query.Order("status, order_index").Find(&tasks).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
+	}
 
-	return c.JSON(fiber.Map{"items": tasks})
+	items, err := enrichTasksWithServerInfo(tasks)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
+	}
+
+	return c.JSON(fiber.Map{"items": items})
 }
 
 // GetTask 获取任务详情
@@ -288,21 +371,28 @@ func (ctrl *TaskController) MoveTask(c *fiber.Ctx) error {
 // GetTasksByStatus 按状态获取任务（用于Kanban）
 func (ctrl *TaskController) GetTasksByStatus(c *fiber.Ctx) error {
 	var tasks []model.Task
-	model.DB.Order("order_index").Find(&tasks)
+	if err := model.DB.Order("order_index").Find(&tasks).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
+	}
+
+	items, err := enrichTasksWithServerInfo(tasks)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
+	}
 
 	// 按状态分组
-	grouped := map[string][]model.Task{
+	grouped := map[string][]TaskListItem{
 		"todo":        {},
 		"in_progress": {},
 		"done":        {},
 		"archived":    {},
 	}
 
-	for _, task := range tasks {
-		if _, ok := grouped[task.Status]; ok {
-			grouped[task.Status] = append(grouped[task.Status], task)
+	for _, item := range items {
+		if _, ok := grouped[item.Status]; ok {
+			grouped[item.Status] = append(grouped[item.Status], item)
 		} else {
-			grouped["todo"] = append(grouped["todo"], task)
+			grouped["todo"] = append(grouped["todo"], item)
 		}
 	}
 

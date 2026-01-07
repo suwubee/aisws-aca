@@ -86,6 +86,11 @@ export interface ChangePasswordRequest {
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived'
 
+export interface TaskServer {
+  id: string
+  name: string
+}
+
 export interface Task {
   id: string
   user_id?: string
@@ -95,6 +100,8 @@ export interface Task {
   priority: number
   order_index: number
   rule_set_id: string | null
+  server_id?: string | null
+  server?: TaskServer | null
   created_at: ISODateTimeString
   updated_at: ISODateTimeString
   completed_at: ISODateTimeString | null
@@ -136,6 +143,7 @@ export interface CreateTaskRequest {
   priority?: number
   status?: TaskStatus | string
   rule_set_id?: string | null
+  server_id?: string | null
   work_dir?: string
   cli_type?: string
   initial_prompt?: string
@@ -149,6 +157,7 @@ export interface UpdateTaskRequest {
   status?: string
   priority?: number
   rule_set_id?: string | null
+  server_id?: string | null
   work_dir?: string
   cli_type?: string
   initial_prompt?: string

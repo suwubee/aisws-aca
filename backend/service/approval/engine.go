@@ -379,7 +379,7 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 
 				// 强制转换：Claude Code 选择提示需要回车
 				if action == "approve" && isClaudeCodeSelectPrompt(output) {
-					result.Input = "\r"  // 使用 \r 而不是 \n
+					result.Input = "\r" // 使用 \r 而不是 \n
 				}
 
 				// 根据AI决策发送通知
@@ -403,9 +403,13 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 
 // sendNotification 发送通知消息
 func (e *Engine) sendNotification(terminalID, msgType, title, content, context string) {
+	taskID, serverID := resolveServerAssociationFromTerminal(terminalID)
+
 	msg := &model.Message{
 		ID:         uuid.New().String(),
 		TerminalID: &terminalID,
+		TaskID:     taskID,
+		ServerID:   serverID,
 		Type:       msgType,
 		Title:      title,
 		Content:    content,
@@ -438,9 +442,11 @@ func (e *Engine) RecordApproval(terminalID string, aiSessionID *string, promptTy
 	ruleMatched = strings.TrimSpace(ruleMatched)
 	aiDecision = strings.TrimSpace(aiDecision)
 
+	_, serverID := resolveServerAssociationFromTerminal(terminalID)
 	record := &model.ApprovalRecord{
 		ID:            uuid.New().String(),
 		TerminalID:    terminalID,
+		ServerID:      serverID,
 		AISessionID:   aiSessionID,
 		PromptType:    promptType,
 		PromptContent: promptContent,
@@ -454,6 +460,41 @@ func (e *Engine) RecordApproval(terminalID string, aiSessionID *string, promptTy
 }
 
 // 辅助函数
+
+func resolveServerAssociationFromTerminal(terminalID string) (*string, *string) {
+	terminalID = strings.TrimSpace(terminalID)
+	if terminalID == "" {
+		return nil, nil
+	}
+
+	var terminal model.TerminalSession
+	if err := model.DB.Select("task_id").First(&terminal, "id = ?", terminalID).Error; err != nil {
+		return nil, nil
+	}
+
+	if terminal.TaskID == nil {
+		return nil, nil
+	}
+	trimmedTaskID := strings.TrimSpace(*terminal.TaskID)
+	if trimmedTaskID == "" {
+		return nil, nil
+	}
+	taskID := &trimmedTaskID
+
+	var task model.Task
+	if err := model.DB.Select("server_id").First(&task, "id = ?", trimmedTaskID).Error; err != nil {
+		return taskID, nil
+	}
+	if task.ServerID == nil {
+		return taskID, nil
+	}
+	serverID := strings.TrimSpace(*task.ServerID)
+	if serverID == "" {
+		return taskID, nil
+	}
+
+	return taskID, &serverID
+}
 
 var approvalANSIRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[PX^_].*?\x1b\\`)
 var approvalANSIRemnantRegex = regexp.MustCompile(`\[[0-9;]{1,20}[a-zA-Z]`)

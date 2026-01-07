@@ -26,53 +26,7 @@
 
     <!-- Create Task Modal -->
     <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: 600px">
-      <n-form :model="newTask">
-        <n-form-item label="标题" required>
-          <n-input v-model:value="newTask.title" placeholder="任务标题" />
-        </n-form-item>
-        <n-form-item label="描述">
-          <n-input
-            v-model:value="newTask.description"
-            type="textarea"
-            placeholder="任务描述"
-          />
-        </n-form-item>
-        <n-form-item label="优先级">
-          <n-radio-group v-model:value="newTask.priority">
-            <n-radio :value="0">低</n-radio>
-            <n-radio :value="1">中</n-radio>
-            <n-radio :value="2">高</n-radio>
-            <n-radio :value="3">紧急</n-radio>
-          </n-radio-group>
-        </n-form-item>
-
-        <n-divider>自动化配置（可选）</n-divider>
-
-        <n-form-item label="工作目录">
-          <n-input v-model:value="newTask.work_dir" placeholder="/path/to/project" />
-        </n-form-item>
-        <n-form-item label="CLI 类型">
-          <n-select
-            v-model:value="newTask.cli_type"
-            :options="cliOptions"
-            placeholder="选择 CLI 工具"
-          />
-        </n-form-item>
-        <n-form-item label="初始提示">
-          <n-input
-            v-model:value="newTask.initial_prompt"
-            type="textarea"
-            :rows="3"
-            placeholder="启动后自动输入的提示内容"
-          />
-        </n-form-item>
-        <n-form-item label="选项">
-          <n-space>
-            <n-checkbox v-model:checked="newTask.auto_create_dir">自动创建目录</n-checkbox>
-            <n-checkbox v-model:checked="newTask.auto_start">创建后自动启动</n-checkbox>
-          </n-space>
-        </n-form-item>
-      </n-form>
+      <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
         <n-button type="primary" @click="handleCreateTask">创建</n-button>
@@ -85,14 +39,17 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
+import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
 import Kanban from '@/components/Kanban.vue'
 import AgentMonitor from '@/components/AgentMonitor.vue'
 import AgentStats from '@/components/AgentStats.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
+import TaskForm from '@/components/TaskForm.vue'
 
 const message = useMessage()
 const taskStore = useTaskStore()
+const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
 
 const showCreateTask = ref(false)
@@ -100,6 +57,7 @@ const newTask = reactive({
   title: '',
   description: '',
   priority: 1,
+  server_id: null as string | null,
   work_dir: '',
   cli_type: '',
   initial_prompt: '',
@@ -107,16 +65,13 @@ const newTask = reactive({
   auto_start: false
 })
 
-const cliOptions = [
-  { label: 'Claude Code', value: 'claude' },
-  { label: 'Codex', value: 'codex' },
-  { label: 'Gemini CLI', value: 'gemini' }
-]
-
 onMounted(async () => {
   await Promise.all([
     taskStore.fetchTasks(),
-    terminalStore.fetchTerminals()
+    terminalStore.fetchTerminals(),
+    serverStore.fetchServers().catch(() => {
+      message.warning('加载服务器列表失败')
+    })
   ])
 })
 
@@ -131,6 +86,7 @@ async function handleCreateTask() {
       title: newTask.title,
       description: newTask.description,
       priority: newTask.priority,
+      server_id: newTask.server_id || undefined,
       work_dir: newTask.work_dir,
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
@@ -158,6 +114,7 @@ async function handleCreateTask() {
     newTask.title = ''
     newTask.description = ''
     newTask.priority = 1
+    newTask.server_id = null
     newTask.work_dir = ''
     newTask.cli_type = ''
     newTask.initial_prompt = ''
