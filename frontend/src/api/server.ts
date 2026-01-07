@@ -60,6 +60,10 @@ export function getServers() {
   return api.get('/servers')
 }
 
+export function getServer(id: string) {
+  return api.get(`/servers/${id}`)
+}
+
 export function createServer(data: CreateSSHServerRequest) {
   return api.post('/servers', data)
 }

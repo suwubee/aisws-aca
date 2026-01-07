@@ -103,6 +103,10 @@ func main() {
 	apiGroup.Post("/auth/reset-data", authController.ResetData)
 	apiGroup.Post("/auth/register", middleware.RequireRole("admin"), authController.Register)
 
+	// 用户管理API（仅管理员）
+	userController := api.NewUserController()
+	userController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+
 	// 终端API (注册在apiGroup上，继承auth中间件)
 	terminalController := api.NewTerminalController(terminalManager)
 	terminalController.RegisterRoutes(apiGroup)

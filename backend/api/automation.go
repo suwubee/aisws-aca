@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
@@ -8,6 +9,7 @@ import (
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // AutomationController 自动化控制器
@@ -576,6 +578,87 @@ func (ctrl *AutomationController) DeleteAIProvider(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "AI provider deleted"})
 }
 
+// ===== Agent Config APIs =====
+
+type UpdateAgentConfigsRequest struct {
+	Items []model.AgentConfig `json:"items"`
+}
+
+func normalizeStringSlice(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+// ListAgentConfigs 获取代理配置列表
+func (ctrl *AutomationController) ListAgentConfigs(c *fiber.Ctx) error {
+	var configs []model.AgentConfig
+	if err := model.DB.Order("priority desc").Find(&configs).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list agent configs"})
+	}
+
+	return c.JSON(fiber.Map{"items": configs})
+}
+
+// UpdateAgentConfigs 更新代理配置
+func (ctrl *AutomationController) UpdateAgentConfigs(c *fiber.Ctx) error {
+	var req UpdateAgentConfigsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	items := req.Items
+	normalized := make([]model.AgentConfig, 0, len(items))
+	seenTypes := make(map[string]struct{}, len(items))
+
+	for _, item := range items {
+		agentType := strings.TrimSpace(item.AgentType)
+		if agentType == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "agent_type is required"})
+		}
+		if _, ok := seenTypes[agentType]; ok {
+			return c.Status(400).JSON(fiber.Map{"error": "Duplicate agent_type: " + agentType})
+		}
+		seenTypes[agentType] = struct{}{}
+
+		displayName := strings.TrimSpace(item.DisplayName)
+		detectModes := normalizeStringSlice([]string(item.DetectModes))
+
+		normalized = append(normalized, model.AgentConfig{
+			AgentType:   agentType,
+			DisplayName: displayName,
+			Enabled:     item.Enabled,
+			Priority:    item.Priority,
+			DetectModes: model.StringArray(detectModes),
+		})
+	}
+
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM agent_configs").Error; err != nil {
+			return err
+		}
+		if len(normalized) == 0 {
+			return nil
+		}
+		return tx.Create(&normalized).Error
+	}); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update agent configs"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Agent configs updated"})
+}
+
 // ===== Message APIs =====
 
 // ListMessages 获取消息列表
@@ -779,6 +862,10 @@ func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
 
 	// 默认规则模板
 	automation.Get("/patterns/defaults", ctrl.GetDefaultPatterns)
+
+	// AI代理配置
+	automation.Get("/agent-configs", ctrl.ListAgentConfigs)
+	automation.Put("/agent-configs", ctrl.UpdateAgentConfigs)
 
 	// AI Provider配置
 	automation.Get("/ai-providers", ctrl.ListAIProviders)

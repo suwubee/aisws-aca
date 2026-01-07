@@ -32,6 +32,7 @@ func InitDB(dsn string) error {
 		&ApprovalRecord{},
 		&Log{},
 		&AIProviderConfig{},
+		&AgentConfig{},
 		&RuleSet{},
 		&Message{},
 	)
