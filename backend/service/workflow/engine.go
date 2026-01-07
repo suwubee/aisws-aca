@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,18 +64,20 @@ type WorkflowEngine struct {
 	automation automationService
 
 	localExecutor commandExecutor
-	now          func() time.Time
-	startAsync   func(fn func())
+	now           func() time.Time
+	startAsync    func(fn func())
+	newAgent      func(engine *WorkflowEngine) *WorkflowAgent
 }
 
 // NewWorkflowEngine creates a workflow engine.
 func NewWorkflowEngine(sshManager *sshservice.SSHManager, automation *taskservice.AutomationService) *WorkflowEngine {
 	engine := &WorkflowEngine{
-		sshManager:     sshManager,
-		automation:     automation,
-		localExecutor:  localShellExecutor{},
-		now:            time.Now,
-		startAsync:     func(fn func()) { go fn() },
+		sshManager:    sshManager,
+		automation:    automation,
+		localExecutor: localShellExecutor{},
+		now:           time.Now,
+		startAsync:    func(fn func()) { go fn() },
+		newAgent:      NewWorkflowAgent,
 	}
 	return engine
 }
@@ -110,11 +113,18 @@ type runLogEntry struct {
 type executionContext struct {
 	currentServerID string
 	lastCondition   *bool
+	agent           *WorkflowAgent
 }
 
 type nodeExecutionResult struct {
 	Output          string
 	ConditionResult *bool
+}
+
+type taskExecutionInfo struct {
+	TaskID     string
+	TerminalID string
+	Output     string
 }
 
 // RunWorkflow creates a WorkflowRun and starts workflow execution in background.
@@ -204,6 +214,11 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 	startNodeID := findStartNodeID(nodes, edges)
 
 	ctx := &executionContext{}
+	if e.newAgent != nil {
+		ctx.agent = e.newAgent(e)
+	} else {
+		ctx.agent = NewWorkflowAgent(e)
+	}
 	maxSteps := len(nodes) * 4
 	steps := 0
 
@@ -233,7 +248,7 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 			NodeType:  node.Type,
 		})
 
-		result, err := e.executeNode(node, ctx)
+		result, err := e.executeNode(runID, node, ctx)
 		if err != nil {
 			e.appendRunLog(runID, runLogEntry{
 				Timestamp: e.now(),
@@ -286,7 +301,7 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 	e.completeRun(runID)
 }
 
-func (e *WorkflowEngine) executeNode(node workflowNode, ctx *executionContext) (nodeExecutionResult, error) {
+func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *executionContext) (nodeExecutionResult, error) {
 	switch node.Type {
 	case model.WorkflowNodeTypeServer:
 		serverID := strings.TrimSpace(node.ServerID)
@@ -309,9 +324,22 @@ func (e *WorkflowEngine) executeNode(node workflowNode, ctx *executionContext) (
 		}
 		return nodeExecutionResult{Output: output}, nil
 	case model.WorkflowNodeTypeTask:
-		output, err := e.runTask(node, ctx)
+		info, err := e.runTask(node, ctx)
 		if err != nil {
-			return nodeExecutionResult{Output: output}, err
+			return nodeExecutionResult{Output: info.Output}, err
+		}
+
+		if ctx == nil || ctx.agent == nil {
+			return nodeExecutionResult{Output: info.Output}, nil
+		}
+
+		decision, monitorErr := ctx.agent.MonitorTask(context.Background(), runID, node.ID, node.Type, info.TaskID, info.TerminalID)
+		output := info.Output
+		if decision != nil && strings.TrimSpace(decision.Reasoning) != "" {
+			output = strings.TrimSpace(output + "\nAgent: " + decision.Reasoning)
+		}
+		if monitorErr != nil {
+			return nodeExecutionResult{Output: output}, monitorErr
 		}
 		return nodeExecutionResult{Output: output}, nil
 	case model.WorkflowNodeTypeAI:
@@ -354,9 +382,9 @@ func (e *WorkflowEngine) runCommand(node workflowNode, command string, ctx *exec
 	return e.sshManager.ExecuteCommand(serverID, cmd)
 }
 
-func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (string, error) {
+func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (taskExecutionInfo, error) {
 	if e.automation == nil {
-		return "", ErrTaskAutomationNotConfigured
+		return taskExecutionInfo{}, ErrTaskAutomationNotConfigured
 	}
 
 	taskID := getString(node.Config, "task_id", "taskId")
@@ -364,15 +392,20 @@ func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (stri
 		var existing model.Task
 		if err := model.DB.First(&existing, "id = ?", taskID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return "", ErrTaskNotFound
+				return taskExecutionInfo{}, ErrTaskNotFound
 			}
-			return "", ErrTaskQueryFailed
+			return taskExecutionInfo{}, ErrTaskQueryFailed
 		}
 		result, err := e.automation.StartTask(&existing)
 		if err != nil {
-			return "", err
+			return taskExecutionInfo{TaskID: existing.ID}, err
 		}
-		return fmt.Sprintf("Task started: %s (terminal=%s)", existing.ID, result.Terminal.ID()), nil
+		terminalID := ""
+		if result != nil && result.Terminal != nil {
+			terminalID = result.Terminal.ID()
+		}
+		output := fmt.Sprintf("Task started: %s (terminal=%s)", existing.ID, terminalID)
+		return taskExecutionInfo{TaskID: existing.ID, TerminalID: terminalID, Output: output}, nil
 	}
 
 	title := strings.TrimSpace(getString(node.Config, "title"))
@@ -404,9 +437,9 @@ func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (stri
 		var server model.SSHServer
 		if err := model.DB.Select("id").First(&server, "id = ?", sid).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return "", ErrServerNotFound
+				return taskExecutionInfo{}, ErrServerNotFound
 			}
-			return "", ErrServerQueryFailed
+			return taskExecutionInfo{}, ErrServerQueryFailed
 		}
 		serverID = &sid
 	}
@@ -427,15 +460,20 @@ func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (stri
 	}
 
 	if err := model.DB.Create(&taskModel).Error; err != nil {
-		return "", errors.New("failed to create task")
+		return taskExecutionInfo{}, errors.New("failed to create task")
 	}
 
 	result, err := e.automation.StartTask(&taskModel)
 	if err != nil {
-		return "", err
+		return taskExecutionInfo{TaskID: taskModel.ID}, err
 	}
 
-	return fmt.Sprintf("Task created and started: %s (terminal=%s)", taskModel.ID, result.Terminal.ID()), nil
+	terminalID := ""
+	if result != nil && result.Terminal != nil {
+		terminalID = result.Terminal.ID()
+	}
+	output := fmt.Sprintf("Task created and started: %s (terminal=%s)", taskModel.ID, terminalID)
+	return taskExecutionInfo{TaskID: taskModel.ID, TerminalID: terminalID, Output: output}, nil
 }
 
 func (e *WorkflowEngine) evaluateCondition(node workflowNode, ctx *executionContext) (bool, string, error) {
@@ -867,9 +905,9 @@ func (e *WorkflowEngine) completeRun(runID string) {
 	})
 
 	updates := map[string]any{
-		"status":         "completed",
+		"status":          "completed",
 		"current_node_id": nil,
-		"completed_at":   &now,
+		"completed_at":    &now,
 	}
 	_ = e.updateRun(runID, updates)
 

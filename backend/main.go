@@ -120,6 +120,10 @@ func main() {
 	workflowController := api.NewWorkflowController(cfg.Auth.JWTSecret, terminalManager)
 	workflowController.RegisterRoutes(apiGroup)
 
+	// 工作流模板API
+	workflowTemplateController := api.NewWorkflowTemplateController()
+	workflowTemplateController.RegisterRoutes(apiGroup)
+
 	// 评论API
 	commentController := api.NewCommentController()
 	commentController.RegisterRoutes(apiGroup)

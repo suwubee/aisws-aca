@@ -249,11 +249,28 @@ func TestWorkflowEngine_RunWorkflow_TaskNodeCreatesAndStartsTask(t *testing.T) {
 		t.Fatalf("create workflow: %v", err)
 	}
 
+	termID := "term-1"
+	if err := model.DB.Create(&model.Log{
+		ID:         "log-1",
+		TerminalID: &termID,
+		LogType:    "output",
+		Content:    "Task completed",
+		CreatedAt:  time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("create log: %v", err)
+	}
+
 	automation := &fakeAutomationService{}
 
 	engine := NewWorkflowEngine(nil, nil)
 	engine.automation = automation
 	engine.startAsync = func(fn func()) { fn() }
+	engine.newAgent = func(engine *WorkflowEngine) *WorkflowAgent {
+		agent := NewWorkflowAgent(engine)
+		agent.pollInterval = 1 * time.Millisecond
+		agent.maxWait = 250 * time.Millisecond
+		return agent
+	}
 
 	run, err := engine.RunWorkflow(workflow.ID)
 	if err != nil {
@@ -280,4 +297,3 @@ func TestWorkflowEngine_RunWorkflow_TaskNodeCreatesAndStartsTask(t *testing.T) {
 		t.Fatalf("expected status %q, got %q", "completed", dbRun.Status)
 	}
 }
-

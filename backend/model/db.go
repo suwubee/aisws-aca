@@ -24,6 +24,7 @@ func InitDB(dsn string) error {
 		&User{},
 		&Task{},
 		&Workflow{},
+		&WorkflowTemplate{},
 		&WorkflowNode{},
 		&WorkflowRun{},
 		&Comment{},
@@ -42,7 +43,15 @@ func InitDB(dsn string) error {
 		return err
 	}
 
-	return RunMigrations(DB)
+	if err := RunMigrations(DB); err != nil {
+		return err
+	}
+
+	if err := ensureBuiltinWorkflowTemplates(DB); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // User 用户模型
