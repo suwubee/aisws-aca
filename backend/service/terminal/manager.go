@@ -324,6 +324,8 @@ func (m *Manager) CloseSession(id string) error {
 		return nil
 	}
 
+	taskID := session.Metadata().TaskID
+
 	if err := session.Close(); err != nil {
 		return err
 	}
@@ -332,13 +334,57 @@ func (m *Manager) CloseSession(id string) error {
 
 	// 更新数据库
 	now := time.Now()
-	model.DB.Model(&model.TerminalSession{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":    "exited",
-		"closed_at": now,
-	})
+	if model.DB != nil {
+		if err := model.DB.Model(&model.TerminalSession{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status":    "exited",
+			"closed_at": now,
+		}).Error; err != nil {
+			utils.Warn("Failed to update session status to exited", zap.String("id", id), zap.Error(err))
+		}
+	}
+
+	m.completeTaskIfNeeded(taskID, id)
 
 	utils.Info("Closed terminal session", zap.String("id", id))
 	return nil
+}
+
+func (m *Manager) completeTaskIfNeeded(taskID *string, terminalID string) {
+	if taskID == nil {
+		return
+	}
+
+	id := strings.TrimSpace(*taskID)
+	if id == "" {
+		return
+	}
+
+	if model.DB == nil {
+		utils.Warn("Skip task auto-complete: database not initialized", zap.String("task_id", id), zap.String("terminal_id", terminalID))
+		return
+	}
+
+	now := time.Now()
+	result := model.DB.Model(&model.Task{}).Where("id = ? AND status = ?", id, "in_progress").Updates(map[string]interface{}{
+		"status":       "done",
+		"completed_at": now,
+		"updated_at":   now,
+	})
+	if result.Error != nil {
+		utils.Warn("Failed to auto-complete task on terminal close", zap.String("task_id", id), zap.String("terminal_id", terminalID), zap.Error(result.Error))
+		return
+	}
+
+	if result.RowsAffected == 0 {
+		return
+	}
+
+	utils.Info("Task status updated on terminal close",
+		zap.String("task_id", id),
+		zap.String("terminal_id", terminalID),
+		zap.String("from", "in_progress"),
+		zap.String("to", "done"),
+	)
 }
 
 // RenameSession 重命名会话

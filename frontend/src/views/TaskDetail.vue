@@ -122,6 +122,7 @@
 import { ref, computed, onMounted, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, NTag } from 'naive-ui'
+import { getServer } from '@/api/server'
 import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
@@ -138,6 +139,7 @@ const task = ref<Task | null>(null)
 const terminals = ref<TerminalSession[]>([])
 const logs = ref<any[]>([])
 const approvals = ref<any[]>([])
+const serverLoading = ref(false)
 
 const taskId = computed(() => route.params.id as string)
 
@@ -174,7 +176,9 @@ const priorityType = computed(() => {
 const serverLabel = computed(() => {
   if (task.value?.server?.name) return task.value.server.name
   if (!task.value?.server_id) return null
-  return serverStore.getServerName(task.value.server_id) || task.value.server_id
+  const cached = serverStore.getServerName(task.value.server_id)
+  if (cached) return cached
+  return serverLoading.value ? '加载中...' : task.value.server_id
 })
 
 const approvalColumns = [
@@ -205,10 +209,41 @@ async function loadTaskDetail() {
     terminals.value = detail.terminals || []
     logs.value = detail.logs || []
     approvals.value = detail.approvals || []
+
+    void ensureServerLoaded(detail.task.server_id)
   } catch (error) {
     message.error('加载任务详情失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function ensureServerLoaded(serverId?: string | null) {
+  if (!serverId) return
+  if (task.value?.server?.name) return
+
+  const cached = serverStore.getServerName(serverId)
+  if (cached) {
+    if (task.value) task.value.server = { id: serverId, name: cached }
+    return
+  }
+
+  if (serverLoading.value) return
+
+  serverLoading.value = true
+  try {
+    const { data } = await getServer(serverId)
+    const item = (data as any)?.item ?? data
+    const name = item?.name
+    const id = item?.id || serverId
+
+    if (typeof name === 'string' && name.trim()) {
+      if (task.value) task.value.server = { id, name: name.trim() }
+    }
+  } catch {
+    // ignore
+  } finally {
+    serverLoading.value = false
   }
 }
 
@@ -242,7 +277,6 @@ function handleOpenTerminal(terminalId: string) {
 }
 
 onMounted(() => {
-  serverStore.fetchServers().catch(() => {})
   loadTaskDetail()
 })
 </script>

@@ -65,6 +65,32 @@
     />
 
     <n-modal
+      v-model:show="showCreateTask"
+      preset="dialog"
+      :title="createTaskModalTitle"
+      style="width: 600px"
+      :mask-closable="!creatingTask"
+      :close-on-esc="!creatingTask"
+    >
+      <TaskForm
+        v-if="showCreateTask"
+        :model="newTask"
+        :disabled="creatingTask"
+      />
+      <template #action>
+        <n-space justify="space-between" align="center" style="width: 100%">
+          <n-checkbox v-model:checked="navigateToDashboardAfterCreate" :disabled="creatingTask">
+            创建后前往工作台
+          </n-checkbox>
+          <n-space>
+            <n-button :disabled="creatingTask" @click="closeCreateTask">取消</n-button>
+            <n-button type="primary" :loading="creatingTask" @click="handleCreateTask">创建</n-button>
+          </n-space>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
       v-model:show="showGroupModal"
       preset="dialog"
       title="新建分组"
@@ -138,7 +164,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NButton,
   NDataTable,
@@ -159,8 +186,15 @@ import {
 import BatchExecute from '@/components/BatchExecute.vue'
 import ServerForm from '@/components/ServerForm.vue'
 import SSHTerminal from '@/components/SSHTerminal.vue'
+import TaskForm from '@/components/TaskForm.vue'
+import type { TaskFormModel } from '@/components/TaskForm.vue'
+import { useTaskStore } from '@/stores/task'
+import { useTerminalStore } from '@/stores/terminal'
 
 const message = useMessage()
+const router = useRouter()
+const taskStore = useTaskStore()
+const terminalStore = useTerminalStore()
 
 const loading = ref(false)
 const servers = ref<SSHServer[]>([])
@@ -178,6 +212,28 @@ const showBatchExecute = ref(false)
 
 const testingId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
+
+const showCreateTask = ref(false)
+const creatingTask = ref(false)
+const navigateToDashboardAfterCreate = ref(false)
+const creatingForServer = ref<SSHServer | null>(null)
+const newTask = reactive<TaskFormModel>({
+  title: '',
+  description: '',
+  priority: 1,
+  server_id: null,
+  work_dir: '',
+  cli_type: '',
+  initial_prompt: '',
+  auto_create_dir: true,
+  auto_start: false
+})
+
+const createTaskModalTitle = computed(() => {
+  if (!creatingForServer.value) return '新建任务'
+  const name = creatingForServer.value.name || creatingForServer.value.host
+  return `新建任务（${name}）`
+})
 
 const showGroupModal = ref(false)
 const groupFormRef = ref<FormInst | null>(null)
@@ -265,7 +321,7 @@ const columns: DataTableColumns<SSHServer> = [
   {
     title: '操作',
     key: 'actions',
-    width: 280,
+    width: 360,
     render: (row) => h(NSpace, { size: 'small' }, () => [
       h(NButton, {
         size: 'tiny',
@@ -273,6 +329,12 @@ const columns: DataTableColumns<SSHServer> = [
         quaternary: true,
         onClick: () => openSshTerminal(row)
       }, () => '连接'),
+      h(NButton, {
+        size: 'tiny',
+        type: 'primary',
+        quaternary: true,
+        onClick: () => openCreateTask(row)
+      }, () => '创建任务'),
       h(NButton, {
         size: 'tiny',
         quaternary: true,
@@ -376,6 +438,78 @@ function closeAllSshTerminals() {
   showSshTerminal.value = false
   sshTerminals.value = []
   activeSshKey.value = null
+}
+
+function openCreateTask(server: SSHServer) {
+  creatingForServer.value = server
+  newTask.server_id = server.id
+  showCreateTask.value = true
+}
+
+function closeCreateTask() {
+  showCreateTask.value = false
+}
+
+watch(showCreateTask, (show) => {
+  if (show) return
+  creatingTask.value = false
+  creatingForServer.value = null
+})
+
+async function handleCreateTask() {
+  if (creatingTask.value) return
+  if (!newTask.title.trim()) {
+    message.warning('请输入任务标题')
+    return
+  }
+
+  creatingTask.value = true
+  try {
+    const task = await taskStore.createAutomationTask({
+      title: newTask.title,
+      description: newTask.description,
+      priority: newTask.priority,
+      server_id: newTask.server_id || undefined,
+      work_dir: newTask.work_dir,
+      cli_type: newTask.cli_type || 'claude',
+      initial_prompt: newTask.initial_prompt,
+      auto_create_dir: newTask.auto_create_dir,
+      auto_start: newTask.auto_start
+    })
+    message.success('任务创建成功')
+    closeCreateTask()
+
+    if (newTask.auto_start && newTask.work_dir) {
+      try {
+        const result = await taskStore.startTask(task.id)
+        if (result.terminal_id) {
+          await terminalStore.fetchTerminals()
+          terminalStore.setActiveTerminal(result.terminal_id)
+        }
+        message.success('任务已自动启动')
+      } catch {
+        message.warning('任务创建成功，但自动启动失败')
+      }
+    }
+
+    newTask.title = ''
+    newTask.description = ''
+    newTask.priority = 1
+    newTask.server_id = null
+    newTask.work_dir = ''
+    newTask.cli_type = ''
+    newTask.initial_prompt = ''
+    newTask.auto_create_dir = true
+    newTask.auto_start = false
+
+    if (navigateToDashboardAfterCreate.value) {
+      router.push('/')
+    }
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '创建任务失败')
+  } finally {
+    creatingTask.value = false
+  }
 }
 
 async function fetchAll() {

@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var Logger *zap.Logger
+var Logger = zap.NewNop()
 
 func InitLogger(level, file string) error {
 	var err error

@@ -14,7 +14,7 @@
                 v-model:value="keyword"
                 size="small"
                 clearable
-                placeholder="搜索标题 / 任务ID / PID / 命令..."
+                placeholder="搜索标题 / 任务名 / 任务ID / PID / 命令..."
                 style="width: 260px"
               />
               <n-select
@@ -87,10 +87,12 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { terminalApi, type Terminal as TerminalSession } from '@/api'
+import { useTaskStore } from '@/stores/task'
 import Terminal from '@/components/Terminal.vue'
 import TerminalLogs from '@/components/TerminalLogs.vue'
 
 const message = useMessage()
+const taskStore = useTaskStore()
 
 const loading = ref(false)
 const terminals = ref<TerminalSession[]>([])
@@ -105,6 +107,16 @@ const statusOptions = [
   { label: '已退出', value: 'exited' }
 ]
 
+const taskTitleMap = computed(() => {
+  const map = new Map<string, string>()
+  taskStore.tasks.forEach(t => map.set(t.id, t.title))
+  return map
+})
+
+function getTaskTitle(taskId: string) {
+  return taskTitleMap.value.get(taskId) || taskId.slice(0, 8)
+}
+
 const filteredTerminals = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
 
@@ -118,6 +130,7 @@ const filteredTerminals = computed(() => {
       t.title,
       t.id,
       t.task_id || '',
+      t.task_id ? getTaskTitle(t.task_id) : '',
       String(t.pid || ''),
       t.metadata?.running_command || ''
     ].join(' ').toLowerCase()
@@ -224,7 +237,7 @@ const columns: DataTableColumns<TerminalSession> = [
     key: 'task_id',
     width: 120,
     ellipsis: { tooltip: true },
-    render: (row) => row.task_id ? row.task_id : '—'
+    render: (row) => row.task_id ? getTaskTitle(row.task_id) : '—'
   },
   {
     title: '命令',
@@ -287,6 +300,7 @@ async function fetchTerminals() {
 
 onMounted(() => {
   fetchTerminals()
+  taskStore.fetchTasks().catch(() => {})
 })
 </script>
 
