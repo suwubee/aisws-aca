@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 
+	"github.com/ai-coding-assistant/config"
+	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
@@ -262,7 +264,8 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 
 // RegisterWebSocket 注册WebSocket路由（需要单独处理）
 func (ctrl *TerminalController) RegisterWebSocket(app *fiber.App) {
-	app.Get("/api/terminal/ws", websocket.New(ctrl.HandleWebSocket))
+	cfg := config.Load()
+	app.Get("/api/terminal/ws", middleware.AuthMiddleware(&cfg.Auth), websocket.New(ctrl.HandleWebSocket))
 }
 
 // GetLogs 获取终端日志

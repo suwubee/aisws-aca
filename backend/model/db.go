@@ -24,6 +24,7 @@ func InitDB(dsn string) error {
 		&User{},
 		&Task{},
 		&Comment{},
+		&Secret{},
 		&TerminalSession{},
 		&AISession{},
 		&ApprovalRecord{},

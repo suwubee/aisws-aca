@@ -124,6 +124,10 @@ func main() {
 	logExportController := api.NewLogExportController()
 	logExportController.RegisterRoutes(apiGroup)
 
+	// 凭据管理API（仅管理员）
+	secretController := api.NewSecretController(cfg.Auth.JWTSecret)
+	secretController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+
 	// 静态文件服务
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err == nil {
