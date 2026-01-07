@@ -102,6 +102,11 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
   },
   {
+    label: '工作流',
+    key: 'workflows',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🔁')
+  },
+  {
     label: '日志管理',
     key: 'logs',
     icon: () => h('span', { style: 'font-size: 18px' }, '📋')
@@ -128,6 +133,7 @@ const activeMenu = computed(() => {
   const path = route.path
   if (path === '/') return 'dashboard'
   if (path.startsWith('/servers')) return 'servers'
+  if (path.startsWith('/workflows')) return 'workflows'
   if (path.startsWith('/logs')) return 'logs'
   if (path.startsWith('/terminals')) return 'terminals'
   if (path.startsWith('/settings')) return 'settings'
@@ -138,6 +144,7 @@ const currentPageName = computed(() => {
   const path = route.path
   if (path === '/') return null
   if (path.startsWith('/servers')) return '服务器管理'
+  if (path.startsWith('/workflows')) return '工作流'
   if (path.startsWith('/logs')) return '日志管理'
   if (path.startsWith('/terminals')) return '终端管理'
   if (path.startsWith('/settings')) return '系统设置'
@@ -151,6 +158,9 @@ function handleMenuChange(key: string) {
       break
     case 'servers':
       router.push('/servers')
+      break
+    case 'workflows':
+      router.push('/workflows')
       break
     case 'logs':
       router.push('/logs')

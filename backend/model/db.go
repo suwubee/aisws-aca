@@ -23,6 +23,9 @@ func InitDB(dsn string) error {
 	if err := DB.AutoMigrate(
 		&User{},
 		&Task{},
+		&Workflow{},
+		&WorkflowNode{},
+		&WorkflowRun{},
 		&Comment{},
 		&Secret{},
 		&SSHServer{},
