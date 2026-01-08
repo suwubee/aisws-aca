@@ -408,6 +408,20 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
 	}
 
+	// 如果任务已经在进行中，返回现有终端信息而不是错误
+	if taskModel.Status == "in_progress" {
+		var terminal model.TerminalSession
+		if err := model.DB.Where("task_id = ?", id).Order("created_at desc").First(&terminal).Error; err == nil {
+			return c.JSON(fiber.Map{
+				"message":     "Task already running",
+				"task":        taskModel,
+				"terminal_id": terminal.ID,
+				"work_dir":    taskModel.WorkDir,
+				"cli_started": true,
+			})
+		}
+	}
+
 	result, err := ctrl.automationService.StartTask(&taskModel)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{

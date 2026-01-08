@@ -266,6 +266,11 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 	}
 	result.CLIStarted = true
 
+	// 广播AI日志
+	if termSession, ok := session.(*terminal.Session); ok {
+		termSession.BroadcastAILog("action", fmt.Sprintf("启动 %s CLI", cliConfig.Type))
+	}
+
 	// 5. 如果有初始提示，等待 CLI 启动后输入
 	if task.InitialPrompt != "" {
 		// 使用detector检测CLI是否准备好
@@ -300,6 +305,13 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 
 		if !cliReady {
 			utils.Warn("CLI ready timeout, sending prompt anyway")
+			if termSession, ok := session.(*terminal.Session); ok {
+				termSession.BroadcastAILog("info", "CLI就绪检测超时，继续发送提示")
+			}
+		} else {
+			if termSession, ok := session.(*terminal.Session); ok {
+				termSession.BroadcastAILog("info", "CLI已就绪，准备发送提示")
+			}
 		}
 
 		// 获取 tmux 会话名称
@@ -316,22 +328,37 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			// 发送提示内容（字面量模式）
 			if err := sendTmuxKeysToTarget(target, task.InitialPrompt, true); err != nil {
 				utils.Warn("Failed to send prompt via tmux", zap.Error(err))
+				if termSession, ok := session.(*terminal.Session); ok {
+					termSession.BroadcastAILog("error", fmt.Sprintf("发送提示失败: %v", err))
+				}
 			} else {
 				utils.Info("Prompt sent via tmux", zap.String("target", target))
+				if termSession, ok := session.(*terminal.Session); ok {
+					termSession.BroadcastAILogWithInput("action", "发送提示内容", "text", task.InitialPrompt)
+				}
 			}
 
 			sleep(300 * time.Millisecond)
 
 			// 发送回车键 - 使用 C-m (Ctrl+M = CR = \r) 而不是 "Enter" 键名
-			// 因为 "Enter" 键名在某些 tmux 版本/配置下可能不等价于 \r
 			if err := sendTmuxKeysToTarget(target, "C-m", false); err != nil {
 				utils.Warn("Failed to send Enter via tmux", zap.Error(err))
 				// 回退：直接写入 PTY
 				if err := session.Write([]byte("\r")); err != nil {
 					utils.Warn("Failed to send Enter via PTY fallback", zap.Error(err))
+					if termSession, ok := session.(*terminal.Session); ok {
+						termSession.BroadcastAILog("error", "发送回车失败")
+					}
+				} else {
+					if termSession, ok := session.(*terminal.Session); ok {
+						termSession.BroadcastAILogWithInput("action", "发送回车(PTY)", "key", "Enter")
+					}
 				}
 			} else {
 				utils.Info("Enter (C-m) sent via tmux")
+				if termSession, ok := session.(*terminal.Session); ok {
+					termSession.BroadcastAILogWithInput("action", "发送回车，任务开始执行", "key", "Ctrl+M")
+				}
 			}
 		} else {
 			// 回退：直接写入 PTY

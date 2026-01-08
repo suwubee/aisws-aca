@@ -41,8 +41,9 @@ const (
 	StreamEventData     StreamEventType = "data"
 	StreamEventMetadata StreamEventType = "metadata"
 	StreamEventExit     StreamEventType = "exit"
-	StreamEventApproval StreamEventType = "approval" // 新增：审批事件
-	StreamEventMessage  StreamEventType = "message"  // 新增：消息事件
+	StreamEventApproval StreamEventType = "approval" // 审批事件
+	StreamEventMessage  StreamEventType = "message"  // 消息事件
+	StreamEventAILog    StreamEventType = "ai_log"   // AI思考日志
 )
 
 // StreamEvent 流事件
@@ -52,7 +53,16 @@ type StreamEvent struct {
 	Metadata       *SessionMetadata `json:"metadata,omitempty"`
 	ExitCode       int              `json:"exit_code,omitempty"`
 	Message        string           `json:"message,omitempty"`
-	ApprovalResult *ApprovalEvent   `json:"approval_result,omitempty"` // 审批结果
+	ApprovalResult *ApprovalEvent   `json:"approval_result,omitempty"`
+	AILog          *AILogEvent      `json:"ai_log,omitempty"` // AI日志
+}
+
+// AILogEvent AI日志事件
+type AILogEvent struct {
+	Type      string `json:"type"`                 // thinking, action, decision, error, info
+	Message   string `json:"message"`              // 日志内容
+	InputType string `json:"input_type,omitempty"` // text, key, command
+	InputData string `json:"input_data,omitempty"` // 实际输入的数据
 }
 
 // ApprovalEvent 审批事件
@@ -209,7 +219,7 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 		dataBatchBuf:      make([]byte, 0, 8192),
 		dataBatchMaxWait:  16 * time.Millisecond, // 约60fps
 		recentLogs:        make(map[string]time.Time),
-		recentLogsWindow:  3 * time.Second, // 3秒内相同内容不重复记录
+		recentLogsWindow:  10 * time.Second, // 10秒内相同前缀内容不重复记录
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -833,6 +843,30 @@ func (s *Session) Metadata() *SessionMetadata {
 	return &meta
 }
 
+// BroadcastAILog 广播AI日志事件
+func (s *Session) BroadcastAILog(logType, message string) {
+	s.broadcast(StreamEvent{
+		Type: StreamEventAILog,
+		AILog: &AILogEvent{
+			Type:    logType,
+			Message: message,
+		},
+	})
+}
+
+// BroadcastAILogWithInput 广播带输入信息的AI日志事件
+func (s *Session) BroadcastAILogWithInput(logType, message, inputType, inputData string) {
+	s.broadcast(StreamEvent{
+		Type: StreamEventAILog,
+		AILog: &AILogEvent{
+			Type:      logType,
+			Message:   message,
+			InputType: inputType,
+			InputData: inputData,
+		},
+	})
+}
+
 // Setters
 func (s *Session) SetTitle(title string) {
 	s.metaMutex.Lock()
@@ -1232,9 +1266,18 @@ func (s *Session) addLog(logType, content string) {
 		return
 	}
 
-	// 日志去重：在时间窗口内相同内容不重复记录
+	// 日志去重：在时间窗口内相同或相似内容不重复记录
 	now := time.Now()
-	dedupeKey := logType + ":" + strings.TrimSpace(cleanContent)
+	trimmedContent := strings.TrimSpace(cleanContent)
+
+	// 生成去重key：取前50个字符作为前缀匹配
+	dedupeKey := logType + ":"
+	if len(trimmedContent) > 50 {
+		dedupeKey += trimmedContent[:50]
+	} else {
+		dedupeKey += trimmedContent
+	}
+
 	s.recentLogsMu.Lock()
 	if lastTime, exists := s.recentLogs[dedupeKey]; exists {
 		if now.Sub(lastTime) < s.recentLogsWindow {
