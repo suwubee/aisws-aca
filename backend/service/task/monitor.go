@@ -132,7 +132,8 @@ func (m *TaskMonitor) AnalyzeLogs(logs string) (*LogAnalysis, error) {
 	}
 	aiConfig, err := m.aiProvider.GetDefaultConfig()
 	if err != nil {
-		return fallback, fmt.Errorf("no AI provider configured: %w", err)
+		// AI 不可用时，使用启发式分析，不返回错误
+		return fallback, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -153,12 +154,14 @@ func (m *TaskMonitor) AnalyzeLogs(logs string) (*LogAnalysis, error) {
 	}
 	resp, err := m.aiProvider.ChatSimple(ctx, aiConfig, systemPrompt, userMsg)
 	if err != nil {
-		return fallback, err
+		// AI 调用失败时，使用启发式分析，不返回错误
+		return fallback, nil
 	}
 
 	parsed, err := parseLogAnalysis(resp)
 	if err != nil {
-		return fallback, err
+		// JSON 解析失败时，使用启发式分析，不返回错误
+		return fallback, nil
 	}
 
 	// 合并兜底检测，避免AI漏判明显信号
@@ -213,12 +216,18 @@ func heuristicAnalyzeLogs(logs string) *LogAnalysis {
 	needsUser := containsAny(text, "password", "press enter", "confirm", "y/n", "yes/no", "select", "choose", "请输入", "确认", "选择")
 	completed := containsAny(text,
 		"all tests passed", "build succeeded", "completed successfully",
-		"success", "done", "finished", "exit code 0",
-		"任务完成", "已完成",
+		"success", "done", "finished",
+		// 退出码相关
+		"exit code 0", "exited with code 0", "exit status 0",
+		"exited successfully", "process exited",
+		"任务完成", "已完成", "执行完成",
 		// Claude Code 任务完成标志
 		"what would you like", "how can i help", "anything else",
 		"is there anything", "let me know if", "feel free to ask",
 		"what's next", "what next", "task complete",
+		// 更多完成标志
+		"all done", "operation completed", "successfully completed",
+		"build complete", "test complete", "deployment complete",
 	)
 	hasError := containsAny(text, "error", "failed", "fatal", "panic", "traceback", "exception", "permission denied", "no such file", "command not found", "构建失败", "测试失败")
 	retryable := hasError && containsAny(text, "timeout", "connection reset", "connection refused", "rate limit", "429", "502", "503", "504", "超时", "重试")

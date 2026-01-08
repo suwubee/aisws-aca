@@ -162,6 +162,14 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		return result, errors.New("task is nil")
 	}
 
+	// 幂等性检查：如果任务已经在进行中，不重复启动
+	if task.Status == "in_progress" {
+		result.Error = "Task already in progress"
+		utils.Info("Task already in progress, skipping start",
+			zap.String("task_id", task.ID))
+		return result, errors.New("task already in progress")
+	}
+
 	var serverID string
 	if task.ServerID != nil {
 		serverID = strings.TrimSpace(*task.ServerID)
@@ -314,11 +322,16 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 
 			sleep(300 * time.Millisecond)
 
-			// 发送 Enter 键
-			if err := sendTmuxKeysToTarget(target, "Enter", false); err != nil {
+			// 发送回车键 - 使用 C-m (Ctrl+M = CR = \r) 而不是 "Enter" 键名
+			// 因为 "Enter" 键名在某些 tmux 版本/配置下可能不等价于 \r
+			if err := sendTmuxKeysToTarget(target, "C-m", false); err != nil {
 				utils.Warn("Failed to send Enter via tmux", zap.Error(err))
+				// 回退：直接写入 PTY
+				if err := session.Write([]byte("\r")); err != nil {
+					utils.Warn("Failed to send Enter via PTY fallback", zap.Error(err))
+				}
 			} else {
-				utils.Info("Enter sent via tmux")
+				utils.Info("Enter (C-m) sent via tmux")
 			}
 		} else {
 			// 回退：直接写入 PTY
@@ -372,10 +385,20 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 
 		// 检查终端会话是否还存在
 		if s.terminalManager.GetSession(terminalID) == nil {
-			utils.Warn("Terminal session not found, stopping monitor",
+			utils.Warn("Terminal session not found, doing final log analysis",
 				zap.String("task_id", taskID),
 				zap.String("terminal_id", terminalID))
-			s.updateTaskStatus(taskID, "failed", "终端会话已关闭")
+
+			// 终端关闭前做最后一次日志分析，判断任务是否已完成
+			finalDecision, _ := monitor.StartMonitoring(taskID, terminalID)
+			if finalDecision.Action == MonitorActionComplete {
+				s.updateTaskStatus(taskID, "completed", finalDecision.Reason)
+				utils.Info("Task completed (final analysis)",
+					zap.String("task_id", taskID),
+					zap.String("reason", finalDecision.Reason))
+			} else {
+				s.updateTaskStatus(taskID, "failed", "终端会话已关闭")
+			}
 			return
 		}
 

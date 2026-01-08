@@ -111,6 +111,18 @@
             >
               {{ btn.label }}
             </button>
+            <button
+              class="quick-input-btn ai-log-toggle"
+              :class="{ active: showAILog }"
+              title="AI思考日志"
+              @click="showAILog = !showAILog"
+            >
+              🤖
+            </button>
+          </div>
+          <!-- AI思考日志面板 -->
+          <div v-if="showAILog" class="ai-log-panel">
+            <AIThinkingLog :terminal-id="terminal.id" />
           </div>
           <Terminal
             :ref="(el) => setTerminalRef(terminal.id, el)"
@@ -182,6 +194,7 @@ import Terminal from './Terminal.vue'
 import TerminalLogs from './TerminalLogs.vue'
 import TerminalApprovals from './TerminalApprovals.vue'
 import TerminalRuleConfig from './TerminalRuleConfig.vue'
+import AIThinkingLog from './AIThinkingLog.vue'
 
 const message = useMessage()
 const terminalStore = useTerminalStore()
@@ -206,6 +219,7 @@ const showLogs = ref(false)
 const showApprovals = ref(false)
 const showRuleConfig = ref(false)
 const showCreateTerminal = ref(false)
+const showAILog = ref(false)
 const createTerminalForm = reactive({
   title: '',
   taskId: null as string | null
@@ -579,6 +593,22 @@ function getStatusClass(terminal: TerminalTab) {
   background: #18a058;
   color: #fff;
   transform: scale(0.95);
+}
+
+.quick-input-btn.ai-log-toggle.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* AI思考日志面板 */
+.ai-log-panel {
+  position: absolute;
+  top: 40px;
+  right: 12px;
+  width: 320px;
+  height: 200px;
+  z-index: 11;
 }
 
 .empty-terminal {
