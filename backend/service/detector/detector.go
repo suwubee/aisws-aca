@@ -404,6 +404,22 @@ var defaultStatePatterns = []StatePattern{
 			`(?i)type\s+.*:`,
 			`(?i)please\s+enter`,
 			`(?i)waiting\s+for\s+input`,
+			// Claude Code 特有 - 欢迎界面后等待输入
+			`(?i)>\s*Try\s+"`,
+			`(?i)\?\s+for\s+shortcuts`,
+			`(?i)Welcome\s+to\s+.*Claude`,
+			`(?i)Claude\s+Code\s+v\d+`,
+			// Claude Code 任务完成后等待新输入
+			`(?i)What would you like to do`,
+			`(?i)How can I help`,
+			`(?i)What.*next`,
+			`(?i)Anything else`,
+			`(?i)Is there anything`,
+			`(?i)Let me know if`,
+			`(?i)Feel free to ask`,
+			// Codex 特有
+			`(?i)codex\s+v\d+`,
+			`(?i)Enter\s+a\s+prompt`,
 		},
 		Priority: 50,
 	},

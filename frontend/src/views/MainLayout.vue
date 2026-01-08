@@ -97,9 +97,29 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🏠')
   },
   {
+    label: '任务看板',
+    key: 'kanban',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📊')
+  },
+  {
+    label: '任务管理',
+    key: 'tasks',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📋')
+  },
+  {
+    label: 'AI 智能',
+    key: 'ai-intelligence',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
+  },
+  {
     label: '服务器管理',
     key: 'servers',
     icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
+  },
+  {
+    label: '终端管理',
+    key: 'terminals',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
   },
   {
     label: '工作流',
@@ -109,12 +129,7 @@ const menuOptions: MenuOption[] = [
   {
     label: '日志管理',
     key: 'logs',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📋')
-  },
-  {
-    label: '终端管理',
-    key: 'terminals',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
+    icon: () => h('span', { style: 'font-size: 18px' }, '📝')
   },
   {
     label: '系统设置',
@@ -132,7 +147,10 @@ const userOptions = [
 const activeMenu = computed(() => {
   const path = route.path
   if (path === '/') return 'dashboard'
+  if (path.startsWith('/kanban')) return 'kanban'
+  if (path.startsWith('/ai-intelligence')) return 'ai-intelligence'
   if (path.startsWith('/servers')) return 'servers'
+  if (path.startsWith('/tasks') || path.startsWith('/task/')) return 'tasks'
   if (path.startsWith('/workflows')) return 'workflows'
   if (path.startsWith('/logs')) return 'logs'
   if (path.startsWith('/terminals')) return 'terminals'
@@ -143,7 +161,10 @@ const activeMenu = computed(() => {
 const currentPageName = computed(() => {
   const path = route.path
   if (path === '/') return null
+  if (path.startsWith('/kanban')) return '任务看板'
+  if (path.startsWith('/ai-intelligence')) return 'AI 智能'
   if (path.startsWith('/servers')) return '服务器管理'
+  if (path.startsWith('/tasks') || path.startsWith('/task/')) return '任务管理'
   if (path.startsWith('/workflows')) return '工作流'
   if (path.startsWith('/logs')) return '日志管理'
   if (path.startsWith('/terminals')) return '终端管理'
@@ -156,8 +177,17 @@ function handleMenuChange(key: string) {
     case 'dashboard':
       router.push('/')
       break
+    case 'kanban':
+      router.push('/kanban')
+      break
+    case 'ai-intelligence':
+      router.push('/ai-intelligence')
+      break
     case 'servers':
       router.push('/servers')
+      break
+    case 'tasks':
+      router.push('/tasks')
       break
     case 'workflows':
       router.push('/workflows')

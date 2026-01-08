@@ -100,7 +100,20 @@
           v-show="terminal.id === activeTerminalId"
           class="terminal-wrapper"
         >
+          <!-- 快捷输入按钮面板 -->
+          <div class="quick-input-panel">
+            <button
+              v-for="btn in quickInputButtons"
+              :key="btn.label"
+              class="quick-input-btn"
+              :title="btn.title"
+              @click="sendQuickInput(terminal.id, btn.value)"
+            >
+              {{ btn.label }}
+            </button>
+          </div>
           <Terminal
+            :ref="(el) => setTerminalRef(terminal.id, el)"
             :session-id="terminal.id"
             @metadata-update="(m) => updateMetadata(terminal.id, m)"
           />
@@ -197,6 +210,35 @@ const createTerminalForm = reactive({
   title: '',
   taskId: null as string | null
 })
+
+// 快捷输入按钮配置
+const quickInputButtons = [
+  { label: 'Enter', value: '\r', title: '回车键' },
+  { label: 'y', value: 'y\r', title: '输入 y 并回车' },
+  { label: 'n', value: 'n\r', title: '输入 n 并回车' },
+  { label: 'Ctrl+C', value: '\x03', title: '中断当前操作' },
+  { label: 'Ctrl+D', value: '\x04', title: 'EOF / 退出' },
+  { label: 'Tab', value: '\t', title: '自动补全' },
+  { label: 'Esc', value: '\x1b', title: 'Escape 键' },
+]
+
+// Terminal 组件引用
+const terminalRefs = new Map<string, any>()
+
+function setTerminalRef(id: string, el: any) {
+  if (el) {
+    terminalRefs.set(id, el)
+  } else {
+    terminalRefs.delete(id)
+  }
+}
+
+function sendQuickInput(terminalId: string, value: string) {
+  const terminalRef = terminalRefs.get(terminalId)
+  if (terminalRef && terminalRef.sendInput) {
+    terminalRef.sendInput(value)
+  }
+}
 
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value
@@ -496,6 +538,47 @@ function getStatusClass(terminal: TerminalTab) {
 
 .terminal-wrapper {
   height: 100%;
+  position: relative;
+}
+
+/* 快捷输入按钮面板 */
+.quick-input-panel {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 4px;
+  background: rgba(45, 45, 45, 0.9);
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid #444;
+  backdrop-filter: blur(4px);
+}
+
+.quick-input-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  background: #3a3a3a;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.quick-input-btn:hover {
+  background: #4a4a4a;
+  color: #fff;
+  border-color: #18a058;
+}
+
+.quick-input-btn:active {
+  background: #18a058;
+  color: #fff;
+  transform: scale(0.95);
 }
 
 .empty-terminal {

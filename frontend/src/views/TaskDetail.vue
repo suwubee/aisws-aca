@@ -6,8 +6,28 @@
       </n-button>
       <n-text strong style="font-size: 18px">任务详情</n-text>
       <div class="header-actions">
-        <n-button v-if="task?.work_dir" type="primary" @click="handleStartTask">
+        <!-- 待处理状态：显示启动按钮 -->
+        <n-button v-if="task?.status === 'pending' && task?.work_dir" type="primary" @click="handleStartTask">
           ▶ 启动任务
+        </n-button>
+        <!-- 进行中状态：显示终端和终止按钮 -->
+        <template v-else-if="task?.status === 'in_progress'">
+          <n-button v-if="linkedTerminal" type="info" @click="handleOpenTerminal(linkedTerminal.id)">
+            📺 打开终端
+          </n-button>
+          <n-button type="warning" @click="handleStopTask">
+            ⏹ 终止任务
+          </n-button>
+        </template>
+        <!-- 已完成/失败状态：显示复制和删除按钮 -->
+        <template v-else-if="task?.status === 'completed' || task?.status === 'failed'">
+          <n-button type="primary" @click="handleCopyTask">
+            📋 复制任务
+          </n-button>
+        </template>
+        <!-- 通用按钮 -->
+        <n-button type="error" @click="handleDeleteTask">
+          🗑 删除
         </n-button>
       </div>
     </div>
@@ -137,6 +157,11 @@ const terminalStore = useTerminalStore()
 const loading = ref(true)
 const task = ref<Task | null>(null)
 const terminals = ref<TerminalSession[]>([])
+const showCreateTask = ref(false)
+
+const linkedTerminal = computed(() => {
+  return terminals.value.find(t => t.status === 'running')
+})
 const logs = ref<any[]>([])
 const approvals = ref<any[]>([])
 const serverLoading = ref(false)
@@ -274,6 +299,33 @@ async function handleCreateTerminal() {
 function handleOpenTerminal(terminalId: string) {
   terminalStore.setActiveTerminal(terminalId)
   router.push('/')
+}
+
+async function handleStopTask() {
+  if (!task.value) return
+  try {
+    await taskStore.updateTask(task.value.id, { status: 'failed' })
+    message.success('任务已终止')
+    await loadTaskDetail()
+  } catch (error) {
+    message.error('终止任务失败')
+  }
+}
+
+async function handleCopyTask() {
+  if (!task.value) return
+  showCreateTask.value = true
+}
+
+async function handleDeleteTask() {
+  if (!task.value) return
+  try {
+    await taskStore.deleteTask(task.value.id)
+    message.success('任务已删除')
+    router.push('/tasks')
+  } catch (error) {
+    message.error('删除任务失败')
+  }
 }
 
 onMounted(() => {

@@ -1,6 +1,6 @@
 # AI Coding Assistant - Sprint Backlog
 
-## 当前版本: v1.3.x (任务自动化已完成)
+## 当前版本: v3.2.0 (Sprint 10 AI Agent编排已完成)
 
 ---
 
@@ -890,20 +890,20 @@ frontend/src/
 
 ## 扩展版本规划
 
-| 版本 | Sprint | 功能 | 依赖 |
-|------|--------|------|------|
-| v2.3.0 | Sprint 7 | 共享基础设施 | Sprint 6 |
-| v3.0.0 | Sprint 8 | SSH多服务器管理 | Sprint 7 |
-| v3.1.0 | Sprint 9 | 工作流引擎 | Sprint 7 |
-| v3.2.0 | Sprint 10 | Agent编排 | Sprint 7 |
-| v3.3.0 | Sprint 11 | DevOps监控 | Sprint 8 |
-| v3.4.0 | Sprint 12 | Runbook运维 | Sprint 9 |
-| v3.5.0 | Sprint 13 | Project/Workspace | Sprint 8 |
-| v4.0.0 | Sprint 14 | 插件系统 | Sprint 13 |
-| v4.1.0 | Sprint 15 | 团队协作 | Sprint 14 |
-| v4.2.0 | Sprint 16 | 外部集成 | Sprint 15 |
-| v4.3.0 | Sprint 17 | 审计合规 | Sprint 15 |
-| v5.0.0 | Sprint 18-19 | 移动端+AI增强 | Sprint 17 |
+| 版本 | Sprint | 功能 | 依赖 | 状态 |
+|------|--------|------|------|------|
+| v2.3.0 | Sprint 7 | 共享基础设施 | Sprint 6 | ✅ 完成 |
+| v3.0.0 | Sprint 8 | SSH多服务器管理 | Sprint 7 | ✅ 完成 |
+| v3.1.0 | Sprint 9 | 工作流引擎 | Sprint 7 | ✅ 完成 |
+| v3.2.0 | Sprint 10 | Agent编排 | Sprint 7 | ✅ 完成 |
+| v3.3.0 | Sprint 11 | DevOps监控 | Sprint 8 | 待开发 |
+| v3.4.0 | Sprint 12 | Runbook运维 | Sprint 9 | 待开发 |
+| v3.5.0 | Sprint 13 | Project/Workspace | Sprint 8 | 待开发 |
+| v4.0.0 | Sprint 14 | 插件系统 | Sprint 13 | 待开发 |
+| v4.1.0 | Sprint 15 | 团队协作 | Sprint 14 | 待开发 |
+| v4.2.0 | Sprint 16 | 外部集成 | Sprint 15 | 待开发 |
+| v4.3.0 | Sprint 17 | 审计合规 | Sprint 15 | 待开发 |
+| v5.0.0 | Sprint 18-19 | 移动端+AI增强 | Sprint 17 | 待开发 |
 
 ---
 

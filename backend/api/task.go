@@ -80,7 +80,7 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 
 	status := req.Status
 	if status == "" {
-		status = "todo"
+		status = "pending"
 	}
 
 	cliType := req.CLIType

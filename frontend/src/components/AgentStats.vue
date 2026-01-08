@@ -1,5 +1,28 @@
 <template>
-  <n-card title="代理性能统计" size="small" class="agent-stats">
+  <!-- Compact mode for dashboard -->
+  <div v-if="compact" class="agent-stats-compact">
+    <div class="compact-stats">
+      <div class="compact-stat">
+        <span class="compact-value">{{ rows.length }}</span>
+        <span class="compact-label">代理</span>
+      </div>
+      <div class="compact-stat">
+        <span class="compact-value">{{ totalSessions }}</span>
+        <span class="compact-label">会话</span>
+      </div>
+      <div class="compact-stat">
+        <span class="compact-value">{{ totalApprovals }}</span>
+        <span class="compact-label">审批</span>
+      </div>
+      <div class="compact-stat">
+        <span class="compact-value">{{ overallAutoPassRate }}%</span>
+        <span class="compact-label">自动率</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full mode -->
+  <n-card v-else title="代理性能统计" size="small" class="agent-stats">
     <template #header-extra>
       <n-space align="center" size="small">
         <n-date-picker
@@ -90,6 +113,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { automationApi, terminalApi } from '@/api'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
+
+defineProps<{
+  compact?: boolean
+}>()
 
 interface ApprovalRecord {
   id: string
@@ -505,6 +532,31 @@ onMounted(() => {
 <style scoped>
 .agent-stats :deep(.n-card-header) {
   padding-bottom: 8px;
+}
+
+.agent-stats-compact {
+  padding: 8px 0;
+}
+
+.compact-stats {
+  display: flex;
+  justify-content: space-around;
+  gap: 12px;
+}
+
+.compact-stat {
+  text-align: center;
+}
+
+.compact-value {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.compact-label {
+  font-size: 11px;
+  color: #888;
 }
 
 .summary {

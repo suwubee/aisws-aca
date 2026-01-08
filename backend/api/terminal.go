@@ -66,16 +66,40 @@ func (ctrl *TerminalController) CreateTerminal(c *fiber.Ctx) error {
 // ListTerminals 获取终端列表
 func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
 	taskID := c.Query("task_id")
+	showHidden := c.Query("show_hidden") == "true"
 	var taskIDPtr *string
 	if taskID != "" {
 		taskIDPtr = &taskID
 	}
 
 	sessions := ctrl.manager.ListSessions(taskIDPtr)
-	items := make([]TerminalResponse, len(sessions))
 
-	for i, s := range sessions {
-		items[i] = TerminalResponse{
+	// 获取隐藏状态
+	var hiddenIDs []string
+	if !showHidden {
+		var hiddenSessions []model.TerminalSession
+		model.DB.Where("hidden = ?", true).Select("id").Find(&hiddenSessions)
+		for _, s := range hiddenSessions {
+			hiddenIDs = append(hiddenIDs, s.ID)
+		}
+	}
+
+	items := make([]TerminalResponse, 0, len(sessions))
+	for _, s := range sessions {
+		// 过滤隐藏的终端
+		if !showHidden {
+			hidden := false
+			for _, hid := range hiddenIDs {
+				if s.ID() == hid {
+					hidden = true
+					break
+				}
+			}
+			if hidden {
+				continue
+			}
+		}
+		items = append(items, TerminalResponse{
 			ID:        s.ID(),
 			Title:     s.Title(),
 			TaskID:    s.TaskID(),
@@ -83,7 +107,7 @@ func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
 			PID:       s.Metadata().PID,
 			Metadata:  s.Metadata(),
 			CreatedAt: s.CreatedAt().Unix(),
-		}
+		})
 	}
 
 	return c.JSON(fiber.Map{"items": items})
@@ -117,6 +141,21 @@ func (ctrl *TerminalController) CloseTerminal(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to close terminal"})
 	}
 	return c.JSON(fiber.Map{"message": "Terminal closed"})
+}
+
+// HideTerminal 隐藏/显示终端
+func (ctrl *TerminalController) HideTerminal(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var req struct {
+		Hidden bool `json:"hidden"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+	if err := model.DB.Model(&model.TerminalSession{}).Where("id = ?", id).Update("hidden", req.Hidden).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update terminal"})
+	}
+	return c.JSON(fiber.Map{"message": "Terminal updated", "hidden": req.Hidden})
 }
 
 // RenameTerminal 重命名终端
@@ -249,6 +288,7 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Get("/stats", ctrl.GetTerminalStats)
 	terminals.Get("/:id", ctrl.GetTerminal)
 	terminals.Post("/:id/close", ctrl.CloseTerminal)
+	terminals.Post("/:id/hide", ctrl.HideTerminal)
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
 	terminals.Get("/:id/logs", ctrl.GetLogs)

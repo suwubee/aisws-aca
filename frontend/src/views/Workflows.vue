@@ -2,11 +2,18 @@
   <div class="workflows-page">
     <div class="page-header">
       <h2>工作流</h2>
-      <p class="page-desc">管理自动化工作流，支持创建、编辑、运行与删除</p>
+      <p class="page-desc">管理自动化工作流，支持AI对话驱动或手动编排</p>
     </div>
 
     <div class="content-area">
-      <n-card size="small">
+      <n-tabs v-model:value="activeTab" type="line" size="small" style="margin-bottom: 12px">
+        <n-tab name="ai">AI 工作流</n-tab>
+        <n-tab name="list">工作流列表</n-tab>
+      </n-tabs>
+
+      <AIWorkflowChat v-if="activeTab === 'ai'" />
+
+      <n-card v-else size="small">
         <div class="toolbar">
           <n-space justify="space-between" align="center">
             <n-space size="small" align="center">
@@ -285,9 +292,11 @@ import {
 import type { WorkflowTemplate } from '@/api/workflow-template'
 import { applyWorkflowTemplate, getWorkflowTemplates } from '@/api/workflow-template'
 import WorkflowEditor from '@/components/WorkflowEditor.vue'
+import AIWorkflowChat from '@/components/AIWorkflowChat.vue'
 
 const message = useMessage()
 
+const activeTab = ref('ai')
 const loading = ref(false)
 const workflows = ref<Workflow[]>([])
 

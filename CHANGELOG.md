@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### v3.2.0 - Sprint 10 AI Agent编排与工作流引擎 (2026-01-08)
+
+#### Sprint 10: AI Agent编排
+
+**核心功能**:
+- **S10-1**: AI工作流工具函数 - ReAct框架工具定义
+- **S10-2**: ReAct框架AI引擎 - Thought→Action→Observation循环
+- **S10-3**: CLI会话管理服务 - 检测claude/codex状态
+- **S10-4**: 任务启动流程改进 - 使用detector检测CLI就绪
+- **S10-5**: 任务监控服务 - 日志分析/AI决策
+- **S10-6**: 并行任务执行器 - Codex MCP集成
+- **S10-7**: 前端AI工作流组件 - 对话式交互界面
+
+**后端新增文件**:
+- `service/workflow/tools.go` - AI工具定义(ReAct框架)
+- `service/workflow/ai_engine.go` - AI驱动的工作流引擎
+- `service/workflow/tool_executor.go` - 工具执行器
+- `service/workflow/parallel_executor.go` - 并行任务执行器
+- `service/cli/session_manager.go` - CLI会话管理
+- `service/cli/task_launcher.go` - 任务启动器
+- `service/task/monitor.go` - 任务监控服务
+- `api/ai_workflow.go` - AI工作流API接口
+
+**前端新增文件**:
+- `src/components/AIWorkflowChat.vue` - AI工作流对话组件
+- `src/api/ai-workflow.ts` - AI工作流API
+
+**API接口**:
+```
+POST /api/ai-workflow/start      # 启动AI工作流
+GET  /api/ai-workflow/session/:id # 获取会话状态
+GET  /api/ai-workflow/sessions    # 列出所有会话
+```
+
+**技术亮点**:
+- ReAct框架支持任意LLM（无需Function Calling）
+- CLI会话检测（Claude UUID / Codex rollout文件）
+- 任务启动流程：StartCLI → WaitForReady → SendTask
+- AI驱动的日志分析与决策（continue/retry/alert/complete）
+- 启发式降级：AI分析失败时自动使用关键词检测
+
+---
+
 ### v1.4.0 - Sprint 1-6 完成 (2026-01-07)
 
 #### Sprint 1: Bug修复 & 基础完善

@@ -1,5 +1,22 @@
 <template>
-  <n-card title="AI 代理状态监控" size="small" class="agent-monitor">
+  <!-- Compact mode for dashboard -->
+  <div v-if="compact" class="agent-monitor-compact">
+    <div v-if="allRows.length === 0" class="no-agents">
+      <n-empty description="暂无活跃代理" size="small" />
+    </div>
+    <div v-else class="agent-list">
+      <div v-for="row in allRows.slice(0, 3)" :key="row.terminalId" class="agent-item">
+        <n-tag :type="stateTagType(row.state)" size="small">{{ row.displayName }}</n-tag>
+        <span class="agent-state">{{ stateLabel(row.state) }}</span>
+      </div>
+      <div v-if="allRows.length > 3" class="more-agents">
+        +{{ allRows.length - 3 }} 更多
+      </div>
+    </div>
+  </div>
+
+  <!-- Full mode -->
+  <n-card v-else title="AI 代理状态监控" size="small" class="agent-monitor">
     <template #header-extra>
       <n-space align="center" size="small">
         <n-select
@@ -34,9 +51,13 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, onUnmounted, ref } from 'vue'
-import { NCard, NDataTable, NSelect, NSpace, NTag, useMessage } from 'naive-ui'
+import { NCard, NDataTable, NSelect, NSpace, NTag, NEmpty, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
+
+defineProps<{
+  compact?: boolean
+}>()
 
 type AgentState = 'idle' | 'working' | 'waiting_input' | 'waiting_approval' | string
 type TagType = 'default' | 'info' | 'success' | 'warning' | 'error'
@@ -206,6 +227,34 @@ onUnmounted(() => {
 <style scoped>
 .agent-monitor :deep(.n-card-header) {
   padding-bottom: 8px;
+}
+
+.agent-monitor-compact {
+  padding: 8px 0;
+}
+
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-state {
+  font-size: 12px;
+  color: #888;
+}
+
+.more-agents {
+  font-size: 12px;
+  color: #666;
+  text-align: center;
+  padding: 4px;
 }
 
 .type-cell {

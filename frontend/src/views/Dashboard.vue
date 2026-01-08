@@ -1,31 +1,69 @@
 <template>
   <div class="dashboard">
-    <!-- Kanban Board -->
-    <div class="kanban-section">
-      <div class="section-header">
-        <n-text strong>任务看板</n-text>
-        <n-button type="primary" size="small" @click="showCreateTask = true">
-          + 新建任务
-        </n-button>
-      </div>
-      <Kanban />
-    </div>
-
-    <!-- Agent Monitor Section -->
-    <div class="agent-monitor-section">
-      <n-space vertical size="large">
-        <AgentMonitor />
-        <AgentStats />
-      </n-space>
+    <!-- Top Row: Quick Stats -->
+    <div class="dashboard-row stats-row">
+      <!-- Task Stats -->
+      <n-card class="stat-card" size="small" @click="$router.push('/tasks')">
+        <div class="stat-content">
+          <div class="stat-icon pending-icon">📋</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ taskStats.pending }}</span>
+            <span class="stat-label">待处理任务</span>
+          </div>
+        </div>
+      </n-card>
+      <n-card class="stat-card" size="small" @click="$router.push('/tasks')">
+        <div class="stat-content">
+          <div class="stat-icon progress-icon">⚡</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ taskStats.inProgress }}</span>
+            <span class="stat-label">进行中</span>
+          </div>
+        </div>
+      </n-card>
+      <n-card class="stat-card" size="small" @click="$router.push('/kanban')">
+        <div class="stat-content">
+          <div class="stat-icon kanban-icon">📊</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ taskStats.total }}</span>
+            <span class="stat-label">看板任务</span>
+          </div>
+        </div>
+      </n-card>
+      <n-card class="stat-card" size="small" @click="$router.push('/ai-intelligence')">
+        <div class="stat-content">
+          <div class="stat-icon ai-icon">🤖</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ aiStats.activeAgents }}</span>
+            <span class="stat-label">AI 智能</span>
+          </div>
+        </div>
+      </n-card>
+      <n-card class="stat-card action-card" size="small" @click="showCreateTask = true">
+        <div class="stat-content">
+          <div class="stat-icon add-icon">➕</div>
+          <div class="stat-info">
+            <span class="stat-label">新建任务</span>
+          </div>
+        </div>
+      </n-card>
     </div>
 
     <!-- Terminal Section -->
-    <div class="terminal-section">
-      <TerminalPanel />
+    <div class="dashboard-row terminal-row">
+      <n-card class="dashboard-card terminal-card" size="small">
+        <template #header>
+          <div class="card-header">
+            <span>终端</span>
+            <n-button text type="primary" @click="$router.push('/terminals')">管理 →</n-button>
+          </div>
+        </template>
+        <TerminalPanel />
+      </n-card>
     </div>
 
     <!-- Create Task Modal -->
-    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: 600px">
+    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: 550px">
       <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
@@ -36,17 +74,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
-import Kanban from '@/components/Kanban.vue'
-import AgentMonitor from '@/components/AgentMonitor.vue'
-import AgentStats from '@/components/AgentStats.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
+const router = useRouter()
 const message = useMessage()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
@@ -59,11 +96,27 @@ const newTask = reactive({
   priority: 1,
   server_id: null as string | null,
   work_dir: '',
-  cli_type: '',
+  cli_type: 'claude',
   initial_prompt: '',
   auto_create_dir: true,
-  auto_start: false
+  auto_start: false,
+  return_to_workbench: true
 })
+
+// Task statistics
+const taskStats = computed(() => ({
+  pending: taskStore.tasks.filter(t => t.status === 'pending' || t.status === 'todo').length,
+  inProgress: taskStore.tasks.filter(t => t.status === 'in_progress').length,
+  completed: taskStore.tasks.filter(t => t.status === 'completed' || t.status === 'done').length,
+  total: taskStore.tasks.length
+}))
+
+// AI statistics
+const aiStats = computed(() => ({
+  activeAgents: terminalStore.terminals.filter(t =>
+    t.status === 'running' && t.metadata?.ai_assistant?.detected
+  ).length
+}))
 
 onMounted(async () => {
   await Promise.all([
@@ -82,6 +135,7 @@ async function handleCreateTask() {
   }
 
   try {
+    const shouldReturn = newTask.return_to_workbench
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
@@ -111,15 +165,11 @@ async function handleCreateTask() {
     }
 
     // 重置表单
-    newTask.title = ''
-    newTask.description = ''
-    newTask.priority = 1
-    newTask.server_id = null
-    newTask.work_dir = ''
-    newTask.cli_type = ''
-    newTask.initial_prompt = ''
-    newTask.auto_create_dir = true
-    newTask.auto_start = false
+    Object.assign(newTask, {
+      title: '', description: '', priority: 1, server_id: null,
+      work_dir: '', cli_type: 'claude', initial_prompt: '',
+      auto_create_dir: true, auto_start: false, return_to_workbench: true
+    })
   } catch (error) {
     message.error('创建任务失败')
   }
@@ -131,31 +181,91 @@ async function handleCreateTask() {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 56px);
+  padding: 12px;
+  gap: 12px;
+  overflow: hidden;
 }
 
-.kanban-section {
+.dashboard-row {
+  display: flex;
+  gap: 12px;
+}
+
+.stats-row {
+  flex: 0 0 auto;
+}
+
+.terminal-row {
   flex: 1;
   min-height: 300px;
-  overflow: hidden;
+}
+
+.stat-card {
+  flex: 1;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.stat-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stat-icon {
+  font-size: 28px;
+}
+
+.stat-info {
   display: flex;
   flex-direction: column;
 }
 
-.section-header {
+.stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #888;
+}
+
+.action-card {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+}
+
+.action-card .stat-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.dashboard-card {
+  overflow: hidden;
+}
+
+.terminal-card {
+  flex: 1;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+}
+
+.terminal-card :deep(.n-card__content) {
+  flex: 1;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.terminal-section {
-  height: 350px;
-  border-top: 1px solid var(--border-color);
-}
-
-.agent-monitor-section {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-color);
+  align-items: center;
+  font-weight: 500;
 }
 </style>

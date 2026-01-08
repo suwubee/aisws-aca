@@ -29,6 +29,7 @@ func InitDB(dsn string) error {
 		&WorkflowTemplate{},
 		&WorkflowNode{},
 		&WorkflowRun{},
+		&AIWorkflowSession{},
 		&Comment{},
 		&Secret{},
 		&SSHServer{},
@@ -100,6 +101,7 @@ type TerminalSession struct {
 	TaskID      *string    `gorm:"index" json:"task_id"`
 	Shell       string     `gorm:"default:bash" json:"shell"`
 	Status      string     `gorm:"default:running;index" json:"status"` // running, exited, detached
+	Hidden      bool       `gorm:"default:false" json:"hidden"`         // 是否在工作台隐藏
 	PID         int        `json:"pid"`
 	TmuxSession string     `json:"tmux_session"`                    // tmux 会话名称
 	RuleMode    string     `gorm:"default:system" json:"rule_mode"` // none, system, task, custom
@@ -215,4 +217,18 @@ type Message struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ReadAt      *time.Time `json:"read_at"`
 	HandledAt   *time.Time `json:"handled_at"`
+}
+
+// AIWorkflowSession AI驱动的工作流会话
+type AIWorkflowSession struct {
+	ID          string     `gorm:"primaryKey" json:"id"`
+	WorkflowID  string     `gorm:"index" json:"workflow_id"`
+	UserGoal    string     `gorm:"type:text" json:"user_goal"`
+	Status      string     `gorm:"default:running;index" json:"status"` // running, completed, failed, paused
+	Messages    string     `gorm:"type:text" json:"messages"`           // JSON array of chat messages
+	Steps       string     `gorm:"type:text" json:"steps"`              // JSON array of workflow steps
+	Context     string     `gorm:"type:text" json:"context"`            // JSON object of context
+	Summary     string     `json:"summary"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/terminal"
+	"github.com/ai-coding-assistant/service/workflow"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -147,6 +148,14 @@ func main() {
 	// SSH服务器管理API（仅管理员）
 	sshServerController := api.NewSSHServerController(cfg.Auth.JWTSecret, terminalManager)
 	sshServerController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+
+	// AI工作流API
+	toolExecutor := workflow.NewToolExecutor(nil, nil, nil)
+	api.InitAIWorkflowEngine(toolExecutor)
+	aiWorkflowGroup := apiGroup.Group("/ai-workflow")
+	aiWorkflowGroup.Post("/start", api.StartAIWorkflow)
+	aiWorkflowGroup.Get("/session/:id", api.GetAIWorkflowSession)
+	aiWorkflowGroup.Get("/sessions", api.ListAIWorkflowSessions)
 
 	// 静态文件服务
 	staticFS, err := fs.Sub(staticFiles, "static")

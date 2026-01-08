@@ -24,6 +24,21 @@ const routes = [
         component: () => import('@/views/TaskDetail.vue')
       },
       {
+        path: 'tasks',
+        name: 'Tasks',
+        component: () => import('@/views/Tasks.vue')
+      },
+      {
+        path: 'kanban',
+        name: 'Kanban',
+        component: () => import('@/views/KanbanView.vue')
+      },
+      {
+        path: 'ai-intelligence',
+        name: 'AIIntelligence',
+        component: () => import('@/views/AIIntelligence.vue')
+      },
+      {
         path: 'logs',
         name: 'LogManagement',
         component: () => import('@/views/LogManagement.vue')
