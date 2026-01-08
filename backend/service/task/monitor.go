@@ -215,6 +215,8 @@ func heuristicAnalyzeLogs(logs string) *LogAnalysis {
 
 	needsUser := containsAny(text, "password", "press enter", "confirm", "y/n", "yes/no", "select", "choose", "请输入", "确认", "选择")
 	completed := containsAny(text,
+		// AI托管完成标记（最高优先级）
+		"aca_task_done",
 		"all tests passed", "build succeeded", "completed successfully",
 		"success", "done", "finished",
 		// 退出码相关

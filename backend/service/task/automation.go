@@ -11,6 +11,7 @@ import (
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -146,6 +147,29 @@ func SendCtrlKey(sessionID string, key rune) error {
 	return sendTmuxKeys(sessionID, ctrlKey, false)
 }
 
+// buildManagedPrompt 构建 AI 托管模式的提示词
+// 将用户目标、托管指令和结束条件组合成结构化提示
+func buildManagedPrompt(task *model.Task) string {
+	var parts []string
+
+	// 用户目标（必须）
+	if task.InitialPrompt != "" {
+		parts = append(parts, fmt.Sprintf("## 任务目标\n%s", task.InitialPrompt))
+	}
+
+	// AI托管指令（可选）
+	if task.AIPrompt != "" {
+		parts = append(parts, fmt.Sprintf("## 执行规则\n%s", task.AIPrompt))
+	}
+
+	// 结束条件（可选）
+	if task.AIEndCondition != "" {
+		parts = append(parts, fmt.Sprintf("## 完成条件\n%s\n\n当满足完成条件时，请在输出中包含标记: ACA_TASK_DONE", task.AIEndCondition))
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
 // StartTaskResult 启动任务结果
 type StartTaskResult struct {
 	Task       *model.Task  `json:"task"`
@@ -278,15 +302,20 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		termSession.BroadcastAILog("action", fmt.Sprintf("启动 %s CLI", cliConfig.Type))
 	}
 
-	// 5. 如果有初始提示，等待 CLI 启动后输入
-	if task.InitialPrompt != "" {
+	// 5. 如果有初始提示或AI托管模式，等待 CLI 启动后输入
+	promptToSend := task.InitialPrompt
+	if task.AIManaged {
+		promptToSend = buildManagedPrompt(task)
+	}
+
+	if promptToSend != "" {
 		// 使用detector检测CLI是否准备好
 		maxWait := 30 * time.Second
 		checkInterval := 500 * time.Millisecond
 		startTime := time.Now()
 		cliReady := false
 
-		utils.Info("Waiting for CLI ready", zap.String("task_id", task.ID), zap.String("prompt", task.InitialPrompt))
+		utils.Info("Waiting for CLI ready", zap.String("task_id", task.ID), zap.String("prompt_len", fmt.Sprintf("%d", len(promptToSend))))
 
 		for time.Since(startTime) < maxWait {
 			sleep(checkInterval)
@@ -333,7 +362,7 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		if tmuxSession != "" {
 			target := tmuxSession + ":0.0"
 			// 发送提示内容（字面量模式）
-			if err := sendTmuxKeysToTarget(target, task.InitialPrompt, true); err != nil {
+			if err := sendTmuxKeysToTarget(target, promptToSend, true); err != nil {
 				utils.Warn("Failed to send prompt via tmux", zap.Error(err))
 				if termSession, ok := session.(*terminal.Session); ok {
 					termSession.BroadcastAILog("error", fmt.Sprintf("发送提示失败: %v", err))
@@ -341,7 +370,7 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			} else {
 				utils.Info("Prompt sent via tmux", zap.String("target", target))
 				if termSession, ok := session.(*terminal.Session); ok {
-					termSession.BroadcastAILogWithInput("action", "发送提示内容", "text", task.InitialPrompt)
+					termSession.BroadcastAILogWithInput("action", "发送提示内容", "text", promptToSend)
 				}
 			}
 
@@ -370,7 +399,7 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		} else {
 			// 回退：直接写入 PTY
 			utils.Info("Using PTY fallback")
-			promptWithEnter := task.InitialPrompt + "\r"
+			promptWithEnter := promptToSend + "\r"
 			if err := session.Write([]byte(promptWithEnter)); err != nil {
 				utils.Warn("Failed to send via PTY", zap.Error(err))
 			}
@@ -395,6 +424,8 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 	checkInterval := 10 * time.Second
 	maxDuration := 2 * time.Hour
 	startTime := time.Now()
+	retryCount := 0
+	maxRetries := 3
 
 	utils.Info("Task monitoring started",
 		zap.String("task_id", taskID),
@@ -470,17 +501,48 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 			return
 
 		case MonitorActionAlert:
-			// 需要用户干预，发送通知但继续监控
+			// 需要用户干预，根据AI托管配置处理
 			utils.Warn("Task needs attention",
 				zap.String("task_id", taskID),
 				zap.String("reason", decision.Reason))
-			// TODO: 发送WebSocket通知给前端
+			if task.AIManaged {
+				// AI托管模式下，暂停任务等待用户干预
+				s.updateTaskStatus(taskID, "paused", decision.Reason)
+				s.createTaskMessage(taskID, terminalID, "approval_needed", "任务需要用户干预", decision.Reason)
+				return
+			}
 
 		case MonitorActionRetry:
-			utils.Info("Task retry suggested",
-				zap.String("task_id", taskID),
-				zap.String("reason", decision.Reason))
-			// 继续监控，等待重试结果
+			// 根据AI托管配置处理错误
+			if task.AIManaged && task.AIErrorHandling != "" {
+				switch task.AIErrorHandling {
+				case "retry":
+					retryCount++
+					if retryCount <= maxRetries {
+						utils.Info("AI managed retry",
+							zap.String("task_id", taskID),
+							zap.Int("retry_count", retryCount))
+						// 继续监控，等待重试结果
+					} else {
+						// 超过重试次数，降级为暂停
+						s.updateTaskStatus(taskID, "paused", "重试次数已达上限")
+						s.createTaskMessage(taskID, terminalID, "warning", "重试失败", decision.Reason)
+						return
+					}
+				case "fail":
+					s.updateTaskStatus(taskID, "failed", decision.Reason)
+					s.createTaskMessage(taskID, terminalID, "error", "任务失败", decision.Reason)
+					return
+				case "pause":
+					s.updateTaskStatus(taskID, "paused", decision.Reason)
+					s.createTaskMessage(taskID, terminalID, "warning", "任务已暂停", decision.Reason)
+					return
+				}
+			} else {
+				utils.Info("Task retry suggested",
+					zap.String("task_id", taskID),
+					zap.String("reason", decision.Reason))
+			}
 
 		case MonitorActionContinue:
 			// 继续监控
@@ -499,4 +561,20 @@ func (s *AutomationService) updateTaskStatus(taskID, status, reason string) {
 		updates["completed_at"] = &now
 	}
 	model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(updates)
+}
+
+// createTaskMessage 创建任务消息通知
+func (s *AutomationService) createTaskMessage(taskID, terminalID, msgType, title, content string) {
+	msg := model.Message{
+		ID:         uuid.New().String(),
+		TaskID:     &taskID,
+		TerminalID: &terminalID,
+		Type:       msgType,
+		Title:      title,
+		Content:    content,
+		Status:     "unread",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	model.DB.Create(&msg)
 }
