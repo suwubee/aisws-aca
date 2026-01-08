@@ -112,6 +112,12 @@ export interface Task {
   initial_prompt: string
   auto_start: boolean
   auto_create_dir: boolean
+
+  // AI托管配置
+  ai_managed: boolean
+  ai_prompt: string
+  ai_end_condition: string
+  ai_error_handling: string
 }
 
 export interface ListTasksParams {
@@ -149,6 +155,11 @@ export interface CreateTaskRequest {
   initial_prompt?: string
   auto_start?: boolean
   auto_create_dir?: boolean
+  // AI托管配置
+  ai_managed?: boolean
+  ai_prompt?: string
+  ai_end_condition?: string
+  ai_error_handling?: string
 }
 
 export interface UpdateTaskRequest {
@@ -163,6 +174,11 @@ export interface UpdateTaskRequest {
   initial_prompt?: string
   auto_start?: boolean
   auto_create_dir?: boolean
+  // AI托管配置
+  ai_managed?: boolean
+  ai_prompt?: string
+  ai_end_condition?: string
+  ai_error_handling?: string
 }
 
 export interface MoveTaskRequest {

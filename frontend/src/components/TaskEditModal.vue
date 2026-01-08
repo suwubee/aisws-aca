@@ -37,6 +37,35 @@
           placeholder="启动后自动输入的提示内容（可选）"
         />
       </n-form-item>
+
+      <n-divider>AI托管配置（可选）</n-divider>
+
+      <n-form-item label="托管模式">
+        <n-checkbox v-model:checked="form.ai_managed">AI全程托管</n-checkbox>
+      </n-form-item>
+
+      <template v-if="form.ai_managed">
+        <n-form-item label="托管提示">
+          <n-input
+            v-model:value="form.ai_prompt"
+            type="textarea"
+            :rows="2"
+            placeholder="AI在什么情况执行什么动作（可选）"
+          />
+        </n-form-item>
+        <n-form-item label="结束条件">
+          <n-input
+            v-model:value="form.ai_end_condition"
+            placeholder="任务什么时候算完成（可选）"
+          />
+        </n-form-item>
+        <n-form-item label="错误处理">
+          <n-select
+            v-model:value="form.ai_error_handling"
+            :options="errorHandlingOptions"
+          />
+        </n-form-item>
+      </template>
     </n-form>
 
     <template #action>
@@ -76,13 +105,24 @@ const form = reactive({
   priority: 1,
   work_dir: '',
   cli_type: null as string | null,
-  initial_prompt: ''
+  initial_prompt: '',
+  // AI托管配置
+  ai_managed: false,
+  ai_prompt: '',
+  ai_end_condition: '',
+  ai_error_handling: 'pause'
 })
 
 const cliOptions = [
   { label: 'Claude Code', value: 'claude' },
   { label: 'Codex', value: 'codex' },
   { label: 'Gemini CLI', value: 'gemini' }
+]
+
+const errorHandlingOptions = [
+  { label: '暂停等待', value: 'pause' },
+  { label: '自动重试', value: 'retry' },
+  { label: '标记失败', value: 'fail' }
 ]
 
 function syncFormFromTask(task: Task | null) {
@@ -93,6 +133,11 @@ function syncFormFromTask(task: Task | null) {
   form.work_dir = task?.work_dir ?? ''
   form.cli_type = task?.cli_type || null
   form.initial_prompt = task?.initial_prompt ?? ''
+  // AI托管配置
+  form.ai_managed = task?.ai_managed ?? false
+  form.ai_prompt = task?.ai_prompt ?? ''
+  form.ai_end_condition = task?.ai_end_condition ?? ''
+  form.ai_error_handling = task?.ai_error_handling || 'pause'
 }
 
 watch(
@@ -128,7 +173,11 @@ async function save() {
       priority: form.priority,
       work_dir: form.work_dir,
       cli_type: form.cli_type || '',
-      initial_prompt: form.initial_prompt
+      initial_prompt: form.initial_prompt,
+      ai_managed: form.ai_managed,
+      ai_prompt: form.ai_prompt,
+      ai_end_condition: form.ai_end_condition,
+      ai_error_handling: form.ai_error_handling
     })
     message.success('任务已更新')
     emit('saved', updated)
