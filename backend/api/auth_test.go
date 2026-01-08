@@ -43,6 +43,7 @@ func setupAuthTestApp(t *testing.T) (*fiber.App, *config.AuthConfig) {
 	// 需要认证的路由
 	apiGroup.Use(middleware.AuthMiddleware(authCfg))
 	apiGroup.Post("/auth/register", middleware.RequireRole("admin"), ctrl.Register)
+	apiGroup.Post("/auth/reset-data", middleware.RequireRole("admin"), ctrl.ResetData)
 
 	return app, authCfg
 }
@@ -323,4 +324,149 @@ func TestAuthController_Login_PromotesSingleDefaultUserToAdmin(t *testing.T) {
 	if updated.Role != "admin" {
 		t.Fatalf("expected role %q, got %q", "admin", updated.Role)
 	}
+}
+
+func TestAuthController_ResetData_ForbiddenForNonAdmin(t *testing.T) {
+	app, _ := setupAuthTestApp(t)
+
+	createTestUser(t, "eve", "eve@example.com", "password123", "user", "active")
+
+	loginReq := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBufferString(`{"username":"eve","password":"password123"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := app.Test(loginReq)
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer loginResp.Body.Close()
+
+	var loginBody LoginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginBody); err != nil {
+		t.Fatalf("decode login response failed: %v", err)
+	}
+
+	resetReq := httptest.NewRequest("POST", "/api/auth/reset-data", nil)
+	resetReq.Header.Set("Authorization", "Bearer "+loginBody.Token)
+	resetResp, err := app.Test(resetReq)
+	if err != nil {
+		t.Fatalf("reset request failed: %v", err)
+	}
+	defer resetResp.Body.Close()
+
+	if resetResp.StatusCode != 403 {
+		t.Fatalf("expected status 403, got %d", resetResp.StatusCode)
+	}
+}
+
+func TestAuthController_ResetData_DeletesTaskAndTerminalData(t *testing.T) {
+	app, _ := setupAuthTestApp(t)
+
+	createTestUser(t, "admin", "admin@example.com", "adminpass", "admin", "active")
+
+	loginReq := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBufferString(`{"username":"admin","password":"adminpass"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := app.Test(loginReq)
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer loginResp.Body.Close()
+
+	var loginBody LoginResponse
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginBody); err != nil {
+		t.Fatalf("decode login response failed: %v", err)
+	}
+
+	taskID := uuid.New().String()
+	terminalID := uuid.New().String()
+	aiSessionID := uuid.New().String()
+	approvalID := uuid.New().String()
+	logID := uuid.New().String()
+	messageID := uuid.New().String()
+
+	if err := model.DB.Create(&model.Task{
+		ID:     taskID,
+		UserID: uuid.New().String(),
+		Title:  "test task",
+		Status: "todo",
+	}).Error; err != nil {
+		t.Fatalf("create task failed: %v", err)
+	}
+	if err := model.DB.Create(&model.TerminalSession{
+		ID:     terminalID,
+		UserID: uuid.New().String(),
+		Title:  "test terminal",
+		TaskID: &taskID,
+		Status: "running",
+	}).Error; err != nil {
+		t.Fatalf("create terminal_session failed: %v", err)
+	}
+	if err := model.DB.Create(&model.AISession{
+		ID:         aiSessionID,
+		TerminalID: terminalID,
+		TaskID:     &taskID,
+		AIType:     "codex",
+		State:      "waiting_input",
+	}).Error; err != nil {
+		t.Fatalf("create ai_session failed: %v", err)
+	}
+	if err := model.DB.Create(&model.ApprovalRecord{
+		ID:         approvalID,
+		TerminalID: terminalID,
+		PromptType: "yes_no",
+		Response:   "yes",
+	}).Error; err != nil {
+		t.Fatalf("create approval_record failed: %v", err)
+	}
+	if err := model.DB.Create(&model.Log{
+		ID:      logID,
+		TaskID:  &taskID,
+		LogType: "system",
+		Content: "hello",
+	}).Error; err != nil {
+		t.Fatalf("create log failed: %v", err)
+	}
+	if err := model.DB.Create(&model.Message{
+		ID:     messageID,
+		TaskID: &taskID,
+		Type:   "info",
+		Title:  "test message",
+	}).Error; err != nil {
+		t.Fatalf("create message failed: %v", err)
+	}
+
+	assertCount := func(modelValue interface{}, expected int64, name string) {
+		t.Helper()
+		var count int64
+		if err := model.DB.Model(modelValue).Count(&count).Error; err != nil {
+			t.Fatalf("count %s failed: %v", name, err)
+		}
+		if count != expected {
+			t.Fatalf("expected %s count %d, got %d", name, expected, count)
+		}
+	}
+
+	assertCount(&model.Task{}, 1, "tasks")
+	assertCount(&model.TerminalSession{}, 1, "terminal_sessions")
+	assertCount(&model.AISession{}, 1, "ai_sessions")
+	assertCount(&model.ApprovalRecord{}, 1, "approval_records")
+	assertCount(&model.Log{}, 1, "logs")
+	assertCount(&model.Message{}, 1, "messages")
+
+	resetReq := httptest.NewRequest("POST", "/api/auth/reset-data", nil)
+	resetReq.Header.Set("Authorization", "Bearer "+loginBody.Token)
+	resetResp, err := app.Test(resetReq)
+	if err != nil {
+		t.Fatalf("reset request failed: %v", err)
+	}
+	defer resetResp.Body.Close()
+
+	if resetResp.StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", resetResp.StatusCode)
+	}
+
+	assertCount(&model.Task{}, 0, "tasks")
+	assertCount(&model.TerminalSession{}, 0, "terminal_sessions")
+	assertCount(&model.AISession{}, 0, "ai_sessions")
+	assertCount(&model.ApprovalRecord{}, 0, "approval_records")
+	assertCount(&model.Log{}, 0, "logs")
+	assertCount(&model.Message{}, 0, "messages")
 }

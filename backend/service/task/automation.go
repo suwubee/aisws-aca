@@ -123,20 +123,20 @@ func sendTmuxKeysToTarget(target string, keys string, literal bool) error {
 // TmuxKey 常用 tmux 按键名称
 // 使用 tmux send-keys 时，这些名称会被解释为特殊按键
 const (
-	TmuxKeyEnter     = "Enter"     // 回车键
-	TmuxKeyEscape    = "Escape"    // ESC 键
-	TmuxKeyTab       = "Tab"       // Tab 键
-	TmuxKeyBackspace = "BSpace"    // 退格键
-	TmuxKeyDelete    = "DC"        // Delete 键
-	TmuxKeyUp        = "Up"        // 上箭头
-	TmuxKeyDown      = "Down"      // 下箭头
-	TmuxKeyLeft      = "Left"      // 左箭头
-	TmuxKeyRight     = "Right"     // 右箭头
-	TmuxKeyHome      = "Home"      // Home 键
-	TmuxKeyEnd       = "End"       // End 键
-	TmuxKeyPageUp    = "PPage"     // Page Up
-	TmuxKeyPageDown  = "NPage"     // Page Down
-	TmuxKeySpace     = "Space"     // 空格键
+	TmuxKeyEnter     = "Enter"  // 回车键
+	TmuxKeyEscape    = "Escape" // ESC 键
+	TmuxKeyTab       = "Tab"    // Tab 键
+	TmuxKeyBackspace = "BSpace" // 退格键
+	TmuxKeyDelete    = "DC"     // Delete 键
+	TmuxKeyUp        = "Up"     // 上箭头
+	TmuxKeyDown      = "Down"   // 下箭头
+	TmuxKeyLeft      = "Left"   // 左箭头
+	TmuxKeyRight     = "Right"  // 右箭头
+	TmuxKeyHome      = "Home"   // Home 键
+	TmuxKeyEnd       = "End"    // End 键
+	TmuxKeyPageUp    = "PPage"  // Page Up
+	TmuxKeyPageDown  = "NPage"  // Page Down
+	TmuxKeySpace     = "Space"  // 空格键
 )
 
 // SendCtrlKey 发送 Ctrl+字母 组合键
@@ -451,7 +451,7 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 			// 终端关闭前做最后一次日志分析，判断任务是否已完成
 			finalDecision, _ := monitor.StartMonitoring(taskID, terminalID)
 			if finalDecision.Action == MonitorActionComplete {
-				s.updateTaskStatus(taskID, "completed", finalDecision.Reason)
+				s.updateTaskStatus(taskID, "done", finalDecision.Reason)
 				utils.Info("Task completed (final analysis)",
 					zap.String("task_id", taskID),
 					zap.String("reason", finalDecision.Reason))
@@ -494,7 +494,7 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 		// 根据决策采取行动
 		switch decision.Action {
 		case MonitorActionComplete:
-			s.updateTaskStatus(taskID, "completed", decision.Reason)
+			s.updateTaskStatus(taskID, "done", decision.Reason)
 			utils.Info("Task completed",
 				zap.String("task_id", taskID),
 				zap.String("reason", decision.Reason))
@@ -556,9 +556,8 @@ func (s *AutomationService) updateTaskStatus(taskID, status, reason string) {
 		"status":     status,
 		"updated_at": time.Now(),
 	}
-	if status == "completed" {
-		now := time.Now()
-		updates["completed_at"] = &now
+	if status == "done" {
+		updates["completed_at"] = time.Now()
 	}
 	model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(updates)
 }

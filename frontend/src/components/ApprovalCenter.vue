@@ -19,7 +19,7 @@
             positive-text="确定"
             negative-text="取消"
             :disabled="pendingApprovals.length === 0 || bulkLoading"
-            @positive-click="handleBulkRespond('y')"
+            @positive-click="() => { void handleBulkRespond('y') }"
           >
             <template #trigger>
               <n-button
@@ -39,7 +39,7 @@
             positive-text="确定"
             negative-text="取消"
             :disabled="pendingApprovals.length === 0 || bulkLoading"
-            @positive-click="handleBulkRespond('n')"
+            @positive-click="() => { void handleBulkRespond('n') }"
           >
             <template #trigger>
               <n-button

@@ -32,14 +32,14 @@
           </n-card>
         </div>
 
-        <div class="section" style="margin-top: 32px">
+        <div v-if="isAdmin" class="section" style="margin-top: 32px">
           <div class="section-header">
             <span>数据管理</span>
           </div>
           <n-card size="small" style="max-width: 400px">
             <n-space vertical>
               <n-text depth="3">重置所有数据将删除：日志、终端会话、任务、审批记录、消息等</n-text>
-              <n-popconfirm @positive-click="resetAllData" positive-text="确定重置" negative-text="取消">
+              <n-popconfirm @positive-click="() => { void resetAllData() }" positive-text="确定重置" negative-text="取消">
                 <template #trigger>
                   <n-button type="error" :loading="resettingData">
                     重置所有数据
@@ -263,7 +263,7 @@
       :title="editingProvider ? '编辑 AI Provider' : '添加 AI Provider'"
       positive-text="保存"
       negative-text="取消"
-      style="width: 500px"
+      style="width: min(500px, 94vw)"
       @positive-click="saveProvider"
     >
       <n-form ref="providerFormRef" :model="providerForm" :rules="providerRules" label-placement="left" label-width="100">
@@ -312,6 +312,8 @@ import {
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
 import { automationApi, authApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import { useTaskStore } from '@/stores/task'
+import { useTerminalStore } from '@/stores/terminal'
 import AgentConfig from '@/components/AgentConfig.vue'
 import LogExport from '@/components/LogExport.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
@@ -336,6 +338,8 @@ interface ApprovalRecord {
 
 const message = useMessage()
 const authStore = useAuthStore()
+const taskStore = useTaskStore()
+const terminalStore = useTerminalStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 // ===== Account Settings =====
@@ -379,8 +383,19 @@ async function changePassword() {
 async function resetAllData() {
   resettingData.value = true
   try {
-    await authApi.resetData()
+    const { data } = await authApi.resetData()
     message.success('所有数据已重置')
+    if (data?.warning) {
+      message.warning(data.warning)
+    }
+
+    terminalStore.terminals.forEach(t => t.ws?.close())
+    terminalStore.terminals = []
+    terminalStore.activeTerminalId = null
+    await Promise.allSettled([
+      taskStore.fetchTasks(),
+      terminalStore.fetchTerminals()
+    ])
   } catch (e) {
     message.error('重置失败')
   } finally {
@@ -517,7 +532,7 @@ const providerColumns: DataTableColumns<AIProvider> = [
     title: '操作', key: 'actions', width: 120,
     render: (row) => h(NSpace, { size: 'small' }, () => [
       h(NButton, { size: 'tiny', quaternary: true, onClick: () => editProvider(row) }, () => '编辑'),
-      h(NPopconfirm, { onPositiveClick: () => deleteProvider(row.id) }, {
+      h(NPopconfirm, { onPositiveClick: () => { void deleteProvider(row.id) } }, {
         trigger: () => h(NButton, { size: 'tiny', quaternary: true, type: 'error' }, () => '删除'),
         default: () => '确定删除?'
       })

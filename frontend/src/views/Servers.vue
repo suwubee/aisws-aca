@@ -8,14 +8,14 @@
     <div class="content-area">
       <n-card size="small">
         <div class="toolbar">
-          <n-space justify="space-between" align="center">
-            <n-space size="small" align="center">
+          <n-space justify="space-between" align="center" wrap>
+            <n-space size="small" align="center" wrap>
               <n-input
                 v-model:value="keyword"
                 size="small"
                 clearable
                 placeholder="搜索名称 / 主机 / 用户名..."
-                style="width: 240px"
+                style="width: min(240px, 70vw)"
               />
               <n-select
                 v-model:value="statusFilter"
@@ -27,7 +27,7 @@
                 v-model:value="groupFilter"
                 size="small"
                 :options="groupFilterOptions"
-                style="width: 180px"
+                style="width: min(180px, 55vw)"
               />
             </n-space>
 
@@ -41,13 +41,88 @@
         </div>
 
         <n-data-table
+          v-if="!isMobile"
           :columns="columns"
           :data="filteredServers"
           :loading="loading"
           :row-key="(row: SSHServer) => row.id"
+          :scroll-x="1100"
           size="small"
           striped
         />
+
+        <div v-else class="mobile-server-cards">
+          <n-space v-if="filteredServers.length > 0" vertical size="12">
+            <n-card
+              v-for="server in filteredServers"
+              :key="server.id"
+              size="small"
+              class="mobile-server-card"
+            >
+              <template #header>
+                <div class="mobile-server-card-header">
+                  <n-text strong class="mobile-server-title">
+                    {{ server.name || server.host }}
+                  </n-text>
+                  <n-tag
+                    size="small"
+                    :bordered="false"
+                    :type="statusTagType(String(server.last_status))"
+                  >
+                    {{ statusLabel(String(server.last_status)) }}
+                  </n-tag>
+                </div>
+              </template>
+
+              <div class="mobile-server-meta">
+                <n-text depth="3">主机：</n-text>
+                <n-text code>{{ server.host }}:{{ server.port }}</n-text>
+              </div>
+              <div class="mobile-server-meta">
+                <n-text depth="3">用户：</n-text>
+                <n-text>{{ server.username }}</n-text>
+              </div>
+              <div class="mobile-server-meta">
+                <n-text depth="3">分组：</n-text>
+                <n-text>{{ groupNameMap.get(server.group_id || '') || '—' }}</n-text>
+              </div>
+
+              <template #footer>
+                <n-space justify="end" size="small" wrap>
+                  <n-button size="small" type="primary" @click="openSshTerminal(server)">
+                    连接
+                  </n-button>
+                  <n-button size="small" @click="openCreateTask(server)">
+                    任务
+                  </n-button>
+                  <n-button
+                    size="small"
+                    :loading="testingId === server.id"
+                    @click="test(server)"
+                  >
+                    测试
+                  </n-button>
+                  <n-button size="small" @click="openEdit(server)">
+                    编辑
+                  </n-button>
+                  <n-popconfirm
+                    positive-text="删除"
+                    negative-text="取消"
+                    @positive-click="() => { void remove(server) }"
+                  >
+                    <template #trigger>
+                      <n-button size="small" type="error" :loading="deletingId === server.id">
+                        删除
+                      </n-button>
+                    </template>
+                    确定删除服务器「{{ server.name || server.host }}」吗？
+                  </n-popconfirm>
+                </n-space>
+              </template>
+            </n-card>
+          </n-space>
+          <n-empty v-else description="暂无服务器" />
+        </div>
       </n-card>
     </div>
 
@@ -68,7 +143,7 @@
       v-model:show="showCreateTask"
       preset="dialog"
       :title="createTaskModalTitle"
-      style="width: 600px"
+      style="width: min(600px, 94vw)"
       :mask-closable="!creatingTask"
       :close-on-esc="!creatingTask"
     >
@@ -96,7 +171,7 @@
       title="新建分组"
       positive-text="创建"
       negative-text="取消"
-      style="width: 520px"
+      style="width: min(520px, 94vw)"
       @positive-click="createGroup"
     >
       <n-form
@@ -164,7 +239,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NButton,
@@ -203,6 +278,7 @@ const groups = ref<ServerGroup[]>([])
 const keyword = ref('')
 const statusFilter = ref<string | null>(null)
 const groupFilter = ref<string | null>(null)
+const isMobile = ref(false)
 
 const showServerForm = ref(false)
 const serverFormMode = ref<'create' | 'edit'>('create')
@@ -352,7 +428,7 @@ const columns: DataTableColumns<SSHServer> = [
         onClick: () => openEdit(row)
       }, () => '编辑'),
       h(NPopconfirm, {
-        onPositiveClick: () => remove(row),
+        onPositiveClick: () => { void remove(row) },
         positiveText: '确定',
         negativeText: '取消'
       }, {
@@ -624,6 +700,19 @@ async function createGroup() {
 onMounted(() => {
   fetchAll()
 })
+
+function updateIsMobile() {
+  isMobile.value = window.innerWidth <= 768
+}
+
+onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
 </script>
 
 <style scoped>
@@ -659,6 +748,38 @@ onMounted(() => {
 
 .toolbar {
   margin-bottom: 12px;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    padding: 14px 14px;
+  }
+
+  .content-area {
+    padding: 12px;
+  }
+
+  .mobile-server-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .mobile-server-title {
+    max-width: 70%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-server-meta {
+    margin-top: 6px;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
 }
 
 .ssh-terminal-window {

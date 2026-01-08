@@ -615,6 +615,7 @@ func (s *Session) handleApproval(output string) {
 	// 广播审批事件
 	s.broadcast(StreamEvent{
 		Type:           StreamEventApproval,
+		Message:        recordPrompt,
 		ApprovalResult: approvalEvent,
 	})
 }

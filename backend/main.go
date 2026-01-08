@@ -92,6 +92,7 @@ func main() {
 
 	// 认证API - login不需要认证
 	authController := api.NewAuthController(&cfg.Auth)
+	authController.SetTerminalManager(terminalManager)
 	app.Post("/api/auth/login", authController.Login)
 
 	// 需要认证的API
@@ -101,7 +102,7 @@ func main() {
 	apiGroup.Post("/auth/logout", authController.Logout)
 	apiGroup.Get("/auth/me", authController.Me)
 	apiGroup.Post("/auth/change-password", authController.ChangePassword)
-	apiGroup.Post("/auth/reset-data", authController.ResetData)
+	apiGroup.Post("/auth/reset-data", middleware.RequireRole("admin"), authController.ResetData)
 	apiGroup.Post("/auth/register", middleware.RequireRole("admin"), authController.Register)
 
 	// 用户管理API（仅管理员）

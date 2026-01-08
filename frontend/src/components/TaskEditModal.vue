@@ -1,5 +1,5 @@
 <template>
-  <n-modal v-model:show="showModal" preset="dialog" title="编辑任务" style="width: 600px">
+  <n-modal v-model:show="showModal" preset="dialog" title="编辑任务" style="width: min(600px, 94vw)">
     <n-form :model="form">
       <n-form-item label="标题" required>
         <n-input v-model:value="form.title" placeholder="任务标题" />
@@ -189,4 +189,3 @@ async function save() {
   }
 }
 </script>
-

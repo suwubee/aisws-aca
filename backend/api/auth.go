@@ -15,11 +15,20 @@ import (
 )
 
 type AuthController struct {
-	config *config.AuthConfig
+	config          *config.AuthConfig
+	terminalManager terminalSessionCloser
 }
 
 func NewAuthController(cfg *config.AuthConfig) *AuthController {
 	return &AuthController{config: cfg}
+}
+
+type terminalSessionCloser interface {
+	CloseAllSessions() error
+}
+
+func (ctrl *AuthController) SetTerminalManager(manager terminalSessionCloser) {
+	ctrl.terminalManager = manager
 }
 
 type LoginRequest struct {
@@ -296,6 +305,11 @@ func (ctrl *AuthController) ChangePassword(c *fiber.Ctx) error {
 
 // ResetData 重置所有数据
 func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
+	closeErr := error(nil)
+	if ctrl.terminalManager != nil {
+		closeErr = ctrl.terminalManager.CloseAllSessions()
+	}
+
 	// 按依赖顺序清理（子表 -> 父表），并兼容旧库/旧表缺失的情况
 	tables := []string{
 		"logs",
@@ -320,7 +334,11 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to reset data"})
 	}
 
-	return c.JSON(fiber.Map{"message": "All data has been reset"})
+	resp := fiber.Map{"message": "All data has been reset"}
+	if closeErr != nil {
+		resp["warning"] = "Some terminal sessions could not be closed"
+	}
+	return c.JSON(resp)
 }
 
 // RegisterRoutes 注册路由

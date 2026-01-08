@@ -37,7 +37,7 @@
         title="创建用户"
         positive-text="创建"
         negative-text="取消"
-        style="width: 520px"
+        style="width: min(520px, 94vw)"
         @positive-click="createUser"
       >
         <n-form ref="createFormRef" :model="createForm" :rules="createRules" label-placement="left" label-width="90">
@@ -71,7 +71,7 @@
         title="编辑用户"
         positive-text="保存"
         negative-text="取消"
-        style="width: 520px"
+        style="width: min(520px, 94vw)"
         @positive-click="saveUser"
       >
         <n-form ref="editFormRef" :model="editForm" :rules="editRules" label-placement="left" label-width="90">
@@ -185,7 +185,7 @@ const columns: DataTableColumns<User> = [
     width: 180,
     render: (row) => h(NSpace, { size: 'small' }, () => [
       h(NButton, { size: 'tiny', quaternary: true, onClick: () => openEditModal(row) }, () => '编辑'),
-      h(NPopconfirm, { onPositiveClick: () => toggleStatus(row) }, {
+      h(NPopconfirm, { onPositiveClick: () => { void toggleStatus(row) } }, {
         trigger: () => h(NButton, {
           size: 'tiny',
           quaternary: true,

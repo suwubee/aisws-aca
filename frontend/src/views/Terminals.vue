@@ -8,14 +8,14 @@
     <div class="content-area">
       <n-card size="small">
         <div class="toolbar">
-          <n-space justify="space-between" align="center">
-            <n-space size="small" align="center">
+          <n-space justify="space-between" align="center" wrap>
+            <n-space size="small" align="center" wrap>
               <n-input
                 v-model:value="keyword"
                 size="small"
                 clearable
                 placeholder="搜索标题 / 任务名 / 任务ID / PID / 命令..."
-                style="width: 260px"
+                style="width: min(260px, 70vw)"
               />
               <n-select
                 v-model:value="statusFilter"
@@ -31,13 +31,88 @@
         </div>
 
         <n-data-table
+          v-if="!isMobile"
           :columns="columns"
           :data="filteredTerminals"
           :loading="loading"
           :row-key="(row: TerminalSession) => row.id"
+          :scroll-x="980"
           size="small"
           striped
         />
+
+        <div v-else class="mobile-terminal-cards">
+          <n-space v-if="filteredTerminals.length > 0" vertical size="12">
+            <n-card
+              v-for="t in filteredTerminals"
+              :key="t.id"
+              size="small"
+              class="mobile-terminal-card"
+            >
+              <template #header>
+                <div class="mobile-terminal-card-header">
+                  <n-text strong class="mobile-terminal-title">{{ t.title || t.metadata?.title || 'Terminal' }}</n-text>
+                  <n-tag
+                    size="small"
+                    :bordered="false"
+                    :type="statusTagType(String(t.status))"
+                  >
+                    {{ statusLabel(String(t.status)) }}
+                  </n-tag>
+                </div>
+              </template>
+
+              <div class="mobile-terminal-meta">
+                <n-text depth="3">PID：</n-text>
+                <n-text>{{ t.pid || '—' }}</n-text>
+              </div>
+              <div class="mobile-terminal-meta">
+                <n-text depth="3">任务：</n-text>
+                <n-text>{{ t.task_id ? getTaskTitle(t.task_id) : '—' }}</n-text>
+              </div>
+              <div class="mobile-terminal-meta">
+                <n-text depth="3">命令：</n-text>
+                <n-text code>{{ t.metadata?.running_command || '—' }}</n-text>
+              </div>
+              <div class="mobile-terminal-meta">
+                <n-text depth="3">时间：</n-text>
+                <n-text>{{ formatUnixSeconds(t.created_at) }}</n-text>
+              </div>
+
+              <template #footer>
+                <n-space justify="end" size="small" wrap>
+                  <n-button
+                    size="small"
+                    type="primary"
+                    :disabled="t.status !== 'running'"
+                    @click="openReconnect(t)"
+                  >
+                    重连
+                  </n-button>
+                  <n-button size="small" @click="openLogs(t)">日志</n-button>
+                  <n-popconfirm
+                    positive-text="关闭"
+                    negative-text="取消"
+                    @positive-click="() => { void closeTerminal(t) }"
+                  >
+                    <template #trigger>
+                      <n-button
+                        size="small"
+                        type="error"
+                        :disabled="t.status !== 'running'"
+                        :loading="closingId === t.id"
+                      >
+                        关闭
+                      </n-button>
+                    </template>
+                    确定关闭终端「{{ t.title || t.metadata?.title || t.id.slice(0, 8) }}」吗？
+                  </n-popconfirm>
+                </n-space>
+              </template>
+            </n-card>
+          </n-space>
+          <n-empty v-else description="暂无终端" />
+        </div>
       </n-card>
     </div>
 
@@ -77,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   NButton,
   NPopconfirm,
@@ -100,6 +175,7 @@ const closingId = ref<string | null>(null)
 
 const keyword = ref('')
 const statusFilter = ref<string | null>(null)
+const isMobile = ref(false)
 
 const statusOptions = [
   { label: '全部状态', value: null },
@@ -269,7 +345,7 @@ const columns: DataTableColumns<TerminalSession> = [
         onClick: () => openLogs(row)
       }, () => '查看日志'),
       h(NPopconfirm, {
-        onPositiveClick: () => closeTerminal(row),
+        onPositiveClick: () => { void closeTerminal(row) },
         positiveText: '关闭',
         negativeText: '取消'
       }, {
@@ -301,6 +377,19 @@ async function fetchTerminals() {
 onMounted(() => {
   fetchTerminals()
   taskStore.fetchTasks().catch(() => {})
+})
+
+function updateIsMobile() {
+  isMobile.value = window.innerWidth <= 768
+}
+
+onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
 })
 </script>
 
@@ -342,5 +431,37 @@ onMounted(() => {
 .modal-body {
   height: min(680px, calc(100vh - 240px));
   overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    padding: 14px 14px;
+  }
+
+  .content-area {
+    padding: 12px;
+  }
+
+  .mobile-terminal-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .mobile-terminal-title {
+    max-width: 70%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-terminal-meta {
+    margin-top: 6px;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
 }
 </style>

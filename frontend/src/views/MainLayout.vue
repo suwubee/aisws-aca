@@ -1,7 +1,8 @@
 <template>
-  <n-layout class="main-layout" has-sider>
+  <n-layout class="main-layout" :has-sider="!isMobile">
     <!-- 侧边栏 -->
     <n-layout-sider
+      v-if="!isMobile"
       class="sider"
       :collapsed="collapsed"
       :collapsed-width="64"
@@ -29,7 +30,19 @@
     <n-layout>
       <n-layout-header class="header">
         <div class="header-left">
-          <n-breadcrumb>
+          <n-button
+            v-if="isMobile"
+            quaternary
+            size="small"
+            class="mobile-menu-btn"
+            @click="showMobileMenu = true"
+          >
+            ☰
+          </n-button>
+          <div v-if="isMobile" class="mobile-title">
+            {{ currentPageName || '首页' }}
+          </div>
+          <n-breadcrumb v-else>
             <n-breadcrumb-item>
               <router-link to="/">首页</router-link>
             </n-breadcrumb-item>
@@ -46,9 +59,9 @@
               </n-button>
             </n-badge>
             <n-dropdown :options="userOptions" @select="handleUserAction">
-              <n-button quaternary size="small">
+              <n-button quaternary size="small" class="user-btn">
                 <n-avatar :size="24" round>{{ user?.username?.[0]?.toUpperCase() || 'U' }}</n-avatar>
-                <span style="margin-left: 8px;">{{ user?.username }}</span>
+                <span v-if="!isMobile" class="username">{{ user?.username }}</span>
               </n-button>
             </n-dropdown>
           </n-space>
@@ -59,10 +72,25 @@
       </n-layout-content>
     </n-layout>
   </n-layout>
+
+  <!-- Mobile Menu Drawer -->
+  <n-drawer v-model:show="showMobileMenu" placement="left" :width="260">
+    <n-drawer-content :native-scrollbar="false">
+      <div class="logo">
+        <span class="logo-icon">🤖</span>
+        <span class="logo-text">ACA</span>
+      </div>
+      <n-menu
+        :value="activeMenu"
+        :options="menuOptions"
+        @update:value="handleMobileMenuChange"
+      />
+    </n-drawer-content>
+  </n-drawer>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, h, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, h, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -76,6 +104,8 @@ import {
   NSpace,
   NDropdown,
   NBadge,
+  NDrawer,
+  NDrawerContent,
   NBreadcrumb,
   NBreadcrumbItem
 } from 'naive-ui'
@@ -89,6 +119,8 @@ const authStore = useAuthStore()
 const collapsed = ref(false)
 const unreadCount = ref(0)
 const user = computed(() => authStore.user)
+const showMobileMenu = ref(false)
+const isMobile = ref(false)
 
 const menuOptions: MenuOption[] = [
   {
@@ -204,6 +236,11 @@ function handleMenuChange(key: string) {
   }
 }
 
+function handleMobileMenuChange(key: string) {
+  showMobileMenu.value = false
+  handleMenuChange(key)
+}
+
 function handleUserAction(key: string) {
   if (key === 'logout') {
     handleLogout()
@@ -230,6 +267,29 @@ onMounted(() => {
   // 定期检查未读消息
   setInterval(fetchUnreadCount, 30000)
 })
+
+function updateIsMobile() {
+  isMobile.value = window.innerWidth <= 768
+  if (!isMobile.value) {
+    showMobileMenu.value = false
+  }
+}
+
+onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
+
+watch(
+  () => route.path,
+  () => {
+    showMobileMenu.value = false
+  }
+)
 </script>
 
 <style scoped>
@@ -279,6 +339,25 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.mobile-menu-btn {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.mobile-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e2e8f0;
+  max-width: 55vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-btn .username {
+  margin-left: 8px;
 }
 
 .header-right {

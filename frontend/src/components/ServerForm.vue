@@ -3,7 +3,7 @@
     v-model:show="showModal"
     preset="dialog"
     :title="mode === 'create' ? '添加服务器' : '编辑服务器'"
-    style="width: 640px"
+    style="width: min(640px, 94vw)"
   >
     <n-form
       ref="formRef"

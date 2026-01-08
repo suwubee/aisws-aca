@@ -63,7 +63,7 @@
     </div>
 
     <!-- Create Task Modal -->
-    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: 550px">
+    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: min(550px, 94vw)">
       <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
@@ -109,9 +109,9 @@ const newTask = reactive({
 
 // Task statistics
 const taskStats = computed(() => ({
-  pending: taskStore.tasks.filter(t => t.status === 'pending' || t.status === 'todo').length,
-  inProgress: taskStore.tasks.filter(t => t.status === 'in_progress').length,
-  completed: taskStore.tasks.filter(t => t.status === 'completed' || t.status === 'done').length,
+  pending: taskStore.tasks.filter(t => t.status === 'todo').length,
+  inProgress: taskStore.tasks.filter(t => t.status === 'in_progress' || t.status === 'paused').length,
+  completed: taskStore.tasks.filter(t => t.status === 'done' || t.status === 'failed' || t.status === 'timeout').length,
   total: taskStore.tasks.length
 }))
 
@@ -218,6 +218,27 @@ async function handleCreateTask() {
 .stat-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    height: calc(100dvh - 56px);
+    padding: 8px;
+    gap: 8px;
+    overflow: auto;
+  }
+
+  .stats-row {
+    flex-wrap: wrap;
+  }
+
+  .stat-card {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .terminal-row {
+    min-height: 60dvh;
+  }
 }
 
 .stat-content {

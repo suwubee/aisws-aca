@@ -27,7 +27,7 @@
     v-model:show="showPreview"
     preset="card"
     title="导入预览"
-    style="width: 900px"
+    style="width: min(900px, 96vw)"
     :bordered="false"
   >
     <n-space vertical>
@@ -298,4 +298,3 @@ async function confirmImport() {
   }
 }
 </script>
-

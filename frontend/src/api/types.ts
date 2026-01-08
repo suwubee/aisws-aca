@@ -324,12 +324,20 @@ export interface TerminalWsApprovalEvent {
   auto_handled: boolean
 }
 
+export interface TerminalWsAILogEvent {
+  type: string
+  message: string
+  input_type?: string
+  input_data?: string
+}
+
 export type TerminalWsServerMessage =
   | { type: 'ready'; metadata: TerminalSessionMetadata }
   | { type: 'data'; data: string }
   | { type: 'metadata'; metadata: TerminalSessionMetadata }
   | { type: 'exit'; exit_code?: number; message?: string }
   | { type: 'approval'; approval_result?: TerminalWsApprovalEvent; message?: string }
+  | { type: 'ai_log'; ai_log?: TerminalWsAILogEvent }
   | { type: 'message'; message: string }
   | { type: 'approval_needed'; terminal_id: string; prompt_type?: string; prompt_content?: string }
   | { type: 'error'; message: string }

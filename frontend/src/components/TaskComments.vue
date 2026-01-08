@@ -82,7 +82,7 @@
                   positive-text="删除"
                   negative-text="取消"
                   :disabled="deletingId === comment.id"
-                  @positive-click="() => handleDelete(comment.id)"
+                  @positive-click="() => { void handleDelete(comment.id) }"
                 >
                   <template #trigger>
                     <n-button

@@ -192,13 +192,15 @@ func (ctrl *TerminalController) LinkTask(c *fiber.Ctx) error {
 
 // WebSocket消息结构
 type WSMessage struct {
-	Type     string                    `json:"type"`
-	Data     string                    `json:"data,omitempty"`
-	Cols     uint16                    `json:"cols,omitempty"`
-	Rows     uint16                    `json:"rows,omitempty"`
-	Metadata *terminal.SessionMetadata `json:"metadata,omitempty"`
-	ExitCode int                       `json:"exit_code,omitempty"`
-	Message  string                    `json:"message,omitempty"`
+	Type           string                    `json:"type"`
+	Data           string                    `json:"data,omitempty"`
+	Cols           uint16                    `json:"cols,omitempty"`
+	Rows           uint16                    `json:"rows,omitempty"`
+	Metadata       *terminal.SessionMetadata `json:"metadata,omitempty"`
+	ExitCode       int                       `json:"exit_code,omitempty"`
+	Message        string                    `json:"message,omitempty"`
+	ApprovalResult *terminal.ApprovalEvent   `json:"approval_result,omitempty"`
+	AILog          *terminal.AILogEvent      `json:"ai_log,omitempty"`
 }
 
 // HandleWebSocket WebSocket处理
@@ -260,17 +262,65 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 	// 转发会话事件
 	for event := range eventCh {
 		wsMsg := WSMessage{
-			Type:     string(event.Type),
-			Data:     event.Data,
-			Metadata: event.Metadata,
-			ExitCode: event.ExitCode,
-			Message:  event.Message,
+			Type:           string(event.Type),
+			Data:           event.Data,
+			Metadata:       event.Metadata,
+			ExitCode:       event.ExitCode,
+			Message:        event.Message,
+			ApprovalResult: event.ApprovalResult,
+			AILog:          event.AILog,
 		}
 		if err := c.WriteJSON(wsMsg); err != nil {
 			utils.Debug("WebSocket write error", zap.Error(err))
 			return
 		}
 	}
+}
+
+// SendInput 通过HTTP向终端发送输入（用于审批中心等非WS场景）
+func (ctrl *TerminalController) SendInput(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+	if ctrl.manager == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
+	}
+
+	session := ctrl.manager.GetSession(id)
+	if session == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	var req struct {
+		Data  string `json:"data"`  // base64 encoded bytes (preferred)
+		Input string `json:"input"` // raw string input (fallback)
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	var payload []byte
+	if strings.TrimSpace(req.Data) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.Data))
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid base64 data"})
+		}
+		payload = decoded
+	} else {
+		payload = []byte(req.Input)
+	}
+
+	if len(payload) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Empty input"})
+	}
+
+	if err := session.Write(payload); err != nil {
+		utils.Error("Failed to write terminal input", zap.String("terminal", id), zap.Error(err))
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to send input"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Input sent"})
 }
 
 // GetTerminalStats 获取终端统计
@@ -291,6 +341,7 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Post("/:id/hide", ctrl.HideTerminal)
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
+	terminals.Post("/:id/input", ctrl.SendInput)
 	terminals.Get("/:id/logs", ctrl.GetLogs)
 	terminals.Delete("/:id/logs", ctrl.ClearLogs)
 	terminals.Delete("/:id/logs/:logId", ctrl.DeleteLog)

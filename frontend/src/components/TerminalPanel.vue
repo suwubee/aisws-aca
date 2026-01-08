@@ -150,7 +150,7 @@
       title="创建终端"
       positive-text="创建"
       negative-text="取消"
-      style="width: 520px"
+      style="width: min(520px, 94vw)"
       @positive-click="confirmCreateTerminal"
     >
       <n-form label-placement="left" label-width="90">
@@ -233,6 +233,22 @@ function setTerminalRef(id: string, el: any) {
   }
 }
 
+function fitActiveTerminal() {
+  const id = activeTerminalId.value
+  if (!id) return
+  requestAnimationFrame(() => {
+    terminalRefs.get(id)?.fit?.()
+  })
+}
+
+function focusActiveTerminal() {
+  const id = activeTerminalId.value
+  if (!id) return
+  requestAnimationFrame(() => {
+    terminalRefs.get(id)?.focus?.()
+  })
+}
+
 function sendQuickInput(terminalId: string, value: string) {
   const terminalRef = terminalRefs.get(terminalId)
   if (terminalRef && terminalRef.sendInput) {
@@ -272,6 +288,15 @@ function closeDisplayMode() {
   isFullscreen.value = false
   isFloating.value = false
 }
+
+watch(activeTerminalId, () => {
+  fitActiveTerminal()
+  focusActiveTerminal()
+})
+
+watch([showLogs, showApprovals, isFullscreen, isFloating], () => {
+  fitActiveTerminal()
+})
 
 // ESC键退出全屏/浮层
 function handleEsc(e: KeyboardEvent) {
@@ -586,5 +611,34 @@ function getStatusClass(terminal: TerminalTab) {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .terminal-panel.is-floating {
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 0;
+  }
+
+  .tab-task {
+    display: none;
+  }
+
+  .tab-title {
+    max-width: 80px;
+  }
+
+  .terminal-content.with-logs {
+    flex-direction: column;
+  }
+
+  .logs-panel {
+    width: 100%;
+    height: 40%;
+    border-left: none;
+    border-top: 1px solid #333;
+  }
 }
 </style>

@@ -158,7 +158,7 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.task-status.pending {
+.task-status.todo {
   background: #64748b;
 }
 
@@ -167,11 +167,19 @@ onUnmounted(() => {
   animation: pulse 2s infinite;
 }
 
-.task-status.completed {
+.task-status.paused {
+  background: #f59e0b;
+}
+
+.task-status.done {
   background: #22c55e;
 }
 
 .task-status.failed {
+  background: #ef4444;
+}
+
+.task-status.timeout {
   background: #ef4444;
 }
 

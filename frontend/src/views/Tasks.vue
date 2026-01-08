@@ -10,7 +10,7 @@
     </div>
 
     <div class="task-filters">
-      <n-space>
+      <n-space wrap>
         <n-select
           v-model:value="statusFilter"
           :options="statusOptions"
@@ -27,17 +27,81 @@
       </n-space>
     </div>
 
+    <div v-if="isMobile" class="mobile-task-cards">
+      <n-space v-if="filteredTasks.length > 0" vertical size="12">
+        <n-card
+          v-for="task in filteredTasks"
+          :key="task.id"
+          size="small"
+          class="mobile-task-card"
+        >
+          <template #header>
+            <div class="mobile-task-card-header">
+              <n-text strong class="mobile-task-title">{{ task.title }}</n-text>
+              <n-tag :type="(statusMap[task.status]?.type || 'default')" size="small">
+                {{ statusMap[task.status]?.label || task.status }}
+              </n-tag>
+            </div>
+          </template>
+
+          <div v-if="task.description" class="mobile-task-desc">
+            {{ task.description }}
+          </div>
+
+          <n-space size="6" wrap>
+            <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
+              {{ ['低','中','高','紧急'][task.priority] }}
+            </n-tag>
+            <n-tag v-if="task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
+            <n-tag v-if="task.server?.name" size="small">{{ task.server.name }}</n-tag>
+          </n-space>
+
+          <div v-if="task.work_dir" class="mobile-task-meta">
+            <n-text depth="3">目录：</n-text>
+            <n-text code>{{ task.work_dir }}</n-text>
+          </div>
+
+          <template #footer>
+            <n-space justify="end" size="small" wrap>
+              <n-button size="small" @click="router.push(`/task/${task.id}`)">详情</n-button>
+              <n-button
+                v-if="task.status === 'todo' && task.work_dir"
+                size="small"
+                type="primary"
+                @click="startTask(task)"
+              >
+                启动
+              </n-button>
+              <n-popconfirm
+                positive-text="删除"
+                negative-text="取消"
+                @positive-click="() => { void deleteTask(task.id) }"
+              >
+                <template #trigger>
+                  <n-button size="small" type="error">删除</n-button>
+                </template>
+                确定删除任务「{{ task.title }}」吗？
+              </n-popconfirm>
+            </n-space>
+          </template>
+        </n-card>
+      </n-space>
+      <n-empty v-else description="暂无任务" />
+    </div>
+
     <n-data-table
+      v-else
       :columns="columns"
       :data="filteredTasks"
       :loading="loading"
       :row-key="(row: any) => row.id"
       :pagination="{ pageSize: 20 }"
+      :scroll-x="900"
       striped
     />
 
     <!-- Create Task Modal -->
-    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: 600px">
+    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: min(600px, 94vw)">
       <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
@@ -48,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, h, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, NButton, NTag, NSpace } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
@@ -65,6 +129,7 @@ const loading = ref(false)
 const showCreateTask = ref(false)
 const statusFilter = ref<string | null>(null)
 const searchText = ref('')
+const isMobile = ref(false)
 
 const newTask = reactive({
   title: '',
@@ -84,17 +149,23 @@ const newTask = reactive({
 })
 
 const statusOptions = [
-  { label: '待处理', value: 'pending' },
+  { label: '待办', value: 'todo' },
   { label: '进行中', value: 'in_progress' },
-  { label: '已完成', value: 'completed' },
-  { label: '失败', value: 'failed' }
+  { label: '已暂停', value: 'paused' },
+  { label: '已完成', value: 'done' },
+  { label: '失败', value: 'failed' },
+  { label: '超时', value: 'timeout' },
+  { label: '已归档', value: 'archived' }
 ]
 
-const statusMap: Record<string, { type: 'default' | 'info' | 'success' | 'error', label: string }> = {
-  pending: { type: 'default', label: '待处理' },
+const statusMap: Record<string, { type: 'default' | 'info' | 'success' | 'warning' | 'error', label: string }> = {
+  todo: { type: 'default', label: '待办' },
   in_progress: { type: 'info', label: '进行中' },
-  completed: { type: 'success', label: '已完成' },
-  failed: { type: 'error', label: '失败' }
+  paused: { type: 'warning', label: '已暂停' },
+  done: { type: 'success', label: '已完成' },
+  archived: { type: 'default', label: '已归档' },
+  failed: { type: 'error', label: '失败' },
+  timeout: { type: 'error', label: '超时' }
 }
 
 const columns: DataTableColumns<any> = [
@@ -143,13 +214,13 @@ const columns: DataTableColumns<any> = [
       }, { default: () => '详情' }))
 
       // 根据状态显示不同按钮
-      if (row.status === 'in_progress' && row.terminal_id) {
+      if ((row.status === 'in_progress' || row.status === 'paused') && row.terminal_id) {
         buttons.push(h(NButton, {
           size: 'small',
           type: 'info',
           onClick: () => openTerminal(row.terminal_id)
         }, { default: () => '终端' }))
-      } else if (row.status === 'pending') {
+      } else if (row.status === 'todo') {
         buttons.push(h(NButton, {
           size: 'small',
           type: 'primary',
@@ -260,6 +331,19 @@ async function deleteTask(taskId: string) {
 }
 
 onMounted(fetchData)
+
+function updateIsMobile() {
+  isMobile.value = window.innerWidth <= 768
+}
+
+onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
 </script>
 
 <style scoped>
@@ -271,5 +355,41 @@ onMounted(fetchData)
 }
 .task-filters {
   margin-bottom: 16px;
+}
+
+@media (max-width: 768px) {
+  .tasks-page {
+    padding: 12px;
+  }
+
+  .mobile-task-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .mobile-task-title {
+    max-width: 70%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-task-desc {
+    margin: 8px 0;
+    color: #94a3b8;
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .mobile-task-meta {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
 }
 </style>

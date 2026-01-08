@@ -61,7 +61,7 @@
                 @update:value="fetchLogs"
               />
               <n-popconfirm
-                @positive-click="clearSessionLogs"
+                @positive-click="() => { void clearSessionLogs() }"
                 positive-text="确定"
                 negative-text="取消"
               >
@@ -201,7 +201,7 @@ const columns: DataTableColumns<LogEntry> = [
     width: 70,
     render(row) {
       return h(NPopconfirm, {
-        onPositiveClick: () => deleteLog(row.id),
+        onPositiveClick: () => { void deleteLog(row.id) },
         positiveText: '确定',
         negativeText: '取消'
       }, {

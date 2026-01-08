@@ -24,6 +24,9 @@
 
     <div class="task-footer">
       <div class="task-meta">
+        <n-tag v-if="taskStatusLabel" :type="taskStatusType" size="small">
+          {{ taskStatusLabel }}
+        </n-tag>
         <n-tag
           v-if="task.priority > 0"
           :type="priorityType"
@@ -94,6 +97,7 @@ const emit = defineEmits<{
   (e: 'open-terminal', task: Task): void
   (e: 'start', task: Task): void
   (e: 'detail', task: Task): void
+  (e: 'move', task: Task, status: string): void
 }>()
 
 const isDragging = ref(false)
@@ -116,22 +120,54 @@ const priorityType = computed(() => {
   return types[props.task.priority] as 'default' | 'info' | 'warning' | 'error'
 })
 
+const taskStatus = computed(() => props.task.status)
+
+const taskStatusLabel = computed(() => {
+  const labels: Record<string, string> = {
+    todo: '待办',
+    in_progress: '进行中',
+    paused: '已暂停',
+    done: '已完成',
+    archived: '已归档',
+    failed: '失败',
+    timeout: '超时'
+  }
+  return labels[taskStatus.value] || taskStatus.value
+})
+
+const taskStatusType = computed(() => {
+  const status = taskStatus.value
+  if (status === 'done') return 'success'
+  if (status === 'failed' || status === 'timeout') return 'error'
+  if (status === 'in_progress' || status === 'paused') return 'warning'
+  if (status === 'archived') return 'default'
+  return 'default'
+})
+
 const aiStatus = computed(() => {
   // 从关联的终端获取AI状态
   const terminal = relatedTerminals.value.find(t => t.metadata?.ai_assistant?.detected)
   if (terminal?.metadata?.ai_assistant) {
-    return terminal.metadata.ai_assistant.state
+    const state = terminal.metadata.ai_assistant.state
+    const labels: Record<string, string> = {
+      idle: '空闲',
+      working: '工作中',
+      waiting_input: '等待输入',
+      waiting_approval: '待审批',
+      unknown: '未知'
+    }
+    return labels[state] || state
   }
   return null
 })
 
 const aiStatusType = computed(() => {
-  const status = aiStatus.value
-  if (status === 'idle') return 'default'
-  if (status === 'thinking') return 'warning'
-  if (status === 'executing') return 'info'
-  if (status === 'waiting_approval') return 'error'
-  return 'success'
+  const terminal = relatedTerminals.value.find(t => t.metadata?.ai_assistant?.detected)
+  const state = terminal?.metadata?.ai_assistant?.state
+  if (state === 'waiting_approval') return 'error'
+  if (state === 'waiting_input') return 'warning'
+  if (state === 'working') return 'info'
+  return 'default'
 })
 
 const serverLabel = computed(() => {
@@ -140,19 +176,47 @@ const serverLabel = computed(() => {
   return serverStore.getServerName(props.task.server_id) || props.task.server_id
 })
 
+function taskStatusGroup(status: string) {
+  const s = (status || '').toLowerCase()
+  if (s === 'in_progress' || s === 'paused') return 'in_progress'
+  if (s === 'done' || s === 'failed' || s === 'timeout') return 'done'
+  if (s === 'archived') return 'archived'
+  return 'todo'
+}
+
 function activateTerminal(id: string) {
   terminalStore.setActiveTerminal(id)
 }
 
 const menuOptions = computed(() => {
-  const options = [
-    { label: '编辑', key: 'edit' },
-    { label: '查看详情', key: 'detail' }
-  ]
+  const options: any[] = []
+
   // 如果有自动化配置，添加启动选项
   if (props.task.work_dir || props.task.cli_type) {
-    options.unshift({ label: '▶ 启动任务', key: 'start' })
+    options.push({ label: '▶ 启动任务', key: 'start' })
   }
+
+  options.push(
+    { label: '编辑', key: 'edit' },
+    { label: '查看详情', key: 'detail' }
+  )
+
+  const currentGroup = taskStatusGroup(props.task.status)
+  const moveTargets = [
+    { status: 'todo', label: '待办' },
+    { status: 'in_progress', label: '进行中' },
+    { status: 'done', label: '已完成' },
+    { status: 'archived', label: '已归档' }
+  ].filter(t => t.status !== currentGroup)
+
+  if (moveTargets.length > 0) {
+    options.push({ type: 'divider', key: 'd-move' })
+    moveTargets.forEach(t => {
+      options.push({ label: `移动到：${t.label}`, key: `move:${t.status}` })
+    })
+  }
+
+  options.push({ type: 'divider', key: 'd-delete' })
   options.push({ label: '删除', key: 'delete' })
   return options
 })
@@ -166,6 +230,8 @@ function handleMenuSelect(key: string) {
     emit('start', props.task)
   } else if (key === 'detail') {
     emit('detail', props.task)
+  } else if (key.startsWith('move:')) {
+    emit('move', props.task, key.slice('move:'.length))
   }
 }
 </script>
@@ -188,6 +254,16 @@ function handleMenuSelect(key: string) {
 .task-card.dragging {
   opacity: 0.5;
   cursor: grabbing;
+}
+
+@media (max-width: 768px) {
+  .task-card {
+    cursor: pointer;
+  }
+
+  .task-card:hover {
+    transform: none;
+  }
 }
 
 .task-header {

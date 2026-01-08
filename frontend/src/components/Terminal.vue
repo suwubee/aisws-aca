@@ -31,6 +31,7 @@ let resizeObserver: ResizeObserver | null = null
 let resizeRaf: number | null = null
 const decoder = new TextDecoder('utf-8')
 let didInitialScroll = false
+let didOpen = false
 
 onMounted(() => {
   initTerminal()
@@ -41,6 +42,8 @@ onMounted(() => {
   if (terminalRef.value) {
     resizeObserver = new ResizeObserver(() => handleResize())
     resizeObserver.observe(terminalRef.value)
+    terminalRef.value.addEventListener('mousedown', focusTerminal)
+    terminalRef.value.addEventListener('touchstart', focusTerminal, { passive: true })
   }
 })
 
@@ -49,6 +52,10 @@ onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
+  }
+  if (terminalRef.value) {
+    terminalRef.value.removeEventListener('mousedown', focusTerminal)
+    terminalRef.value.removeEventListener('touchstart', focusTerminal)
   }
   if (resizeRaf) {
     cancelAnimationFrame(resizeRaf)
@@ -79,11 +86,6 @@ function initTerminal() {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
 
-  if (terminalRef.value) {
-    terminal.open(terminalRef.value)
-    fitAddon.fit()
-  }
-
   // 监听用户输入
   terminal.onData((data) => {
     sendInput(data)
@@ -93,6 +95,9 @@ function initTerminal() {
   terminal.onResize(({ cols, rows }) => {
     sendResize(cols, rows)
   })
+
+  // 如果此时容器已可见，立即打开；否则等待 ResizeObserver / 窗口 resize 再打开
+  openIfPossible()
 }
 
 function connectWebSocket() {
@@ -107,10 +112,8 @@ function connectWebSocket() {
     console.log('WebSocket connected')
     emit('connection-change', 'connected')
     didInitialScroll = false
-    // 发送初始大小
-    if (terminal) {
-      sendResize(terminal.cols, terminal.rows)
-    }
+    // 确保在可见尺寸下先 fit，再同步到后端（避免光标/换行错位）
+    handleResize()
   }
 
   ws.onmessage = (event) => {
@@ -156,6 +159,24 @@ function handleMessage(msg: any) {
       }
       break
 
+    case 'approval':
+      if (msg.approval_result) {
+        const action = msg.approval_result.action || 'approval'
+        const autoHandled = !!msg.approval_result.auto_handled
+        if (autoHandled) {
+          approvalStore.removePendingApproval(props.sessionId)
+          break
+        }
+        approvalStore.addPendingApproval({
+          id: props.sessionId,
+          terminalId: props.sessionId,
+          promptContent: msg.message || '',
+          promptType: action,
+          receivedAt: Date.now()
+        })
+      }
+      break
+
     case 'approval_needed':
       if (msg.terminal_id) {
         approvalStore.addPendingApproval({
@@ -168,6 +189,10 @@ function handleMessage(msg: any) {
       } else {
         console.warn('Invalid approval_needed message:', msg)
       }
+      break
+
+    case 'ai_log':
+      // no-op: TerminalApprovals 会单独订阅并展示
       break
 
     case 'exit':
@@ -184,14 +209,18 @@ function handleMessage(msg: any) {
 
 function sendInput(data: string) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    // 使用 TextEncoder 正确编码 UTF-8
-    const encoder = new TextEncoder()
-    const bytes = encoder.encode(data)
-    const base64 = btoa(String.fromCharCode(...bytes))
-    ws.send(JSON.stringify({
-      type: 'input',
-      data: base64
-    }))
+    try {
+      // 使用 TextEncoder 正确编码 UTF-8，并避免长粘贴触发展开参数上限
+      const encoder = new TextEncoder()
+      const bytes = encoder.encode(data)
+      const base64 = bytesToBase64(bytes)
+      ws.send(JSON.stringify({
+        type: 'input',
+        data: base64
+      }))
+    } catch (e) {
+      console.error('Failed to send input:', e)
+    }
   }
 }
 
@@ -208,6 +237,10 @@ function sendResize(cols: number, rows: number) {
 function handleResize() {
   if (!fitAddon || !terminalRef.value) return
 
+  // 避免在 hidden 节点上 open/fit，防止字体测量错误导致光标错位
+  openIfPossible()
+  if (!didOpen) return
+
   // 避免在 CSS 动画/频繁 resize 时多次 fit
   if (resizeRaf) cancelAnimationFrame(resizeRaf)
   resizeRaf = requestAnimationFrame(() => {
@@ -218,9 +251,37 @@ function handleResize() {
   })
 }
 
+function openIfPossible() {
+  if (didOpen || !terminal || !terminalRef.value) return
+  const { clientWidth, clientHeight } = terminalRef.value
+  if (clientWidth === 0 || clientHeight === 0) return
+
+  terminal.open(terminalRef.value)
+  didOpen = true
+
+  // 先 fit 一次再聚焦，减少初次渲染/输入错位
+  fitAddon?.fit()
+  focusTerminal()
+}
+
+function focusTerminal() {
+  terminal?.focus()
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
 // 暴露方法给父组件
 defineExpose({
-  sendInput
+  sendInput,
+  focus: focusTerminal,
+  fit: handleResize
 })
 </script>
 

@@ -39,7 +39,7 @@ export const useApprovalStore = defineStore('approval', () => {
 
   async function respondToApproval(terminalId: string, response: string) {
     try {
-      await api.post(`/terminal/${encodeURIComponent(terminalId)}/input`, {
+      await api.post(`/terminals/${encodeURIComponent(terminalId)}/input`, {
         data: encodeBase64Utf8(response)
       })
       removePendingApproval(terminalId)

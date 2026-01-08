@@ -77,6 +77,41 @@ type TaskListItem struct {
 	Server *TaskServerInfo `json:"server,omitempty"`
 }
 
+var allowedTaskStatuses = map[string]struct{}{
+	"todo":        {},
+	"in_progress": {},
+	"paused":      {},
+	"done":        {},
+	"failed":      {},
+	"timeout":     {},
+	"archived":    {},
+}
+
+func normalizeTaskStatus(status string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(status))
+	if s == "" {
+		return "todo", true
+	}
+	_, ok := allowedTaskStatuses[s]
+	return s, ok
+}
+
+func taskStatusGroup(status string) string {
+	s := strings.ToLower(strings.TrimSpace(status))
+	switch s {
+	case "todo":
+		return "todo"
+	case "in_progress", "paused":
+		return "in_progress"
+	case "done", "failed", "timeout":
+		return "done"
+	case "archived":
+		return "archived"
+	default:
+		return "todo"
+	}
+}
+
 // CreateTask 创建任务
 func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 	var req CreateTaskRequest
@@ -88,9 +123,9 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Title is required"})
 	}
 
-	status := req.Status
-	if status == "" {
-		status = "pending"
+	status, ok := normalizeTaskStatus(req.Status)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
 	}
 
 	cliType := req.CLIType
@@ -301,8 +336,12 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 		updates["priority"] = *req.Priority
 	}
 	if req.Status != nil {
-		updates["status"] = *req.Status
-		if *req.Status == "done" {
+		normalized, ok := normalizeTaskStatus(*req.Status)
+		if !ok {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
+		}
+		updates["status"] = normalized
+		if normalized == "done" {
 			now := time.Now()
 			updates["completed_at"] = now
 		}
@@ -380,12 +419,18 @@ func (ctrl *TaskController) MoveTask(c *fiber.Ctx) error {
 	}
 
 	updates := map[string]interface{}{
-		"status":      req.Status,
+		"status":      "",
 		"order_index": req.OrderIndex,
 		"updated_at":  time.Now(),
 	}
 
-	if req.Status == "done" {
+	normalized, ok := normalizeTaskStatus(req.Status)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
+	}
+	updates["status"] = normalized
+
+	if normalized == "done" {
 		now := time.Now()
 		updates["completed_at"] = now
 	}
@@ -417,11 +462,8 @@ func (ctrl *TaskController) GetTasksByStatus(c *fiber.Ctx) error {
 	}
 
 	for _, item := range items {
-		if _, ok := grouped[item.Status]; ok {
-			grouped[item.Status] = append(grouped[item.Status], item)
-		} else {
-			grouped["todo"] = append(grouped["todo"], item)
-		}
+		group := taskStatusGroup(item.Status)
+		grouped[group] = append(grouped[group], item)
 	}
 
 	return c.JSON(fiber.Map{"items": grouped})

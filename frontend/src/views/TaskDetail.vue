@@ -7,11 +7,11 @@
       <n-text strong style="font-size: 18px">任务详情</n-text>
       <div class="header-actions">
         <!-- 待处理状态：显示启动按钮 -->
-        <n-button v-if="task?.status === 'pending' && task?.work_dir" type="primary" @click="handleStartTask">
+        <n-button v-if="taskStatus === 'todo' && task?.work_dir" type="primary" @click="handleStartTask">
           ▶ 启动任务
         </n-button>
         <!-- 进行中状态：显示终端和终止按钮 -->
-        <template v-else-if="task?.status === 'in_progress'">
+        <template v-else-if="taskStatus === 'in_progress' || taskStatus === 'paused'">
           <n-button v-if="linkedTerminal" type="info" @click="handleOpenTerminal(linkedTerminal.id)">
             📺 打开终端
           </n-button>
@@ -20,7 +20,7 @@
           </n-button>
         </template>
         <!-- 已完成/失败状态：显示复制和删除按钮 -->
-        <template v-else-if="task?.status === 'completed' || task?.status === 'failed'">
+        <template v-else-if="taskStatus === 'done' || taskStatus === 'failed' || taskStatus === 'timeout'">
           <n-button type="primary" @click="handleCopyTask">
             📋 复制任务
           </n-button>
@@ -112,6 +112,7 @@
             v-else
             :columns="approvalColumns"
             :data="approvals"
+            :scroll-x="720"
             :max-height="300"
             size="small"
           />
@@ -168,24 +169,32 @@ const serverLoading = ref(false)
 
 const taskId = computed(() => route.params.id as string)
 
+const taskStatus = computed(() => task.value?.status || '')
+
 const statusLabel = computed(() => {
   const labels: Record<string, string> = {
     todo: '待办',
     in_progress: '进行中',
     done: '已完成',
-    archived: '已归档'
+    archived: '已归档',
+    paused: '已暂停',
+    failed: '失败',
+    timeout: '超时'
   }
-  return labels[task.value?.status || ''] || task.value?.status
+  return labels[taskStatus.value] || task.value?.status
 })
 
 const statusType = computed(() => {
-  const types: Record<string, 'default' | 'info' | 'success' | 'warning'> = {
+  const types: Record<string, 'default' | 'info' | 'success' | 'warning' | 'error'> = {
     todo: 'default',
     in_progress: 'warning',
     done: 'success',
-    archived: 'info'
+    archived: 'info',
+    paused: 'warning',
+    failed: 'error',
+    timeout: 'error'
   }
-  return types[task.value?.status || ''] || 'default'
+  return types[taskStatus.value] || 'default'
 })
 
 const priorityLabel = computed(() => {
@@ -429,5 +438,25 @@ onMounted(() => {
   color: #666;
   flex-shrink: 0;
   font-size: 11px;
+}
+
+@media (max-width: 768px) {
+  .task-detail {
+    padding: 12px;
+  }
+
+  .task-detail-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-actions {
+    margin-left: 0;
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 </style>

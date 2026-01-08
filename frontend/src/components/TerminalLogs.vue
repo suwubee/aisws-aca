@@ -20,7 +20,7 @@
           </template>
         </n-button>
         <n-popconfirm
-          @positive-click="clearAllLogs"
+          @positive-click="() => { void clearAllLogs() }"
           positive-text="确定"
           negative-text="取消"
         >

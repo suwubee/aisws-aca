@@ -47,6 +47,13 @@ type fakeTerminalManager struct {
 	createErr   error
 }
 
+func (m *fakeTerminalManager) GetSession(id string) taskTerminal {
+	if m.nextSession != nil && m.nextSession.ID() == id {
+		return m.nextSession
+	}
+	return nil
+}
+
 func (m *fakeTerminalManager) CreateSession(title string, taskID *string) (taskTerminal, error) {
 	m.localSessionsCreated++
 	m.lastCreateTitle = title
@@ -118,7 +125,7 @@ func TestAutomationService_StartTask_UsesLocalTerminalWhenServerIDNil(t *testing
 	svc := &AutomationService{terminalManager: tm}
 
 	origSleep := sleep
-	sleep = func(time.Duration) {}
+	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
 	t.Cleanup(func() { sleep = origSleep })
 
 	result, err := svc.StartTask(&taskModel)
@@ -196,7 +203,7 @@ func TestAutomationService_StartTask_UsesSSHTerminalWhenServerIDSet(t *testing.T
 	svc := &AutomationService{terminalManager: tm}
 
 	origSleep := sleep
-	sleep = func(time.Duration) {}
+	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
 	t.Cleanup(func() { sleep = origSleep })
 
 	result, err := svc.StartTask(&taskModel)
@@ -262,7 +269,7 @@ func TestAutomationService_StartTask_ReturnsErrorWhenServerMissing(t *testing.T)
 	svc := &AutomationService{terminalManager: tm}
 
 	origSleep := sleep
-	sleep = func(time.Duration) {}
+	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
 	t.Cleanup(func() { sleep = origSleep })
 
 	result, err := svc.StartTask(&taskModel)
@@ -296,7 +303,7 @@ func TestAutomationService_StartTask_DoesNotCreateTerminalWhenLocalDirCreationFa
 	svc := &AutomationService{terminalManager: tm}
 
 	origSleep := sleep
-	sleep = func(time.Duration) {}
+	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
 	t.Cleanup(func() { sleep = origSleep })
 
 	_, err := svc.StartTask(&taskModel)
@@ -346,7 +353,7 @@ func TestAutomationService_StartTask_ReturnsErrorWhenRemoteMkdirFails(t *testing
 	svc := &AutomationService{terminalManager: tm}
 
 	origSleep := sleep
-	sleep = func(time.Duration) {}
+	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
 	t.Cleanup(func() { sleep = origSleep })
 
 	result, err := svc.StartTask(&taskModel)

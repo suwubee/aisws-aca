@@ -1,5 +1,86 @@
 <template>
-  <div class="kanban-board">
+  <div v-if="isMobile" class="kanban-mobile">
+    <n-tabs v-model:value="mobileTab" type="line" animated>
+      <n-tab-pane name="todo" :tab="`待办 (${getTaskCount('todo')})`">
+        <div class="mobile-task-list">
+          <TaskCard
+            v-for="task in getTasksByStatus('todo')"
+            :key="task.id"
+            :task="task"
+            draggable="false"
+            @edit="handleEditTask"
+            @delete="handleDeleteTask"
+            @open-terminal="handleOpenTerminal"
+            @start="handleStartTask"
+            @detail="handleViewDetail"
+            @move="handleMoveTask"
+          />
+          <div v-if="getTaskCount('todo') === 0" class="empty-placeholder">
+            暂无任务
+          </div>
+        </div>
+      </n-tab-pane>
+      <n-tab-pane name="in_progress" :tab="`进行中 (${getTaskCount('in_progress')})`">
+        <div class="mobile-task-list">
+          <TaskCard
+            v-for="task in getTasksByStatus('in_progress')"
+            :key="task.id"
+            :task="task"
+            draggable="false"
+            @edit="handleEditTask"
+            @delete="handleDeleteTask"
+            @open-terminal="handleOpenTerminal"
+            @start="handleStartTask"
+            @detail="handleViewDetail"
+            @move="handleMoveTask"
+          />
+          <div v-if="getTaskCount('in_progress') === 0" class="empty-placeholder">
+            暂无任务
+          </div>
+        </div>
+      </n-tab-pane>
+      <n-tab-pane name="done" :tab="`已完成 (${getTaskCount('done')})`">
+        <div class="mobile-task-list">
+          <TaskCard
+            v-for="task in getTasksByStatus('done')"
+            :key="task.id"
+            :task="task"
+            draggable="false"
+            @edit="handleEditTask"
+            @delete="handleDeleteTask"
+            @open-terminal="handleOpenTerminal"
+            @start="handleStartTask"
+            @detail="handleViewDetail"
+            @move="handleMoveTask"
+          />
+          <div v-if="getTaskCount('done') === 0" class="empty-placeholder">
+            暂无任务
+          </div>
+        </div>
+      </n-tab-pane>
+      <n-tab-pane name="archived" :tab="`归档 (${getTaskCount('archived')})`">
+        <div class="mobile-task-list">
+          <TaskCard
+            v-for="task in getTasksByStatus('archived')"
+            :key="task.id"
+            :task="task"
+            draggable="false"
+            @edit="handleEditTask"
+            @delete="handleDeleteTask"
+            @open-terminal="handleOpenTerminal"
+            @start="handleStartTask"
+            @detail="handleViewDetail"
+            @move="handleMoveTask"
+          />
+          <div v-if="getTaskCount('archived') === 0" class="empty-placeholder">
+            暂无任务
+          </div>
+        </div>
+      </n-tab-pane>
+    </n-tabs>
+  </div>
+
+  <div v-else class="kanban-board">
     <div
       v-for="column in columns"
       :key="column.status"
@@ -29,6 +110,7 @@
           @open-terminal="handleOpenTerminal"
           @start="handleStartTask"
           @detail="handleViewDetail"
+          @move="handleMoveTask"
         />
         <div
           v-if="getTaskCount(column.status) === 0"
@@ -39,17 +121,18 @@
       </div>
     </div>
 
-    <TaskEditModal
-      v-if="editingTask"
-      v-model:show="showEditModal"
-      :task="editingTask"
-      @saved="handleTaskSaved"
-    />
   </div>
+
+  <TaskEditModal
+    v-if="editingTask"
+    v-model:show="showEditModal"
+    :task="editingTask"
+    @saved="handleTaskSaved"
+  />
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { useTaskStore, type Task } from '@/stores/task'
@@ -68,9 +151,24 @@ const columns = [
   { status: 'done', name: '已完成', color: '#10b981' }
 ]
 
+const isMobile = ref(false)
+const mobileTab = ref('todo')
+
+function updateIsMobile() {
+  isMobile.value = window.innerWidth <= 768
+}
+
 const draggedTask = ref<Task | null>(null)
 const showEditModal = ref(false)
 const editingTask = ref<Task | null>(null)
+
+function taskStatusGroup(status: string) {
+  const s = (status || '').toLowerCase()
+  if (s === 'in_progress' || s === 'paused') return 'in_progress'
+  if (s === 'done' || s === 'failed' || s === 'timeout') return 'done'
+  if (s === 'archived') return 'archived'
+  return 'todo'
+}
 
 watch(showEditModal, (show) => {
   if (!show) {
@@ -86,6 +184,15 @@ function getTaskCount(status: string) {
   return getTasksByStatus(status).length
 }
 
+onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
+
 function handleDragStart(event: DragEvent, task: Task) {
   draggedTask.value = task
   if (event.dataTransfer) {
@@ -98,7 +205,8 @@ async function handleDrop(event: DragEvent, status: string) {
   event.preventDefault()
   if (!draggedTask.value) return
 
-  if (draggedTask.value.status !== status) {
+  const currentGroup = taskStatusGroup(draggedTask.value.status)
+  if (currentGroup !== status) {
     try {
       await taskStore.moveTask(draggedTask.value.id, status, Date.now())
       message.success('任务已移动')
@@ -107,6 +215,18 @@ async function handleDrop(event: DragEvent, status: string) {
     }
   }
   draggedTask.value = null
+}
+
+async function handleMoveTask(task: Task, status: string) {
+  if (!status) return
+  if (taskStatusGroup(task.status) === status) return
+
+  try {
+    await taskStore.moveTask(task.id, status, Date.now())
+    message.success('任务已移动')
+  } catch (error) {
+    message.error('移动任务失败')
+  }
 }
 
 function handleEditTask(task: Task) {
@@ -167,6 +287,17 @@ function handleViewDetail(task: Task) {
 </script>
 
 <style scoped>
+.kanban-mobile {
+  padding: 8px 10px;
+}
+
+.mobile-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 0;
+}
+
 .kanban-board {
   display: flex;
   gap: 16px;

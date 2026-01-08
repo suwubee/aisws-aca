@@ -55,7 +55,7 @@
       v-model:show="showForm"
       preset="dialog"
       :title="formTitle"
-      style="width: 560px"
+      style="width: min(560px, 94vw)"
       :mask-closable="!saving"
       :close-on-esc="!saving"
     >
@@ -468,7 +468,7 @@ const columns: DataTableColumns<Workflow> = [
         onClick: () => run(row)
       }, () => '运行'),
       h(NPopconfirm, {
-        onPositiveClick: () => remove(row),
+        onPositiveClick: () => { void remove(row) },
         positiveText: '确定',
         negativeText: '取消'
       }, {

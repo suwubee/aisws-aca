@@ -149,14 +149,14 @@ function connectAILogWs() {
   if (!props.terminalId) return
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token')
-  const wsUrl = `${protocol}//${window.location.host}/api/terminal/ai-log?terminalId=${props.terminalId}&token=${token}`
+  const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws?sessionId=${props.terminalId}&token=${token}`
 
   aiLogWs = new WebSocket(wsUrl)
   aiLogWs.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
-      if (msg.type && msg.message) {
-        aiLogs.value.push({ type: msg.type, message: msg.message, time: new Date() })
+      if (msg.type === 'ai_log' && msg.ai_log?.type && msg.ai_log?.message) {
+        aiLogs.value.push({ type: msg.ai_log.type, message: msg.ai_log.message, time: new Date() })
         if (aiLogs.value.length > 100) {
           aiLogs.value = aiLogs.value.slice(-100)
         }
@@ -262,7 +262,6 @@ watch(() => props.terminalId, (newId) => {
 let refreshTimer: number | null = null
 onMounted(() => {
   refreshTimer = window.setInterval(() => fetchRecords(false), 5000)
-  connectAILogWs()
 })
 
 onUnmounted(() => {
@@ -450,4 +449,3 @@ onUnmounted(() => {
   color: #f87171;
 }
 </style>
-

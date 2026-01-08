@@ -3,7 +3,7 @@
     :show="show"
     preset="card"
     :title="'终端规则配置 - ' + (terminalTitle || terminalId)"
-    style="width: 650px"
+    style="width: min(650px, 94vw)"
     :bordered="false"
     @close="emit('close')"
   >

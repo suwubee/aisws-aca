@@ -10,7 +10,7 @@
       <Kanban />
     </div>
 
-    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: 550px">
+    <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: min(550px, 94vw)">
       <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
@@ -117,5 +117,11 @@ async function handleCreateTask() {
 .kanban-container {
   flex: 1;
   overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .kanban-container {
+    overflow: auto;
+  }
 }
 </style>

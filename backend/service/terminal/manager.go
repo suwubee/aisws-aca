@@ -268,7 +268,7 @@ func (m *Manager) waitSSHSession(session *Session, adapter *sshservice.SSHTermin
 		Message:  message,
 	})
 
-	close(session.done)
+	session.doneOnce.Do(func() { close(session.done) })
 }
 
 // GetSession 获取会话
@@ -347,6 +347,26 @@ func (m *Manager) CloseSession(id string) error {
 
 	utils.Info("Closed terminal session", zap.String("id", id))
 	return nil
+}
+
+// CloseAllSessions 关闭所有会话（用于重置数据等管理操作）
+func (m *Manager) CloseAllSessions() error {
+	var ids []string
+	m.sessions.Range(func(key, _ interface{}) bool {
+		if id, ok := key.(string); ok && strings.TrimSpace(id) != "" {
+			ids = append(ids, id)
+		}
+		return true
+	})
+
+	var firstErr error
+	for _, id := range ids {
+		if err := m.CloseSession(id); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
 }
 
 func (m *Manager) completeTaskIfNeeded(taskID *string, terminalID string) {
