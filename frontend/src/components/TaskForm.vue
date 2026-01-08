@@ -67,9 +67,38 @@
       <n-space size="small">
         <n-checkbox v-model:checked="model.auto_create_dir" :disabled="disabled">自动创建目录</n-checkbox>
         <n-checkbox v-model:checked="model.auto_start" :disabled="disabled">自动启动</n-checkbox>
+        <n-checkbox v-model:checked="model.ai_managed" :disabled="disabled">AI全程托管</n-checkbox>
         <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
       </n-space>
     </n-form-item>
+
+    <!-- AI托管配置 -->
+    <template v-if="model.ai_managed">
+      <n-divider style="margin: 8px 0">AI托管配置</n-divider>
+      <n-form-item label="托管提示">
+        <n-input
+          v-model:value="model.ai_prompt"
+          type="textarea"
+          :rows="2"
+          placeholder="AI在什么情况执行什么动作（可选）"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="结束条件">
+        <n-input
+          v-model:value="model.ai_end_condition"
+          placeholder="任务什么时候算完成（可选）"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="错误处理">
+        <n-select
+          v-model:value="model.ai_error_handling"
+          :options="errorHandlingOptions"
+          :disabled="disabled"
+        />
+      </n-form-item>
+    </template>
   </n-form>
 </template>
 
@@ -88,6 +117,11 @@ export interface TaskFormModel {
   auto_create_dir: boolean
   auto_start: boolean
   return_to_workbench: boolean
+  // AI托管配置
+  ai_managed: boolean
+  ai_prompt: string
+  ai_end_condition: string
+  ai_error_handling: string
 }
 
 defineProps<{
@@ -108,6 +142,12 @@ const priorityOptions = [
   { label: '中', value: 1 },
   { label: '高', value: 2 },
   { label: '紧急', value: 3 }
+]
+
+const errorHandlingOptions = [
+  { label: '暂停等待', value: 'pause' },
+  { label: '自动重试', value: 'retry' },
+  { label: '标记失败', value: 'fail' }
 ]
 
 onMounted(() => {

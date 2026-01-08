@@ -91,6 +91,12 @@ type Task struct {
 	InitialPrompt string `json:"initial_prompt"`                      // 初始提示/需求描述
 	AutoStart     bool   `gorm:"default:false" json:"auto_start"`     // 是否自动启动
 	AutoCreateDir bool   `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
+
+	// AI托管配置
+	AIManaged       bool   `gorm:"default:false" json:"ai_managed"`  // 是否AI全程托管
+	AIPrompt        string `json:"ai_prompt"`                        // AI托管提示词
+	AIEndCondition  string `json:"ai_end_condition"`                 // AI结束条件
+	AIErrorHandling string `json:"ai_error_handling"`                // AI错误处理策略
 }
 
 // TerminalSession 终端会话模型

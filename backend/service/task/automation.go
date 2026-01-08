@@ -101,7 +101,8 @@ func sendTmuxKeysToTarget(target string, keys string, literal bool) error {
 	if literal {
 		args = append(args, "-l")
 	}
-	args = append(args, keys)
+	// 使用 -- 分隔符防止以 - 开头的内容被解析为参数
+	args = append(args, "--", keys)
 	cmd := exec.Command("tmux", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -236,6 +237,12 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		_ = s.terminalManager.RenameSession(session.ID(), terminalTitle)
 	}
 
+	// 立即设置任务状态为 in_progress，防止重复启动（幂等性保证）
+	model.DB.Model(task).Updates(map[string]interface{}{
+		"status":     "in_progress",
+		"updated_at": time.Now(),
+	})
+
 	// 创建远程目录（如果需要）
 	if task.AutoCreateDir && serverID != "" {
 		mkdirCmd := fmt.Sprintf("mkdir -p %s\r", workDir)
@@ -369,12 +376,6 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			}
 		}
 	}
-
-	// 6. 更新任务状态
-	model.DB.Model(task).Updates(map[string]interface{}{
-		"status":     "in_progress",
-		"updated_at": time.Now(),
-	})
 
 	utils.Info("Task automation started",
 		zap.String("task_id", task.ID),

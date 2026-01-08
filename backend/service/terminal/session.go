@@ -1270,10 +1270,11 @@ func (s *Session) addLog(logType, content string) {
 	now := time.Now()
 	trimmedContent := strings.TrimSpace(cleanContent)
 
-	// 生成去重key：取前50个字符作为前缀匹配
+	// 生成去重key：取前50个字符（rune）作为前缀匹配，避免UTF-8截断
 	dedupeKey := logType + ":"
-	if len(trimmedContent) > 50 {
-		dedupeKey += trimmedContent[:50]
+	runes := []rune(trimmedContent)
+	if len(runes) > 50 {
+		dedupeKey += string(runes[:50])
 	} else {
 		dedupeKey += trimmedContent
 	}
