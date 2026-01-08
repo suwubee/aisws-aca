@@ -43,7 +43,11 @@ const newTask = reactive({
   initial_prompt: '',
   auto_create_dir: true,
   auto_start: false,
-  return_to_workbench: false
+  return_to_workbench: false,
+  ai_managed: false,
+  ai_prompt: '',
+  ai_end_condition: '',
+  ai_error_handling: 'pause'
 })
 
 onMounted(() => {
@@ -65,7 +69,11 @@ async function handleCreateTask() {
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
       auto_create_dir: newTask.auto_create_dir,
-      auto_start: newTask.auto_start
+      auto_start: newTask.auto_start,
+      ai_managed: newTask.ai_managed,
+      ai_prompt: newTask.ai_prompt,
+      ai_end_condition: newTask.ai_end_condition,
+      ai_error_handling: newTask.ai_error_handling
     })
     message.success('任务创建成功')
     showCreateTask.value = false
@@ -85,7 +93,8 @@ async function handleCreateTask() {
     Object.assign(newTask, {
       title: '', description: '', priority: 1, server_id: null,
       work_dir: '', cli_type: 'claude', initial_prompt: '',
-      auto_create_dir: true, auto_start: false, return_to_workbench: false
+      auto_create_dir: true, auto_start: false, return_to_workbench: false,
+      ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'
     })
   } catch (e: any) {
     message.error(e.message || '创建失败')

@@ -21,6 +21,11 @@ export interface Task {
   initial_prompt?: string
   auto_start?: boolean
   auto_create_dir?: boolean
+  // AI托管配置
+  ai_managed?: boolean
+  ai_prompt?: string
+  ai_end_condition?: string
+  ai_error_handling?: string
 }
 
 export interface TerminalSession {
@@ -116,6 +121,11 @@ export const useTaskStore = defineStore('task', () => {
     auto_start?: boolean
     auto_create_dir?: boolean
     rule_set_id?: string
+    // AI托管配置
+    ai_managed?: boolean
+    ai_prompt?: string
+    ai_end_condition?: string
+    ai_error_handling?: string
   }) {
     const { data } = await taskApi.create(params)
     await fetchTasks()

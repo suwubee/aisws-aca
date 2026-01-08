@@ -36,6 +36,11 @@ type CreateTaskRequest struct {
 	InitialPrompt string `json:"initial_prompt"`
 	AutoStart     bool   `json:"auto_start"`
 	AutoCreateDir *bool  `json:"auto_create_dir"`
+	// AI托管配置
+	AIManaged       bool   `json:"ai_managed"`
+	AIPrompt        string `json:"ai_prompt"`
+	AIEndCondition  string `json:"ai_end_condition"`
+	AIErrorHandling string `json:"ai_error_handling"`
 }
 
 type UpdateTaskRequest struct {
@@ -50,6 +55,11 @@ type UpdateTaskRequest struct {
 	InitialPrompt *string `json:"initial_prompt"`
 	AutoStart     *bool   `json:"auto_start"`
 	AutoCreateDir *bool   `json:"auto_create_dir"`
+	// AI托管配置
+	AIManaged       *bool   `json:"ai_managed"`
+	AIPrompt        *string `json:"ai_prompt"`
+	AIEndCondition  *string `json:"ai_end_condition"`
+	AIErrorHandling *string `json:"ai_error_handling"`
 }
 
 type MoveTaskRequest struct {
@@ -122,6 +132,11 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		InitialPrompt: req.InitialPrompt,
 		AutoStart:     req.AutoStart,
 		AutoCreateDir: autoCreateDir,
+		// AI托管配置
+		AIManaged:       req.AIManaged,
+		AIPrompt:        req.AIPrompt,
+		AIEndCondition:  req.AIEndCondition,
+		AIErrorHandling: req.AIErrorHandling,
 	}
 
 	if err := model.DB.Create(&task).Error; err != nil {
@@ -314,6 +329,19 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	}
 	if req.AutoCreateDir != nil {
 		updates["auto_create_dir"] = *req.AutoCreateDir
+	}
+	// AI托管配置字段
+	if req.AIManaged != nil {
+		updates["ai_managed"] = *req.AIManaged
+	}
+	if req.AIPrompt != nil {
+		updates["ai_prompt"] = *req.AIPrompt
+	}
+	if req.AIEndCondition != nil {
+		updates["ai_end_condition"] = *req.AIEndCondition
+	}
+	if req.AIErrorHandling != nil {
+		updates["ai_error_handling"] = *req.AIErrorHandling
 	}
 
 	if len(updates) > 0 {

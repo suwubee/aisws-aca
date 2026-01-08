@@ -223,10 +223,15 @@ const newTask = reactive<TaskFormModel>({
   priority: 1,
   server_id: null,
   work_dir: '',
-  cli_type: '',
+  cli_type: 'claude',
   initial_prompt: '',
   auto_create_dir: true,
-  auto_start: false
+  auto_start: false,
+  return_to_workbench: false,
+  ai_managed: false,
+  ai_prompt: '',
+  ai_end_condition: '',
+  ai_error_handling: 'pause'
 })
 
 const createTaskModalTitle = computed(() => {
@@ -474,7 +479,11 @@ async function handleCreateTask() {
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
       auto_create_dir: newTask.auto_create_dir,
-      auto_start: newTask.auto_start
+      auto_start: newTask.auto_start,
+      ai_managed: newTask.ai_managed,
+      ai_prompt: newTask.ai_prompt,
+      ai_end_condition: newTask.ai_end_condition,
+      ai_error_handling: newTask.ai_error_handling
     })
     message.success('任务创建成功')
     closeCreateTask()
@@ -497,10 +506,15 @@ async function handleCreateTask() {
     newTask.priority = 1
     newTask.server_id = null
     newTask.work_dir = ''
-    newTask.cli_type = ''
+    newTask.cli_type = 'claude'
     newTask.initial_prompt = ''
     newTask.auto_create_dir = true
     newTask.auto_start = false
+    newTask.return_to_workbench = false
+    newTask.ai_managed = false
+    newTask.ai_prompt = ''
+    newTask.ai_end_condition = ''
+    newTask.ai_error_handling = 'pause'
 
     if (navigateToDashboardAfterCreate.value) {
       router.push('/')
