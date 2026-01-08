@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
-	sshservice "github.com/ai-coding-assistant/service/ssh"
 	taskservice "github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
@@ -24,18 +25,19 @@ type commandExecutor interface {
 }
 
 var (
-	ErrWorkflowEngineNil           = errors.New("workflow engine is nil")
-	ErrWorkflowIDRequired          = errors.New("workflowID is required")
-	ErrWorkflowNotFound            = errors.New("workflow not found")
-	ErrWorkflowQueryFailed         = errors.New("failed to query workflow")
-	ErrWorkflowStartFailed         = errors.New("failed to start workflow")
-	ErrSSHManagerNotConfigured     = errors.New("ssh manager is not configured")
-	ErrLocalExecutorNotConfigured  = errors.New("local executor is not configured")
-	ErrTaskAutomationNotConfigured = errors.New("task automation is not configured")
-	ErrTaskNotFound                = errors.New("task not found")
-	ErrTaskQueryFailed             = errors.New("failed to query task")
-	ErrServerNotFound              = errors.New("server not found")
-	ErrServerQueryFailed           = errors.New("failed to query server")
+	ErrWorkflowEngineNil            = errors.New("workflow engine is nil")
+	ErrWorkflowIDRequired           = errors.New("workflowID is required")
+	ErrWorkflowNotFound             = errors.New("workflow not found")
+	ErrWorkflowQueryFailed          = errors.New("failed to query workflow")
+	ErrWorkflowStartFailed          = errors.New("failed to start workflow")
+	ErrSSHManagerNotConfigured      = errors.New("ssh manager is not configured")
+	ErrLocalExecutorNotConfigured   = errors.New("local executor is not configured")
+	ErrTaskAutomationNotConfigured  = errors.New("task automation is not configured")
+	ErrTerminalManagerNotConfigured = errors.New("terminal manager is not configured")
+	ErrTaskNotFound                 = errors.New("task not found")
+	ErrTaskQueryFailed              = errors.New("failed to query task")
+	ErrServerNotFound               = errors.New("server not found")
+	ErrServerQueryFailed            = errors.New("failed to query server")
 )
 
 type localShellExecutor struct{}
@@ -58,24 +60,56 @@ type automationService interface {
 	StartTask(task *model.Task) (*taskservice.StartTaskResult, error)
 }
 
+type terminalSession interface {
+	ID() string
+	Write(data []byte) error
+}
+
+type terminalManager interface {
+	CreateSession(title string, taskID *string) (terminalSession, error)
+	CreateSSHSession(serverID string) (terminalSession, error)
+	RenameSession(id, title string) error
+	GetOrResumeSession(id string) (terminalSession, error)
+}
+
+type workflowPauseError struct {
+	decision *AgentDecision
+	command  string
+}
+
+func (e *workflowPauseError) Error() string {
+	if e == nil || e.decision == nil {
+		return "workflow paused"
+	}
+	msg := strings.TrimSpace(e.decision.Reasoning)
+	if msg == "" {
+		msg = "workflow paused"
+	}
+	return msg
+}
+
 // WorkflowEngine executes workflow definitions and updates WorkflowRun status/logs.
 type WorkflowEngine struct {
 	sshManager sshCommandExecutor
 	automation automationService
+	terminal   terminalManager
 
 	localExecutor commandExecutor
 	now           func() time.Time
+	sleep         func(time.Duration)
 	startAsync    func(fn func())
 	newAgent      func(engine *WorkflowEngine) *WorkflowAgent
 }
 
 // NewWorkflowEngine creates a workflow engine.
-func NewWorkflowEngine(sshManager *sshservice.SSHManager, automation *taskservice.AutomationService) *WorkflowEngine {
+func NewWorkflowEngine(sshManager sshCommandExecutor, automation automationService, terminalMgr terminalManager) *WorkflowEngine {
 	engine := &WorkflowEngine{
 		sshManager:    sshManager,
 		automation:    automation,
+		terminal:      terminalMgr,
 		localExecutor: localShellExecutor{},
 		now:           time.Now,
+		sleep:         time.Sleep,
 		startAsync:    func(fn func()) { go fn() },
 		newAgent:      NewWorkflowAgent,
 	}
@@ -108,6 +142,22 @@ type runLogEntry struct {
 	NodeType  string    `json:"node_type,omitempty"`
 	Output    string    `json:"output,omitempty"`
 	Error     string    `json:"error,omitempty"`
+}
+
+type executionReport struct {
+	Status         string    `json:"status"`
+	RunID          string    `json:"run_id"`
+	WorkflowID     string    `json:"workflow_id,omitempty"`
+	StartedAt      time.Time `json:"started_at"`
+	FinishedAt     time.Time `json:"finished_at"`
+	DurationMs     int64     `json:"duration_ms"`
+	NodesTotal     int       `json:"nodes_total"`
+	NodesCompleted int       `json:"nodes_completed"`
+	LastNodeID     string    `json:"last_node_id,omitempty"`
+	LastNodeType   string    `json:"last_node_type,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+	AgentSummary   string    `json:"agent_summary,omitempty"`
+	RiskyCommand   string    `json:"risky_command,omitempty"`
 }
 
 type executionContext struct {
@@ -181,25 +231,74 @@ func (e *WorkflowEngine) RunWorkflow(workflowID string) (*model.WorkflowRun, err
 }
 
 func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID string) {
+	startedAt := e.now()
+	nodesCompleted := 0
+	nodesTotal := 0
+	lastNodeID := ""
+	lastNodeType := ""
+
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			e.failRun(runID, "", fmt.Errorf("workflow engine panic"))
+			err := fmt.Errorf("workflow engine panic")
+			e.failRun(runID, lastNodeID, err)
+			e.appendExecutionReport(runID, executionReport{
+				Status:         "failed",
+				RunID:          runID,
+				WorkflowID:     workflowIDOrEmpty(workflow),
+				StartedAt:      startedAt,
+				FinishedAt:     e.now(),
+				DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+				NodesTotal:     nodesTotal,
+				NodesCompleted: nodesCompleted,
+				LastNodeID:     lastNodeID,
+				LastNodeType:   lastNodeType,
+				LastError:      safeError(err),
+			})
 		}
 	}()
 
 	if workflow == nil {
-		e.failRun(runID, "", errors.New("workflow is nil"))
+		err := errors.New("workflow is nil")
+		e.failRun(runID, "", err)
+		e.appendExecutionReport(runID, executionReport{
+			Status:     "failed",
+			RunID:      runID,
+			StartedAt:  startedAt,
+			FinishedAt: e.now(),
+			DurationMs: e.now().Sub(startedAt).Milliseconds(),
+			LastError:  safeError(err),
+		})
 		return
 	}
 
 	nodes, edges, err := parseWorkflowDefinition(workflow.Nodes, workflow.Edges)
 	if err != nil {
 		e.failRun(runID, "", err)
+		e.appendExecutionReport(runID, executionReport{
+			Status:     "failed",
+			RunID:      runID,
+			WorkflowID: workflowIDOrEmpty(workflow),
+			StartedAt:  startedAt,
+			FinishedAt: e.now(),
+			DurationMs: e.now().Sub(startedAt).Milliseconds(),
+			LastError:  safeError(err),
+		})
 		return
 	}
 
+	nodesTotal = len(nodes)
 	if len(nodes) == 0 {
 		e.completeRun(runID)
+		e.appendExecutionReport(runID, executionReport{
+			Status:         "completed",
+			RunID:          runID,
+			WorkflowID:     workflow.ID,
+			StartedAt:      startedAt,
+			FinishedAt:     e.now(),
+			DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+			NodesTotal:     0,
+			NodesCompleted: 0,
+		})
 		return
 	}
 
@@ -232,9 +331,25 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 
 		node, ok := nodesByID[current]
 		if !ok {
-			e.failRun(runID, current, errors.New("workflow node not found"))
+			err := errors.New("workflow node not found")
+			e.failRun(runID, current, err)
+			e.appendExecutionReport(runID, executionReport{
+				Status:         "failed",
+				RunID:          runID,
+				WorkflowID:     workflow.ID,
+				StartedAt:      startedAt,
+				FinishedAt:     e.now(),
+				DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+				NodesTotal:     nodesTotal,
+				NodesCompleted: nodesCompleted,
+				LastNodeID:     current,
+				LastNodeType:   node.Type,
+				LastError:      safeError(err),
+			})
 			return
 		}
+		lastNodeID = node.ID
+		lastNodeType = node.Type
 
 		if err := e.updateRun(runID, map[string]any{"current_node_id": node.ID}); err != nil {
 			utils.Warn("Failed to update workflow current node", zap.String("run_id", runID), zap.Error(err))
@@ -248,8 +363,89 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 			NodeType:  node.Type,
 		})
 
-		result, err := e.executeNode(runID, node, ctx)
+		var result nodeExecutionResult
+		var execErr error
+
+		maxRetries := 1
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			result, execErr = e.executeNode(runID, node, ctx)
+			if execErr == nil {
+				break
+			}
+
+			var pauseErr *workflowPauseError
+			if errors.As(execErr, &pauseErr) {
+				e.pauseRun(runID, node, pauseErr, ctx)
+				e.appendExecutionReport(runID, executionReport{
+					Status:         "paused",
+					RunID:          runID,
+					WorkflowID:     workflow.ID,
+					StartedAt:      startedAt,
+					FinishedAt:     e.now(),
+					DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+					NodesTotal:     nodesTotal,
+					NodesCompleted: nodesCompleted,
+					LastNodeID:     node.ID,
+					LastNodeType:   node.Type,
+					AgentSummary:   agentSummaryFromDecision(pauseErr.decision),
+					RiskyCommand:   truncateString(redactSensitive(pauseErr.command), 1024),
+				})
+				return
+			}
+
+			if attempt >= maxRetries || ctx == nil || ctx.agent == nil || !isRetryableNode(node) {
+				break
+			}
+
+			decision := ctx.agent.generateNextStepSuggestion(agentSuggestionContext{
+				phase:    suggestionPhaseOnError,
+				nodeType: node.Type,
+				logs:     result.Output,
+				err:      execErr,
+			})
+			ctx.agent.logDecision(runID, node.ID, node.Type, "", "", decision)
+
+			if decision == nil || decision.Action != AgentActionAdvance {
+				break
+			}
+
+			e.appendRunLog(runID, runLogEntry{
+				Timestamp: e.now(),
+				Level:     "warn",
+				Message:   fmt.Sprintf("Retrying node (attempt %d/%d)", attempt+1, maxRetries),
+				NodeID:    node.ID,
+				NodeType:  node.Type,
+				Output:    truncateString(decision.Reasoning, 2048),
+				Error:     safeError(execErr),
+			})
+			e.sleepFor(time.Duration(attempt+1) * 500 * time.Millisecond)
+		}
+
+		err := execErr
 		if err != nil {
+			agentReasoning := ""
+			if ctx != nil && ctx.agent != nil {
+				decision := ctx.agent.generateNextStepSuggestion(agentSuggestionContext{
+					phase:    suggestionPhaseOnError,
+					nodeType: node.Type,
+					logs:     result.Output,
+					err:      err,
+				})
+				if decision != nil {
+					ctx.agent.logDecision(runID, node.ID, node.Type, "", "", decision)
+					agentReasoning = strings.TrimSpace(decision.Reasoning)
+				}
+			}
+
+			output := strings.TrimSpace(result.Output)
+			if agentReasoning != "" {
+				if output == "" {
+					output = "Agent: " + agentReasoning
+				} else {
+					output = strings.TrimSpace(output + "\nAgent: " + agentReasoning)
+				}
+			}
+
 			e.appendRunLog(runID, runLogEntry{
 				Timestamp: e.now(),
 				Level:     "error",
@@ -257,13 +453,28 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 				NodeID:    node.ID,
 				NodeType:  node.Type,
 				Error:     safeError(err),
-				Output:    truncateString(result.Output, 4096),
+				Output:    truncateString(output, 4096),
 			})
 			e.failRun(runID, node.ID, err)
+			e.appendExecutionReport(runID, executionReport{
+				Status:         "failed",
+				RunID:          runID,
+				WorkflowID:     workflow.ID,
+				StartedAt:      startedAt,
+				FinishedAt:     e.now(),
+				DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+				NodesTotal:     nodesTotal,
+				NodesCompleted: nodesCompleted,
+				LastNodeID:     node.ID,
+				LastNodeType:   node.Type,
+				LastError:      safeError(err),
+				AgentSummary:   agentReasoning,
+			})
 			return
 		}
 
 		ctx.lastCondition = result.ConditionResult
+		nodesCompleted++
 
 		if output := strings.TrimSpace(result.Output); output != "" {
 			e.appendRunLog(runID, runLogEntry{
@@ -299,11 +510,28 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 	}
 
 	e.completeRun(runID)
+	e.appendExecutionReport(runID, executionReport{
+		Status:         "completed",
+		RunID:          runID,
+		WorkflowID:     workflow.ID,
+		StartedAt:      startedAt,
+		FinishedAt:     e.now(),
+		DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+		NodesTotal:     nodesTotal,
+		NodesCompleted: nodesCompleted,
+		LastNodeID:     lastNodeID,
+		LastNodeType:   lastNodeType,
+	})
 }
 
 func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *executionContext) (nodeExecutionResult, error) {
-	switch node.Type {
-	case model.WorkflowNodeTypeServer:
+	nodeType := strings.TrimSpace(node.Type)
+	if nodeType == model.WorkflowNodeTypeAI {
+		nodeType = model.NodeTypeAIAgent
+	}
+
+	switch nodeType {
+	case model.NodeTypeServer:
 		serverID := strings.TrimSpace(node.ServerID)
 		if serverID == "" {
 			serverID = getString(node.Config, "server_id", "serverId", "id")
@@ -318,12 +546,40 @@ func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *execu
 		if cmd == "" {
 			return nodeExecutionResult{}, errors.New("command is required")
 		}
+		if ctx != nil && ctx.agent != nil {
+			decision := ctx.agent.generateNextStepSuggestion(agentSuggestionContext{
+				phase:    suggestionPhasePreExecute,
+				nodeType: nodeType,
+				command:  cmd,
+			})
+			ctx.agent.logDecision(runID, node.ID, node.Type, "", "", decision)
+			if decision != nil {
+				switch decision.Action {
+				case AgentActionWait:
+					return nodeExecutionResult{}, &workflowPauseError{decision: decision, command: cmd}
+				case AgentActionFail:
+					return nodeExecutionResult{}, errors.New(strings.TrimSpace(decision.Reasoning))
+				}
+			}
+		}
 		output, err := e.runCommand(node, cmd, ctx)
 		if err != nil {
 			return nodeExecutionResult{Output: output}, err
 		}
 		return nodeExecutionResult{Output: output}, nil
-	case model.WorkflowNodeTypeTask:
+	case model.NodeTypeTerminal:
+		output, err := e.runTerminal(runID, node, ctx)
+		if err != nil {
+			return nodeExecutionResult{Output: output}, err
+		}
+		return nodeExecutionResult{Output: output}, nil
+	case model.NodeTypeGit:
+		output, err := e.runGit(runID, node, ctx)
+		if err != nil {
+			return nodeExecutionResult{Output: output}, err
+		}
+		return nodeExecutionResult{Output: output}, nil
+	case model.NodeTypeTask:
 		info, err := e.runTask(node, ctx)
 		if err != nil {
 			return nodeExecutionResult{Output: info.Output}, err
@@ -342,9 +598,17 @@ func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *execu
 			return nodeExecutionResult{Output: output}, monitorErr
 		}
 		return nodeExecutionResult{Output: output}, nil
-	case model.WorkflowNodeTypeAI:
-		return nodeExecutionResult{Output: "AI node not implemented"}, nil
-	case model.WorkflowNodeTypeCondition:
+	case model.NodeTypeAIAgent:
+		return nodeExecutionResult{Output: "AI agent node placeholder"}, nil
+	case model.NodeTypeParallel:
+		return nodeExecutionResult{Output: "Parallel node placeholder"}, nil
+	case model.NodeTypeWait:
+		output, err := e.runWait(node)
+		if err != nil {
+			return nodeExecutionResult{Output: output}, err
+		}
+		return nodeExecutionResult{Output: output}, nil
+	case model.NodeTypeCondition:
 		ok, output, err := e.evaluateCondition(node, ctx)
 		if err != nil {
 			return nodeExecutionResult{Output: output}, err
@@ -353,6 +617,155 @@ func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *execu
 	default:
 		return nodeExecutionResult{}, fmt.Errorf("unsupported node type: %s", node.Type)
 	}
+}
+
+func (e *WorkflowEngine) runTerminal(runID string, node workflowNode, ctx *executionContext) (string, error) {
+	if e.terminal == nil {
+		return "", ErrTerminalManagerNotConfigured
+	}
+
+	cmd := strings.TrimSpace(getString(node.Config, "command", "cmd", "shell"))
+	if cmd == "" {
+		return "", errors.New("command is required")
+	}
+
+	serverID := strings.TrimSpace(node.ServerID)
+	if serverID == "" {
+		serverID = getString(node.Config, "server_id", "serverId")
+	}
+	if serverID == "" && ctx != nil {
+		serverID = strings.TrimSpace(ctx.currentServerID)
+	}
+
+	title := strings.TrimSpace(getString(node.Config, "title"))
+	if title == "" {
+		title = strings.TrimSpace(node.Name)
+	}
+	if title == "" {
+		title = "Workflow Terminal"
+	}
+
+	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir"))
+
+	fullCmd := cmd
+	if workDir != "" {
+		fullCmd = fmt.Sprintf("cd %s && %s", workDir, cmd)
+	}
+
+	if ctx != nil && ctx.agent != nil {
+		decision := ctx.agent.generateNextStepSuggestion(agentSuggestionContext{
+			phase:    suggestionPhasePreExecute,
+			nodeType: model.NodeTypeTerminal,
+			command:  fullCmd,
+		})
+		ctx.agent.logDecision(runID, node.ID, node.Type, "", "", decision)
+		if decision != nil {
+			switch decision.Action {
+			case AgentActionWait:
+				return "", &workflowPauseError{decision: decision, command: fullCmd}
+			case AgentActionFail:
+				return "", errors.New(strings.TrimSpace(decision.Reasoning))
+			}
+		}
+	}
+
+	var session terminalSession
+	var err error
+	if serverID != "" {
+		session, err = e.terminal.CreateSSHSession(serverID)
+	} else {
+		session, err = e.terminal.CreateSession(title, nil)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	if serverID != "" && title != "" {
+		_ = e.terminal.RenameSession(session.ID(), title)
+	}
+
+	if workDir != "" {
+		if err := session.Write([]byte(fmt.Sprintf("cd %s\r", workDir))); err != nil {
+			return fmt.Sprintf("terminal=%s", session.ID()), err
+		}
+		e.sleepFor(300 * time.Millisecond)
+	}
+
+	if err := session.Write([]byte(cmd + "\r")); err != nil {
+		return fmt.Sprintf("terminal=%s", session.ID()), err
+	}
+
+	return fmt.Sprintf("Terminal command dispatched: %s (terminal=%s)", cmd, session.ID()), nil
+}
+
+func (e *WorkflowEngine) runGit(runID string, node workflowNode, ctx *executionContext) (string, error) {
+	command := strings.TrimSpace(getString(node.Config, "command", "cmd", "shell"))
+	if command == "" {
+		args := strings.TrimSpace(getString(node.Config, "args", "git_args", "gitArgs"))
+		if args != "" {
+			command = "git " + args
+		}
+	}
+
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", errors.New("git command is required")
+	}
+
+	if command != "git" && !strings.HasPrefix(command, "git ") && !strings.HasPrefix(command, "git\t") {
+		command = "git " + command
+	}
+
+	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir", "repo_dir", "repoDir"))
+	if workDir != "" {
+		command = fmt.Sprintf("cd %s && %s", workDir, command)
+	}
+
+	if ctx != nil && ctx.agent != nil {
+		decision := ctx.agent.generateNextStepSuggestion(agentSuggestionContext{
+			phase:    suggestionPhasePreExecute,
+			nodeType: model.NodeTypeGit,
+			command:  command,
+		})
+		ctx.agent.logDecision(runID, node.ID, node.Type, "", "", decision)
+		if decision != nil {
+			switch decision.Action {
+			case AgentActionWait:
+				return "", &workflowPauseError{decision: decision, command: command}
+			case AgentActionFail:
+				return "", errors.New(strings.TrimSpace(decision.Reasoning))
+			}
+		}
+	}
+
+	output, err := e.runCommand(node, command, ctx)
+	if err != nil {
+		return output, err
+	}
+	return output, nil
+}
+
+func (e *WorkflowEngine) runWait(node workflowNode) (string, error) {
+	d, err := parseWaitDuration(node.Config)
+	if err != nil {
+		return "", err
+	}
+	if d < 0 {
+		return "", errors.New("wait duration must be non-negative")
+	}
+	e.sleepFor(d)
+	return fmt.Sprintf("Waited %s", d), nil
+}
+
+func (e *WorkflowEngine) sleepFor(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	if e != nil && e.sleep != nil {
+		e.sleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 func (e *WorkflowEngine) runCommand(node workflowNode, command string, ctx *executionContext) (string, error) {
@@ -474,6 +887,66 @@ func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (task
 	}
 	output := fmt.Sprintf("Task created and started: %s (terminal=%s)", taskModel.ID, terminalID)
 	return taskExecutionInfo{TaskID: taskModel.ID, TerminalID: terminalID, Output: output}, nil
+}
+
+func parseWaitDuration(cfg map[string]any) (time.Duration, error) {
+	if cfg == nil {
+		return 0, errors.New("wait config is required")
+	}
+
+	if raw := strings.TrimSpace(getString(cfg, "duration")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err == nil {
+			return d, nil
+		}
+	}
+
+	if seconds, ok := getNumber(cfg, "seconds", "sec", "s"); ok {
+		return time.Duration(seconds * float64(time.Second)), nil
+	}
+
+	if ms, ok := getNumber(cfg, "duration_ms", "durationMs", "ms", "milliseconds"); ok {
+		return time.Duration(ms * float64(time.Millisecond)), nil
+	}
+
+	return 0, errors.New("wait duration is required")
+}
+
+func getNumber(m map[string]any, keys ...string) (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	for _, key := range keys {
+		raw, ok := m[key]
+		if !ok {
+			continue
+		}
+		switch v := raw.(type) {
+		case float64:
+			return v, true
+		case float32:
+			return float64(v), true
+		case int:
+			return float64(v), true
+		case int64:
+			return float64(v), true
+		case json.Number:
+			parsed, err := v.Float64()
+			if err == nil {
+				return parsed, true
+			}
+		case string:
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(trimmed, 64)
+			if err == nil {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (e *WorkflowEngine) evaluateCondition(node workflowNode, ctx *executionContext) (bool, string, error) {
@@ -933,4 +1406,184 @@ func truncateString(value string, limit int) string {
 		return value
 	}
 	return value[:limit] + "…"
+}
+
+func (e *WorkflowEngine) pauseRun(runID string, node workflowNode, pauseErr *workflowPauseError, ctx *executionContext) {
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+
+	now := e.now()
+	reason := "workflow paused"
+	command := ""
+	var decision *AgentDecision
+	if pauseErr != nil {
+		command = pauseErr.command
+		decision = pauseErr.decision
+	}
+	if decision != nil && strings.TrimSpace(decision.Reasoning) != "" {
+		reason = strings.TrimSpace(decision.Reasoning)
+	}
+
+	output := reason
+	if strings.TrimSpace(command) != "" {
+		output = strings.TrimSpace(output + "\nCommand: " + redactSensitive(command))
+	}
+
+	e.appendRunLog(runID, runLogEntry{
+		Timestamp: now,
+		Level:     "warn",
+		Message:   "Workflow paused",
+		NodeID:    node.ID,
+		NodeType:  node.Type,
+		Output:    truncateString(output, 4096),
+	})
+
+	updates := map[string]any{
+		"status": "paused",
+	}
+	_ = e.updateRun(runID, updates)
+
+	utils.Warn("Workflow run paused",
+		zap.String("run_id", runID),
+		zap.String("node_id", node.ID),
+		zap.String("node_type", node.Type),
+		zap.String("reason", truncateString(reason, 512)))
+
+	e.notifyRiskyOperation(runID, node, decision, command, ctx)
+}
+
+func (e *WorkflowEngine) notifyRiskyOperation(runID string, node workflowNode, decision *AgentDecision, command string, ctx *executionContext) {
+	if model.DB == nil || strings.TrimSpace(runID) == "" {
+		return
+	}
+
+	now := e.now()
+	title := "Workflow paused: risky operation"
+	content := "Workflow paused pending manual review."
+	if decision != nil && strings.TrimSpace(decision.Reasoning) != "" {
+		content = strings.TrimSpace(decision.Reasoning)
+	}
+
+	var serverID *string
+	sid := strings.TrimSpace(node.ServerID)
+	if sid == "" {
+		sid = getString(node.Config, "server_id", "serverId")
+	}
+	if sid == "" && ctx != nil {
+		sid = strings.TrimSpace(ctx.currentServerID)
+	}
+	if sid != "" {
+		serverID = &sid
+	}
+
+	msg := &model.Message{
+		ID:        uuid.New().String(),
+		ServerID:  serverID,
+		Type:      "approval_needed",
+		Title:     title,
+		Content:   truncateString(content, 2048),
+		Context:   truncateString(fmt.Sprintf("run_id=%s node_id=%s node_type=%s command=%s", runID, node.ID, node.Type, redactSensitive(command)), 4096),
+		Status:    "unread",
+		Priority:  1,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := model.DB.Create(msg).Error; err != nil {
+		utils.Warn("Failed to save workflow pause notification",
+			zap.String("run_id", runID),
+			zap.Error(err))
+	}
+}
+
+func workflowIDOrEmpty(workflow *model.Workflow) string {
+	if workflow == nil {
+		return ""
+	}
+	return strings.TrimSpace(workflow.ID)
+}
+
+func isRetryableNode(node workflowNode) bool {
+	nodeType := strings.TrimSpace(node.Type)
+	switch nodeType {
+	case model.WorkflowNodeTypeCommand, model.NodeTypeTerminal, model.NodeTypeGit:
+		return true
+	default:
+		return false
+	}
+}
+
+func agentSummaryFromDecision(decision *AgentDecision) string {
+	if decision == nil {
+		return ""
+	}
+	return truncateString(strings.TrimSpace(decision.Reasoning), 1024)
+}
+
+func (e *WorkflowEngine) appendExecutionReport(runID string, report executionReport) {
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		return
+	}
+
+	level := "info"
+	switch strings.ToLower(strings.TrimSpace(report.Status)) {
+	case "failed":
+		level = "error"
+	case "paused":
+		level = "warn"
+	}
+
+	e.appendRunLog(runID, runLogEntry{
+		Timestamp: report.FinishedAt,
+		Level:     level,
+		Message:   "Execution report",
+		NodeID:    report.LastNodeID,
+		NodeType:  report.LastNodeType,
+		Output:    truncateString(string(encoded), 4096),
+	})
+}
+
+var sensitiveTokenPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(password|passwd|token|api[_-]?key|secret)\s*=\s*[^\s]+`),
+	regexp.MustCompile(`(?i)--(password|token|api[_-]?key|secret)(=|\s+)([^\s]+)`),
+	regexp.MustCompile(`(?i)authorization:\s*bearer\s+[^\s]+`),
+}
+
+func redactSensitive(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	redacted := text
+	for _, re := range sensitiveTokenPatterns {
+		if re == nil {
+			continue
+		}
+		redacted = re.ReplaceAllStringFunc(redacted, func(match string) string {
+			lower := strings.ToLower(match)
+			if strings.HasPrefix(lower, "authorization:") {
+				return "authorization: bearer ***"
+			}
+			if strings.Contains(match, "=") {
+				parts := strings.SplitN(match, "=", 2)
+				if len(parts) == 2 {
+					return strings.TrimSpace(parts[0]) + "=***"
+				}
+			}
+			if strings.Contains(lower, "--") {
+				fields := strings.Fields(match)
+				if len(fields) >= 1 {
+					return fields[0] + " ***"
+				}
+			}
+			return "***"
+		})
+	}
+	return redacted
 }

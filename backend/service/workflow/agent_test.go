@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +146,128 @@ func TestWorkflowAgent_MonitorTask_TimesOut(t *testing.T) {
 	}
 	if decision == nil || decision.Action != AgentActionFail {
 		t.Fatalf("expected fail decision, got %#v", decision)
+	}
+}
+
+func TestWorkflowAgent_AnalyzeTaskProgress_Percent(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+
+	percent, confidence, evidence := agent.analyzeTaskProgress("Working... 10%\nMore work 55%")
+	if percent != 55 {
+		t.Fatalf("expected percent 55, got %d", percent)
+	}
+	if confidence <= 0 {
+		t.Fatalf("expected confidence > 0, got %f", confidence)
+	}
+	if strings.TrimSpace(evidence) == "" {
+		t.Fatalf("expected evidence to be non-empty")
+	}
+}
+
+func TestWorkflowAgent_AnalyzeTaskProgress_Fraction(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+
+	percent, _, _ := agent.analyzeTaskProgress("Step 2/4: compiling")
+	if percent != 50 {
+		t.Fatalf("expected percent 50, got %d", percent)
+	}
+}
+
+func TestWorkflowAgent_DetectErrors_SuggestsFix(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+
+	insight := agent.detectErrors("permission denied: /root/secret\n")
+	if insight == nil {
+		t.Fatalf("expected insight")
+	}
+	if strings.TrimSpace(insight.suggestion) == "" {
+		t.Fatalf("expected suggestion")
+	}
+}
+
+func TestWorkflowAgent_ShouldRetry_Transient(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+
+	retry, _, _ := agent.shouldRetry(errors.New("i/o timeout"))
+	if !retry {
+		t.Fatalf("expected retry for timeout")
+	}
+
+	retry, _, _ = agent.shouldRetry(errors.New("exit status 1"))
+	if retry {
+		t.Fatalf("expected retry to be false for exit status")
+	}
+}
+
+func TestWorkflowAgent_GenerateNextStepSuggestion_Approval(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+
+	decision := agent.generateNextStepSuggestion(agentSuggestionContext{
+		phase:          suggestionPhaseApproval,
+		approvalPrompt: "Proceed? (y/n)",
+		logs:           "Proceed? (y/n)",
+	})
+	if decision == nil {
+		t.Fatalf("expected decision")
+	}
+	if decision.Action != AgentActionWait {
+		t.Fatalf("expected action %q, got %q", AgentActionWait, decision.Action)
+	}
+	if decision.SuggestedInput == "" {
+		t.Fatalf("expected suggested input to be set")
+	}
+}
+
+func TestWorkflowAgent_GenerateNextStepSuggestion_ApprovalRisky(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+
+	decision := agent.generateNextStepSuggestion(agentSuggestionContext{
+		phase:          suggestionPhaseApproval,
+		approvalPrompt: "Delete everything? (y/n)",
+		logs:           "Delete everything? (y/n)",
+	})
+	if decision == nil {
+		t.Fatalf("expected decision")
+	}
+	if decision.SuggestedInput != "" {
+		t.Fatalf("expected suggested input to be empty for risky prompts, got %q", decision.SuggestedInput)
+	}
+}
+
+func TestWorkflowAgent_MonitorTask_AutoInputsApproval(t *testing.T) {
+	agent := NewWorkflowAgent(nil)
+	agent.sleep = func(time.Duration) {}
+	agent.pollInterval = 1 * time.Millisecond
+	agent.maxWait = 250 * time.Millisecond
+
+	logCalls := 0
+	agent.loadTerminalLogs = func(context.Context, string, int) (string, error) {
+		logCalls++
+		if logCalls == 1 {
+			return "Proceed? (y/n)", nil
+		}
+		return "Task completed", nil
+	}
+	agent.loadTaskStatus = func(context.Context, string) (string, error) { return "", nil }
+	agent.loadTerminalStatus = func(context.Context, string) (string, error) { return "", nil }
+
+	var sent []string
+	agent.sendTerminalInput = func(_ context.Context, _ string, input string) error {
+		sent = append(sent, input)
+		return nil
+	}
+
+	decision, err := agent.MonitorTask(context.Background(), "run-1", "node-1", "task", "task-1", "term-1")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if decision == nil || decision.Action != AgentActionAdvance {
+		t.Fatalf("expected advance decision, got %#v", decision)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected one auto input, got %d", len(sent))
+	}
+	if sent[0] != "y\r" {
+		t.Fatalf("expected input %q, got %q", "y\\r", sent[0])
 	}
 }

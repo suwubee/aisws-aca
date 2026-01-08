@@ -47,3 +47,9 @@ coverage/
 tmp/
 temp/
 .gocache/
+backend/.gocache/
+
+# Go cache
+backend/.gocache/
+.gocache/
+.gomodcache/

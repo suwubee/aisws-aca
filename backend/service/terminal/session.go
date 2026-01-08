@@ -108,6 +108,7 @@ type Session struct {
 	createdAt   time.Time
 	closedAt    *time.Time
 	done        chan struct{}
+	doneOnce    sync.Once // 确保 done channel 只关闭一次
 	// 日志相关
 	logBuffer    []LogEntry
 	logMutex     sync.Mutex
@@ -630,7 +631,7 @@ func (s *Session) wait() {
 			Message:  "Process exited",
 		})
 
-		close(s.done)
+		s.doneOnce.Do(func() { close(s.done) })
 	}
 }
 
@@ -748,6 +749,9 @@ func (s *Session) Resize(cols, rows uint16) error {
 
 // Close 关闭会话
 func (s *Session) Close() error {
+	// 关闭 done channel，通知所有 goroutine 退出
+	s.doneOnce.Do(func() { close(s.done) })
+
 	if s.backend != nil {
 		err := s.backend.Close()
 		if s.pty != nil {
@@ -853,6 +857,7 @@ func (s *Session) ToDBModel() *model.TerminalSession {
 		Shell:     s.shell,
 		Status:    s.status,
 		PID:       s.metadata.PID,
+		Hidden:    false,
 		CreatedAt: s.createdAt,
 		ClosedAt:  s.closedAt,
 	}

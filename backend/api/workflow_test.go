@@ -292,7 +292,7 @@ func TestWorkflowController_DeleteWorkflow_RemovesRunsAndNodes(t *testing.T) {
 		WorkflowID: createBody.Item.ID,
 		Type:       model.WorkflowNodeTypeTask,
 		Name:       "node",
-		Config:     "{}",
+		Config:     map[string]any{},
 		PositionX:  1,
 		PositionY:  2,
 	}
@@ -336,5 +336,83 @@ func TestWorkflowController_DeleteWorkflow_RemovesRunsAndNodes(t *testing.T) {
 	}
 	if runCount != 0 {
 		t.Fatalf("expected run count 0, got %d", runCount)
+	}
+}
+
+func TestWorkflowController_ProjectAssociation(t *testing.T) {
+	app := setupWorkflowTestApp(t)
+
+	project := model.Project{
+		ID:      "proj-1",
+		Name:    "Project",
+		Type:    model.ProjectTypeLocal,
+		EnvVars: map[string]string{},
+	}
+	if err := model.DB.Create(&project).Error; err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+
+	createReq := httptest.NewRequest("POST", "/api/workflows", bytes.NewBufferString(`{"name":"wf-1","project_id":" proj-1 ","nodes":"[]","edges":"[]"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp, err := app.Test(createReq)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	defer createResp.Body.Close()
+	if createResp.StatusCode != 201 {
+		t.Fatalf("expected status 201, got %d", createResp.StatusCode)
+	}
+
+	var createBody struct {
+		Item model.Workflow `json:"item"`
+	}
+	if err := json.NewDecoder(createResp.Body).Decode(&createBody); err != nil {
+		t.Fatalf("decode create response failed: %v", err)
+	}
+	if createBody.Item.ProjectID == nil || *createBody.Item.ProjectID != project.ID {
+		t.Fatalf("expected project_id %q, got %v", project.ID, createBody.Item.ProjectID)
+	}
+
+	invalidCreateReq := httptest.NewRequest("POST", "/api/workflows", bytes.NewBufferString(`{"name":"wf-2","project_id":"not-exist","nodes":"[]","edges":"[]"}`))
+	invalidCreateReq.Header.Set("Content-Type", "application/json")
+	invalidCreateResp, err := app.Test(invalidCreateReq)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	defer invalidCreateResp.Body.Close()
+	if invalidCreateResp.StatusCode != 400 {
+		t.Fatalf("expected status 400, got %d", invalidCreateResp.StatusCode)
+	}
+
+	clearReq := httptest.NewRequest("PUT", "/api/workflows/"+createBody.Item.ID, bytes.NewBufferString(`{"project_id":""}`))
+	clearReq.Header.Set("Content-Type", "application/json")
+	clearResp, err := app.Test(clearReq)
+	if err != nil {
+		t.Fatalf("PUT request failed: %v", err)
+	}
+	defer clearResp.Body.Close()
+	if clearResp.StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", clearResp.StatusCode)
+	}
+
+	var clearBody struct {
+		Item model.Workflow `json:"item"`
+	}
+	if err := json.NewDecoder(clearResp.Body).Decode(&clearBody); err != nil {
+		t.Fatalf("decode clear response failed: %v", err)
+	}
+	if clearBody.Item.ProjectID != nil {
+		t.Fatalf("expected project_id nil, got %v", clearBody.Item.ProjectID)
+	}
+
+	updateInvalidReq := httptest.NewRequest("PUT", "/api/workflows/"+createBody.Item.ID, bytes.NewBufferString(`{"project_id":"not-exist"}`))
+	updateInvalidReq.Header.Set("Content-Type", "application/json")
+	updateInvalidResp, err := app.Test(updateInvalidReq)
+	if err != nil {
+		t.Fatalf("PUT request failed: %v", err)
+	}
+	defer updateInvalidResp.Body.Close()
+	if updateInvalidResp.StatusCode != 400 {
+		t.Fatalf("expected status 400, got %d", updateInvalidResp.StatusCode)
 	}
 }

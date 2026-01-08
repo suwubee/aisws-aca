@@ -1,5 +1,5 @@
 <template>
-  <div class="workflow-editor">
+  <div class="workflow-editor" :class="{ 'workflow-editor--with-config': !!selectedNode }">
     <n-card size="small" class="workflow-editor__sidebar" title="节点">
       <n-space vertical size="small">
         <div
@@ -48,15 +48,15 @@
         @node-click="onNodeClick"
         @pane-click="clearSelection"
       >
-        <template #node-command="slotProps">
+        <template #node-server="slotProps">
           <div
-            class="workflow-node workflow-node--command"
+            class="workflow-node workflow-node--server"
             :class="{ 'workflow-node--selected': slotProps.selected }"
           >
-            <Handle type="target" :position="Position.Left" :style="handleStyle('command')" />
-            <div class="workflow-node__title">{{ slotProps.data?.label || 'Command' }}</div>
-            <div class="workflow-node__subtitle">command</div>
-            <Handle type="source" :position="Position.Right" :style="handleStyle('command')" />
+            <Handle type="target" :position="Position.Left" :style="handleStyle('server')" />
+            <div class="workflow-node__title">{{ slotProps.data?.label || '服务器' }}</div>
+            <div class="workflow-node__subtitle">server</div>
+            <Handle type="source" :position="Position.Right" :style="handleStyle('server')" />
           </div>
         </template>
 
@@ -66,21 +66,45 @@
             :class="{ 'workflow-node--selected': slotProps.selected }"
           >
             <Handle type="target" :position="Position.Left" :style="handleStyle('task')" />
-            <div class="workflow-node__title">{{ slotProps.data?.label || 'Task' }}</div>
+            <div class="workflow-node__title">{{ slotProps.data?.label || '任务' }}</div>
             <div class="workflow-node__subtitle">task</div>
             <Handle type="source" :position="Position.Right" :style="handleStyle('task')" />
           </div>
         </template>
 
-        <template #node-ai="slotProps">
+        <template #node-terminal="slotProps">
           <div
-            class="workflow-node workflow-node--ai"
+            class="workflow-node workflow-node--terminal"
             :class="{ 'workflow-node--selected': slotProps.selected }"
           >
-            <Handle type="target" :position="Position.Left" :style="handleStyle('ai')" />
-            <div class="workflow-node__title">{{ slotProps.data?.label || 'AI' }}</div>
-            <div class="workflow-node__subtitle">ai</div>
-            <Handle type="source" :position="Position.Right" :style="handleStyle('ai')" />
+            <Handle type="target" :position="Position.Left" :style="handleStyle('terminal')" />
+            <div class="workflow-node__title">{{ slotProps.data?.label || '终端' }}</div>
+            <div class="workflow-node__subtitle">terminal</div>
+            <Handle type="source" :position="Position.Right" :style="handleStyle('terminal')" />
+          </div>
+        </template>
+
+        <template #node-git="slotProps">
+          <div
+            class="workflow-node workflow-node--git"
+            :class="{ 'workflow-node--selected': slotProps.selected }"
+          >
+            <Handle type="target" :position="Position.Left" :style="handleStyle('git')" />
+            <div class="workflow-node__title">{{ slotProps.data?.label || 'Git' }}</div>
+            <div class="workflow-node__subtitle">git</div>
+            <Handle type="source" :position="Position.Right" :style="handleStyle('git')" />
+          </div>
+        </template>
+
+        <template #node-ai_agent="slotProps">
+          <div
+            class="workflow-node workflow-node--ai-agent"
+            :class="{ 'workflow-node--selected': slotProps.selected }"
+          >
+            <Handle type="target" :position="Position.Left" :style="handleStyle('ai_agent')" />
+            <div class="workflow-node__title">{{ slotProps.data?.label || 'AI代理' }}</div>
+            <div class="workflow-node__subtitle">ai_agent</div>
+            <Handle type="source" :position="Position.Right" :style="handleStyle('ai_agent')" />
           </div>
         </template>
 
@@ -90,7 +114,7 @@
             :class="{ 'workflow-node--selected': slotProps.selected }"
           >
             <Handle type="target" :position="Position.Left" :style="handleStyle('condition')" />
-            <div class="workflow-node__title">{{ slotProps.data?.label || 'Condition' }}</div>
+            <div class="workflow-node__title">{{ slotProps.data?.label || '条件' }}</div>
             <div class="workflow-node__subtitle">condition</div>
             <Handle type="source" :position="Position.Right" :style="handleStyle('condition')" />
           </div>
@@ -106,64 +130,64 @@
       </div>
     </div>
 
-    <n-card size="small" class="workflow-editor__config" title="配置">
-      <n-alert v-if="!selectedNode" type="info" :bordered="false">
-        点击节点以编辑配置
-      </n-alert>
-
-      <template v-else>
-        <n-space vertical size="small">
-          <n-space align="center" justify="space-between">
-            <n-tag :bordered="false" size="small" :type="tagTypeForNode(selectedNode.type)">
-              {{ selectedNode.type }}
-            </n-tag>
-            <n-button size="tiny" type="error" secondary @click="deleteSelectedNode">
-              删除
-            </n-button>
+    <n-card v-if="selectedNode" size="small" class="workflow-editor__config" title="配置">
+      <n-space vertical size="small">
+        <n-space align="center" justify="space-between">
+          <n-tag :bordered="false" size="small" :type="tagTypeForNode(selectedNode.type)">
+            {{ selectedNode.type }}
+          </n-tag>
+          <n-space size="small">
+            <n-button size="tiny" secondary @click="clearSelection">关闭</n-button>
+            <n-button size="tiny" type="error" secondary @click="deleteSelectedNode">删除</n-button>
           </n-space>
+        </n-space>
 
-          <n-form label-placement="top" size="small">
-            <n-form-item label="名称">
+        <n-form label-placement="top" size="small">
+          <template v-for="field in fieldsForNode(selectedNode.type)" :key="field.key">
+            <n-form-item :label="field.label">
+              <n-select
+                v-if="field.kind === 'select'"
+                :value="selectedConfigValue(field.key) || null"
+                :options="field.options"
+                :loading="field.loading"
+                :filterable="field.filterable"
+                :clearable="field.clearable"
+                :placeholder="field.placeholder"
+                @update:value="(value) => updateSelectedConfig(field.key, value)"
+              />
               <n-input
-                :value="selectedNode.data?.label || ''"
-                placeholder="节点名称"
-                @update:value="updateSelectedLabel"
+                v-else-if="field.kind === 'input' && field.input === 'textarea'"
+                type="textarea"
+                :autosize="field.autosize || { minRows: 3, maxRows: 8 }"
+                :value="selectedConfigValue(field.key)"
+                :placeholder="field.placeholder"
+                @update:value="(value) => updateSelectedConfig(field.key, value)"
+              />
+              <n-input
+                v-else
+                :value="selectedConfigValue(field.key)"
+                :placeholder="field.placeholder"
+                @update:value="(value) => updateSelectedConfig(field.key, value)"
               />
             </n-form-item>
-
-            <template v-for="field in fieldsForNode(selectedNode.type)" :key="field.key">
-              <n-form-item :label="field.label">
-                <n-input
-                  v-if="field.input === 'textarea'"
-                  type="textarea"
-                  :autosize="{ minRows: 3, maxRows: 8 }"
-                  :value="selectedConfigValue(field.key)"
-                  @update:value="(value) => updateSelectedConfig(field.key, value)"
-                />
-                <n-input
-                  v-else
-                  :value="selectedConfigValue(field.key)"
-                  @update:value="(value) => updateSelectedConfig(field.key, value)"
-                />
-              </n-form-item>
-            </template>
-          </n-form>
-        </n-space>
-      </template>
+          </template>
+        </n-form>
+      </n-space>
     </n-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { Handle, Position, VueFlow, useVueFlow } from '@vue-flow/core'
-import type { Connection, Edge, Node, Viewport } from '@vue-flow/core'
+import type { Connection, Edge, Node, NodeMouseEvent, Viewport } from '@vue-flow/core'
+import { useServerStore } from '@/stores/server'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 
-type WorkflowNodeType = 'command' | 'task' | 'ai' | 'condition'
+type WorkflowNodeType = 'server' | 'task' | 'terminal' | 'git' | 'ai_agent' | 'condition'
 
 type WorkflowNodeData = {
   label: string
@@ -188,6 +212,7 @@ const emit = defineEmits<{
 }>()
 
 const message = useMessage()
+const serverStore = useServerStore()
 
 const { project, fitView, zoomIn: flowZoomIn, zoomOut: flowZoomOut, setViewport } = useVueFlow()
 
@@ -204,10 +229,12 @@ const loading = ref(false)
 const defaultViewport: Viewport = { x: 0, y: 0, zoom: 1 }
 
 const nodeTypeItems: Array<{ type: WorkflowNodeType; label: string; color: string }> = [
-  { type: 'command', label: 'Command', color: '#4f8ef7' },
-  { type: 'task', label: 'Task', color: '#36ad6a' },
-  { type: 'ai', label: 'AI', color: '#b37feb' },
-  { type: 'condition', label: 'Condition', color: '#f0a020' }
+  { type: 'server', label: '服务器', color: '#4f8ef7' },
+  { type: 'task', label: '任务', color: '#36ad6a' },
+  { type: 'terminal', label: '终端', color: '#8c8c8c' },
+  { type: 'git', label: 'Git', color: '#f0a020' },
+  { type: 'ai_agent', label: 'AI代理', color: '#b37feb' },
+  { type: 'condition', label: '条件', color: '#d03050' }
 ]
 
 const nodeTypeColorMap = computed(() =>
@@ -236,11 +263,98 @@ function nodeLabelForType(type: WorkflowNodeType): string {
 }
 
 function defaultConfigForType(type: WorkflowNodeType): Record<string, string> {
-  if (type === 'command') return { command: '' }
-  if (type === 'task') return { task_id: '' }
-  if (type === 'ai') return { prompt: '', model: '' }
-  if (type === 'condition') return { expression: '' }
+  if (type === 'server') return { server_id: '' }
+  if (type === 'task') {
+    return {
+      title: '',
+      description: '',
+      server_id: '',
+      cli_type: 'claude',
+      work_dir: '',
+      initial_prompt: ''
+    }
+  }
+  if (type === 'terminal') return { server_id: '', command: '' }
+  if (type === 'git') return { operation: 'clone', repo_url: '', branch: '' }
+  if (type === 'ai_agent') return { agent_type: 'claude', prompt: '' }
+  if (type === 'condition') return { expression: '', description: '' }
   return {}
+}
+
+function safeTrim(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function toOneLine(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function shorten(value: string, maxLen: number) {
+  if (value.length <= maxLen) return value
+  return `${value.slice(0, Math.max(0, maxLen - 1))}…`
+}
+
+function deriveNodeLabel(type: WorkflowNodeType, config: Record<string, string> | undefined) {
+  const cfg = config || {}
+  const serverId = safeTrim(cfg.server_id)
+  const serverName = serverStore.getServerName(serverId) || (serverId ? serverId : '')
+
+  if (type === 'server') {
+    return serverName ? `服务器: ${serverName}` : nodeLabelForType(type)
+  }
+
+  if (type === 'task') {
+    const title = safeTrim(cfg.title)
+    const displayTitle = title ? shorten(title, 24) : '未命名'
+    return serverName ? `任务: ${displayTitle} @ ${serverName}` : `任务: ${displayTitle}`
+  }
+
+  if (type === 'terminal') {
+    const command = toOneLine(safeTrim(cfg.command))
+    const displayCommand = command ? shorten(command, 26) : ''
+    if (serverName && displayCommand) return `终端: ${serverName} · ${displayCommand}`
+    if (serverName) return `终端: ${serverName}`
+    if (displayCommand) return `终端: ${displayCommand}`
+    return nodeLabelForType(type)
+  }
+
+  if (type === 'git') {
+    const operation = safeTrim(cfg.operation)
+    const repoUrl = safeTrim(cfg.repo_url)
+    const branch = safeTrim(cfg.branch)
+    const repoLabel = repoUrl ? shorten(repoUrl.replace(/^https?:\/\//, ''), 26) : ''
+    const opLabel = operation || 'git'
+    const base = repoLabel ? `Git: ${opLabel} ${repoLabel}` : `Git: ${opLabel}`
+    return branch ? `${base}#${branch}` : base
+  }
+
+  if (type === 'ai_agent') {
+    const agentType = safeTrim(cfg.agent_type)
+    return agentType ? `AI代理: ${agentType}` : nodeLabelForType(type)
+  }
+
+  if (type === 'condition') {
+    const expression = safeTrim(cfg.expression)
+    return expression ? `条件: ${shorten(expression, 28)}` : nodeLabelForType(type)
+  }
+
+  return nodeLabelForType(type)
+}
+
+function isWorkflowNodeType(value: unknown): value is WorkflowNodeType {
+  return value === 'server' ||
+    value === 'task' ||
+    value === 'terminal' ||
+    value === 'git' ||
+    value === 'ai_agent' ||
+    value === 'condition'
+}
+
+function mapToWorkflowNodeType(rawType: unknown): WorkflowNodeType | null {
+  if (isWorkflowNodeType(rawType)) return rawType
+  if (rawType === 'command') return 'terminal'
+  if (rawType === 'ai') return 'ai_agent'
+  return null
 }
 
 function createNodeId() {
@@ -268,7 +382,8 @@ function onDrop(event: DragEvent) {
   event.preventDefault()
   if (!event.dataTransfer || !canvasRef.value) return
 
-  const type = event.dataTransfer.getData('application/vueflow') as WorkflowNodeType
+  const rawType = event.dataTransfer.getData('application/vueflow')
+  const type = mapToWorkflowNodeType(rawType)
   if (!type) return
 
   const bounds = canvasRef.value.getBoundingClientRect()
@@ -279,6 +394,7 @@ function onDrop(event: DragEvent) {
   const position = typeof project === 'function' ? project(mousePosition) : mousePosition
 
   const id = createNodeId()
+  const config = defaultConfigForType(type)
   nodes.value = [
     ...nodes.value,
     {
@@ -286,8 +402,8 @@ function onDrop(event: DragEvent) {
       type,
       position,
       data: {
-        label: nodeLabelForType(type),
-        config: defaultConfigForType(type)
+        label: deriveNodeLabel(type, config),
+        config
       }
     }
   ]
@@ -308,7 +424,9 @@ function onConnect(connection: Connection) {
   ]
 }
 
-function onNodeClick(_: MouseEvent, node: Node<WorkflowNodeData>) {
+function onNodeClick(payload?: NodeMouseEvent | null) {
+  const node = payload?.node as Node<WorkflowNodeData> | undefined
+  if (!node?.id) return
   selectedNodeId.value = node.id
 }
 
@@ -322,21 +440,22 @@ function patchSelectedNodeData(patch: Partial<WorkflowNodeData>) {
 
   nodes.value = nodes.value.map((node) => {
     if (node.id !== id) return node
+    const nextType = mapToWorkflowNodeType(node.type)
+    const config = {
+      ...(node.data?.config || {}),
+      ...(patch.config || {})
+    }
     const nextData: WorkflowNodeData = {
       label: node.data?.label ?? '',
       ...node.data,
       ...patch,
-      config: {
-        ...(node.data?.config || {}),
-        ...(patch.config || {})
-      }
+      config
+    }
+    if (nextType) {
+      nextData.label = deriveNodeLabel(nextType, config)
     }
     return { ...node, data: nextData }
   })
-}
-
-function updateSelectedLabel(value: string) {
-  patchSelectedNodeData({ label: value })
 }
 
 function selectedConfigValue(key: string) {
@@ -345,8 +464,8 @@ function selectedConfigValue(key: string) {
   return node.data?.config?.[key] ?? ''
 }
 
-function updateSelectedConfig(key: string, value: string) {
-  patchSelectedNodeData({ config: { [key]: value } })
+function updateSelectedConfig(key: string, value: string | null) {
+  patchSelectedNodeData({ config: { [key]: value ?? '' } })
 }
 
 function deleteSelectedNode() {
@@ -358,29 +477,247 @@ function deleteSelectedNode() {
   selectedNodeId.value = null
 }
 
-type NodeField = { key: string; label: string; input: 'text' | 'textarea' }
+type SelectOption = { label: string; value: string }
 
-const nodeFields: Record<WorkflowNodeType, NodeField[]> = {
-  command: [{ key: 'command', label: '命令', input: 'textarea' }],
-  task: [{ key: 'task_id', label: '任务ID', input: 'text' }],
-  ai: [
-    { key: 'model', label: '模型', input: 'text' },
-    { key: 'prompt', label: '提示词', input: 'textarea' }
-  ],
-  condition: [{ key: 'expression', label: '条件表达式', input: 'text' }]
-}
+type NodeField =
+  | {
+      kind: 'input'
+      key: string
+      label: string
+      input: 'text' | 'textarea'
+      placeholder?: string
+      autosize?: { minRows: number; maxRows: number }
+    }
+  | {
+      kind: 'select'
+      key: string
+      label: string
+      options: SelectOption[]
+      placeholder?: string
+      clearable?: boolean
+      filterable?: boolean
+      loading?: boolean
+    }
 
-function fieldsForNode(type: WorkflowNodeType | undefined) {
-  if (!type) return []
-  return nodeFields[type] || []
+const cliTypeOptions: SelectOption[] = [
+  { label: 'Claude Code', value: 'claude' },
+  { label: 'Codex', value: 'codex' },
+  { label: 'Gemini CLI', value: 'gemini' }
+]
+
+function fieldsForNode(type: string | undefined): NodeField[] {
+  const normalizedType = mapToWorkflowNodeType(type)
+  if (!normalizedType) return []
+
+  if (normalizedType === 'server') {
+    return [
+      {
+        kind: 'select',
+        key: 'server_id',
+        label: '服务器',
+        options: serverStore.serverOptions,
+        placeholder: '选择服务器',
+        clearable: true,
+        filterable: true,
+        loading: serverStore.loading
+      }
+    ]
+  }
+
+  if (normalizedType === 'task') {
+    return [
+      { kind: 'input', key: 'title', label: '标题', input: 'text', placeholder: '任务标题' },
+      {
+        kind: 'input',
+        key: 'description',
+        label: '描述',
+        input: 'textarea',
+        placeholder: '任务描述（可选）',
+        autosize: { minRows: 3, maxRows: 6 }
+      },
+      {
+        kind: 'select',
+        key: 'server_id',
+        label: '服务器',
+        options: serverStore.serverOptions,
+        placeholder: '选择服务器（可选）',
+        clearable: true,
+        filterable: true,
+        loading: serverStore.loading
+      },
+      {
+        kind: 'select',
+        key: 'cli_type',
+        label: 'CLI 类型',
+        options: cliTypeOptions,
+        placeholder: '选择 CLI 工具'
+      },
+      { kind: 'input', key: 'work_dir', label: '工作目录', input: 'text', placeholder: '/path/to/project' },
+      {
+        kind: 'input',
+        key: 'initial_prompt',
+        label: '初始提示',
+        input: 'textarea',
+        placeholder: '启动后自动输入的提示内容（可选）',
+        autosize: { minRows: 3, maxRows: 8 }
+      }
+    ]
+  }
+
+  if (normalizedType === 'terminal') {
+    return [
+      {
+        kind: 'select',
+        key: 'server_id',
+        label: '服务器',
+        options: serverStore.serverOptions,
+        placeholder: '选择服务器（可选）',
+        clearable: true,
+        filterable: true,
+        loading: serverStore.loading
+      },
+      {
+        kind: 'input',
+        key: 'command',
+        label: '命令',
+        input: 'textarea',
+        placeholder: '输入要执行的命令',
+        autosize: { minRows: 3, maxRows: 10 }
+      }
+    ]
+  }
+
+  if (normalizedType === 'git') {
+    return [
+      {
+        kind: 'select',
+        key: 'operation',
+        label: '操作',
+        options: [
+          { label: 'clone', value: 'clone' },
+          { label: 'pull', value: 'pull' },
+          { label: 'push', value: 'push' },
+          { label: 'commit', value: 'commit' }
+        ],
+        placeholder: '选择操作'
+      },
+      { kind: 'input', key: 'repo_url', label: '仓库地址', input: 'text', placeholder: 'https://...' },
+      { kind: 'input', key: 'branch', label: '分支', input: 'text', placeholder: 'main（可选）' }
+    ]
+  }
+
+  if (normalizedType === 'ai_agent') {
+    return [
+      {
+        kind: 'select',
+        key: 'agent_type',
+        label: 'Agent 类型',
+        options: cliTypeOptions,
+        placeholder: '选择 Agent'
+      },
+      {
+        kind: 'input',
+        key: 'prompt',
+        label: '提示词',
+        input: 'textarea',
+        placeholder: '输入要发送给 Agent 的提示',
+        autosize: { minRows: 4, maxRows: 10 }
+      }
+    ]
+  }
+
+  if (normalizedType === 'condition') {
+    return [
+      { kind: 'input', key: 'expression', label: '表达式', input: 'text', placeholder: '例如：x > 0' },
+      {
+        kind: 'input',
+        key: 'description',
+        label: '描述',
+        input: 'textarea',
+        placeholder: '条件说明（可选）',
+        autosize: { minRows: 3, maxRows: 6 }
+      }
+    ]
+  }
+
+  return []
 }
 
 function tagTypeForNode(type: string | undefined) {
   if (type === 'task') return 'success'
-  if (type === 'command') return 'info'
-  if (type === 'ai') return 'warning'
+  if (type === 'server') return 'info'
+  if (type === 'terminal') return 'default'
+  if (type === 'git') return 'warning'
+  if (type === 'ai_agent') return 'warning'
   if (type === 'condition') return 'error'
   return 'default'
+}
+
+function normalizeNode(raw: any): Node<WorkflowNodeData> | null {
+  if (!raw || typeof raw !== 'object') return null
+  const id = typeof raw.id === 'string' ? raw.id : String(raw.id || '')
+  if (!id) return null
+
+  const type = mapToWorkflowNodeType(raw.type)
+  if (!type) {
+    const label = typeof raw.data?.label === 'string' ? raw.data.label : String(raw.type || '')
+    return {
+      ...raw,
+      id,
+      data: {
+        label,
+        config: {}
+      }
+    } as Node<WorkflowNodeData>
+  }
+
+  const baseConfig = defaultConfigForType(type)
+  const rawConfig = raw.data?.config && typeof raw.data.config === 'object' ? raw.data.config : {}
+  const config: Record<string, string> = {
+    ...baseConfig,
+    ...Object.fromEntries(Object.entries(rawConfig).map(([key, value]) => [key, typeof value === 'string' ? value : String(value ?? '')]))
+  }
+
+  if (raw.type === 'ai') {
+    if (!safeTrim(config.agent_type) && safeTrim((rawConfig as any).model)) {
+      config.agent_type = safeTrim((rawConfig as any).model)
+    }
+  }
+
+  if (raw.type === 'task') {
+    if (!safeTrim(config.title) && safeTrim((rawConfig as any).task_id)) {
+      config.title = safeTrim((rawConfig as any).task_id)
+    }
+  }
+
+  return {
+    ...raw,
+    id,
+    type,
+    data: {
+      label: deriveNodeLabel(type, config),
+      config
+    }
+  } as Node<WorkflowNodeData>
+}
+
+function refreshAllNodeLabels() {
+  nodes.value = nodes.value.map((node) => {
+    const type = mapToWorkflowNodeType(node.type)
+    if (!type) return node
+    const config = {
+      ...defaultConfigForType(type),
+      ...(node.data?.config || {})
+    }
+    return {
+      ...node,
+      type,
+      data: {
+        label: deriveNodeLabel(type, config),
+        config
+      }
+    }
+  })
 }
 
 function getGraphSnapshot(): WorkflowGraph {
@@ -413,9 +750,12 @@ async function loadWorkflow(options: { silent?: boolean } = {}) {
       return
     }
     const parsed = JSON.parse(raw) as WorkflowGraph
-    nodes.value = Array.isArray(parsed.nodes) ? parsed.nodes : []
+    nodes.value = Array.isArray(parsed.nodes)
+      ? (parsed.nodes.map(normalizeNode).filter(Boolean) as Node<WorkflowNodeData>[])
+      : []
     edges.value = Array.isArray(parsed.edges) ? parsed.edges : []
     selectedNodeId.value = null
+    refreshAllNodeLabels()
 
     await nextTick()
     if (parsed.viewport && typeof setViewport === 'function') {
@@ -450,15 +790,29 @@ watch(() => props.workflowId, () => {
   selectedNodeId.value = null
   loadWorkflow({ silent: true })
 }, { immediate: true })
+
+watch(() => serverStore.servers, () => {
+  refreshAllNodeLabels()
+})
+
+onMounted(() => {
+  serverStore.fetchServers().catch(() => {
+    message.warning('加载服务器列表失败')
+  })
+})
 </script>
 
 <style scoped>
 .workflow-editor {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 300px;
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: 12px;
   height: 100%;
   min-height: 560px;
+}
+
+.workflow-editor--with-config {
+  grid-template-columns: 240px minmax(0, 1fr) 300px;
 }
 
 .workflow-editor__sidebar {
@@ -489,7 +843,7 @@ watch(() => props.workflowId, () => {
   background: currentColor;
 }
 
-.node-type--command {
+.node-type--server {
   color: #4f8ef7;
 }
 
@@ -497,12 +851,20 @@ watch(() => props.workflowId, () => {
   color: #36ad6a;
 }
 
-.node-type--ai {
+.node-type--terminal {
+  color: #8c8c8c;
+}
+
+.node-type--git {
+  color: #f0a020;
+}
+
+.node-type--ai_agent {
   color: #b37feb;
 }
 
 .node-type--condition {
-  color: #f0a020;
+  color: #d03050;
 }
 
 .node-type__label {
@@ -566,7 +928,7 @@ watch(() => props.workflowId, () => {
   color: rgba(255, 255, 255, 0.55);
 }
 
-.workflow-node--command {
+.workflow-node--server {
   border-color: rgba(79, 142, 247, 0.7);
 }
 
@@ -574,12 +936,20 @@ watch(() => props.workflowId, () => {
   border-color: rgba(54, 173, 106, 0.7);
 }
 
-.workflow-node--ai {
+.workflow-node--terminal {
+  border-color: rgba(140, 140, 140, 0.7);
+}
+
+.workflow-node--git {
+  border-color: rgba(240, 160, 32, 0.75);
+}
+
+.workflow-node--ai-agent {
   border-color: rgba(179, 127, 235, 0.7);
 }
 
 .workflow-node--condition {
-  border-color: rgba(240, 160, 32, 0.75);
+  border-color: rgba(208, 48, 80, 0.75);
 }
 
 .workflow-editor :deep(.vue-flow__handle) {

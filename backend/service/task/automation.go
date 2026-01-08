@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ type terminalManager interface {
 	CreateSSHSession(serverID string) (taskTerminal, error)
 	RenameSession(id, title string) error
 	LinkTask(id string, taskID *string) error
+	GetSession(id string) taskTerminal
 }
 
 type terminalManagerAdapter struct {
@@ -51,6 +53,14 @@ func (a terminalManagerAdapter) RenameSession(id, title string) error {
 
 func (a terminalManagerAdapter) LinkTask(id string, taskID *string) error {
 	return a.manager.LinkTask(id, taskID)
+}
+
+func (a terminalManagerAdapter) GetSession(id string) taskTerminal {
+	session := a.manager.GetSession(id)
+	if session == nil {
+		return nil
+	}
+	return session
 }
 
 // NewAutomationService 创建自动化服务
@@ -78,6 +88,61 @@ func GetCLIConfig(cliType string) *CLIConfig {
 	default:
 		return &CLIConfig{Type: "claude", Command: "claude"}
 	}
+}
+
+// sendTmuxKeys 使用 tmux send-keys 发送按键到指定会话
+func sendTmuxKeys(sessionID string, keys string, literal bool) error {
+	return sendTmuxKeysToTarget(sessionID, keys, literal)
+}
+
+// sendTmuxKeysToTarget 使用 tmux send-keys 发送按键到指定目标
+func sendTmuxKeysToTarget(target string, keys string, literal bool) error {
+	args := []string{"send-keys", "-t", target}
+	if literal {
+		args = append(args, "-l")
+	}
+	args = append(args, keys)
+	cmd := exec.Command("tmux", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		utils.Warn("tmux send-keys failed",
+			zap.String("target", target),
+			zap.String("keys", keys),
+			zap.String("output", string(output)),
+			zap.Error(err))
+		return err
+	}
+	utils.Debug("tmux send-keys success",
+		zap.String("target", target),
+		zap.Bool("literal", literal))
+	return nil
+}
+
+// TmuxKey 常用 tmux 按键名称
+// 使用 tmux send-keys 时，这些名称会被解释为特殊按键
+const (
+	TmuxKeyEnter     = "Enter"     // 回车键
+	TmuxKeyEscape    = "Escape"    // ESC 键
+	TmuxKeyTab       = "Tab"       // Tab 键
+	TmuxKeyBackspace = "BSpace"    // 退格键
+	TmuxKeyDelete    = "DC"        // Delete 键
+	TmuxKeyUp        = "Up"        // 上箭头
+	TmuxKeyDown      = "Down"      // 下箭头
+	TmuxKeyLeft      = "Left"      // 左箭头
+	TmuxKeyRight     = "Right"     // 右箭头
+	TmuxKeyHome      = "Home"      // Home 键
+	TmuxKeyEnd       = "End"       // End 键
+	TmuxKeyPageUp    = "PPage"     // Page Up
+	TmuxKeyPageDown  = "NPage"     // Page Down
+	TmuxKeySpace     = "Space"     // 空格键
+)
+
+// SendCtrlKey 发送 Ctrl+字母 组合键
+// 例如: SendCtrlKey(sessionID, 'c') 发送 Ctrl+C
+func SendCtrlKey(sessionID string, key rune) error {
+	// tmux send-keys 使用 C-x 格式表示 Ctrl+x
+	ctrlKey := fmt.Sprintf("C-%c", key)
+	return sendTmuxKeys(sessionID, ctrlKey, false)
 }
 
 // StartTaskResult 启动任务结果
@@ -195,13 +260,73 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 
 	// 5. 如果有初始提示，等待 CLI 启动后输入
 	if task.InitialPrompt != "" {
-		// 等待 CLI 启动
-		sleep(2 * time.Second)
+		// 使用detector检测CLI是否准备好
+		maxWait := 30 * time.Second
+		checkInterval := 500 * time.Millisecond
+		startTime := time.Now()
+		cliReady := false
 
-		// 输入初始提示
-		promptCmd := task.InitialPrompt + "\r"
-		if err := session.Write([]byte(promptCmd)); err != nil {
-			utils.Warn("Failed to send initial prompt", zap.Error(err))
+		utils.Info("Waiting for CLI ready", zap.String("task_id", task.ID), zap.String("prompt", task.InitialPrompt))
+
+		for time.Since(startTime) < maxWait {
+			sleep(checkInterval)
+			// 检查终端元数据中的AI状态
+			if termSession, ok := session.(*terminal.Session); ok {
+				if meta := termSession.Metadata(); meta != nil && meta.AIAssistant != nil {
+					utils.Debug("CLI state check",
+						zap.Bool("detected", meta.AIAssistant.Detected),
+						zap.String("state", meta.AIAssistant.State))
+					if meta.AIAssistant.Detected {
+						state := meta.AIAssistant.State
+						if state == "waiting_input" || state == "working" {
+							cliReady = true
+							utils.Info("CLI ready detected", zap.String("state", state))
+							break
+						}
+					}
+				}
+			} else {
+				utils.Warn("Type assertion failed for terminal.Session")
+			}
+		}
+
+		if !cliReady {
+			utils.Warn("CLI ready timeout, sending prompt anyway")
+		}
+
+		// 获取 tmux 会话名称
+		var tmuxSession string
+		if termSession, ok := session.(*terminal.Session); ok {
+			if meta := termSession.Metadata(); meta != nil {
+				tmuxSession = meta.TmuxSession
+			}
+		}
+
+		// 优先使用 tmux send-keys（指定完整目标）
+		if tmuxSession != "" {
+			target := tmuxSession + ":0.0"
+			// 发送提示内容（字面量模式）
+			if err := sendTmuxKeysToTarget(target, task.InitialPrompt, true); err != nil {
+				utils.Warn("Failed to send prompt via tmux", zap.Error(err))
+			} else {
+				utils.Info("Prompt sent via tmux", zap.String("target", target))
+			}
+
+			sleep(300 * time.Millisecond)
+
+			// 发送 Enter 键
+			if err := sendTmuxKeysToTarget(target, "Enter", false); err != nil {
+				utils.Warn("Failed to send Enter via tmux", zap.Error(err))
+			} else {
+				utils.Info("Enter sent via tmux")
+			}
+		} else {
+			// 回退：直接写入 PTY
+			utils.Info("Using PTY fallback")
+			promptWithEnter := task.InitialPrompt + "\r"
+			if err := session.Write([]byte(promptWithEnter)); err != nil {
+				utils.Warn("Failed to send via PTY", zap.Error(err))
+			}
 		}
 	}
 
@@ -217,5 +342,110 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		zap.String("cli_type", task.CLIType),
 		zap.String("work_dir", workDir))
 
+	// 7. 启动后台任务监控
+	go s.monitorTaskCompletion(task.ID, session.ID())
+
 	return result, nil
+}
+
+// monitorTaskCompletion 后台监控任务完成状态
+func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
+	monitor := NewTaskMonitor()
+	checkInterval := 10 * time.Second
+	maxDuration := 2 * time.Hour
+	startTime := time.Now()
+
+	utils.Info("Task monitoring started",
+		zap.String("task_id", taskID),
+		zap.String("terminal_id", terminalID))
+
+	for {
+		// 超时检查
+		if time.Since(startTime) > maxDuration {
+			utils.Warn("Task monitoring timeout",
+				zap.String("task_id", taskID))
+			s.updateTaskStatus(taskID, "timeout", "任务监控超时")
+			return
+		}
+
+		sleep(checkInterval)
+
+		// 检查终端会话是否还存在
+		if s.terminalManager.GetSession(terminalID) == nil {
+			utils.Warn("Terminal session not found, stopping monitor",
+				zap.String("task_id", taskID),
+				zap.String("terminal_id", terminalID))
+			s.updateTaskStatus(taskID, "failed", "终端会话已关闭")
+			return
+		}
+
+		// 检查任务是否还存在
+		var task model.Task
+		if err := model.DB.First(&task, "id = ?", taskID).Error; err != nil {
+			utils.Warn("Task not found, stopping monitor",
+				zap.String("task_id", taskID))
+			return
+		}
+
+		// 如果任务已经不是进行中状态，停止监控
+		if task.Status != "in_progress" {
+			utils.Info("Task status changed, stopping monitor",
+				zap.String("task_id", taskID),
+				zap.String("status", task.Status))
+			return
+		}
+
+		// 执行监控检查
+		decision, err := monitor.StartMonitoring(taskID, terminalID)
+		if err != nil {
+			utils.Debug("Monitor check error",
+				zap.String("task_id", taskID),
+				zap.Error(err))
+			continue
+		}
+
+		utils.Debug("Monitor decision",
+			zap.String("task_id", taskID),
+			zap.String("action", string(decision.Action)),
+			zap.String("reason", decision.Reason))
+
+		// 根据决策采取行动
+		switch decision.Action {
+		case MonitorActionComplete:
+			s.updateTaskStatus(taskID, "completed", decision.Reason)
+			utils.Info("Task completed",
+				zap.String("task_id", taskID),
+				zap.String("reason", decision.Reason))
+			return
+
+		case MonitorActionAlert:
+			// 需要用户干预，发送通知但继续监控
+			utils.Warn("Task needs attention",
+				zap.String("task_id", taskID),
+				zap.String("reason", decision.Reason))
+			// TODO: 发送WebSocket通知给前端
+
+		case MonitorActionRetry:
+			utils.Info("Task retry suggested",
+				zap.String("task_id", taskID),
+				zap.String("reason", decision.Reason))
+			// 继续监控，等待重试结果
+
+		case MonitorActionContinue:
+			// 继续监控
+		}
+	}
+}
+
+// updateTaskStatus 更新任务状态
+func (s *AutomationService) updateTaskStatus(taskID, status, reason string) {
+	updates := map[string]interface{}{
+		"status":     status,
+		"updated_at": time.Now(),
+	}
+	if status == "completed" {
+		now := time.Now()
+		updates["completed_at"] = &now
+	}
+	model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(updates)
 }

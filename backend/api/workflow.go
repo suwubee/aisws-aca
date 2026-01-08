@@ -29,21 +29,23 @@ func NewWorkflowController(jwtSecret string, terminalMgr *terminal.Manager) *Wor
 	}
 
 	return &WorkflowController{
-		engine: workflowservice.NewWorkflowEngine(sshManager, automation),
+		engine: workflowservice.NewWorkflowEngine(sshManager, automation, workflowservice.NewTerminalManagerAdapter(terminalMgr)),
 	}
 }
 
 type CreateWorkflowRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Nodes       string `json:"nodes"` // JSON string
-	Edges       string `json:"edges"` // JSON string
-	Status      string `json:"status"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	ProjectID   *string `json:"project_id"`
+	Nodes       string  `json:"nodes"` // JSON string
+	Edges       string  `json:"edges"` // JSON string
+	Status      string  `json:"status"`
 }
 
 type UpdateWorkflowRequest struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
+	ProjectID   *string `json:"project_id"`
 	Nodes       *string `json:"nodes"` // JSON string
 	Edges       *string `json:"edges"` // JSON string
 	Status      *string `json:"status"`
@@ -100,10 +102,26 @@ func (ctrl *WorkflowController) CreateWorkflow(c *fiber.Ctx) error {
 		status = "draft"
 	}
 
+	var projectID *string
+	if req.ProjectID != nil {
+		trimmed := strings.TrimSpace(*req.ProjectID)
+		if trimmed != "" {
+			var project model.Project
+			if err := model.DB.Select("id").First(&project, "id = ?", trimmed).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Project not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query project"})
+			}
+			projectID = &trimmed
+		}
+	}
+
 	workflow := model.Workflow{
 		ID:          uuid.New().String(),
 		Name:        name,
 		Description: req.Description,
+		ProjectID:   projectID,
 		Nodes:       nodes,
 		Edges:       edges,
 		Status:      status,
@@ -159,6 +177,21 @@ func (ctrl *WorkflowController) UpdateWorkflow(c *fiber.Ctx) error {
 	}
 	if req.Description != nil {
 		updates["description"] = *req.Description
+	}
+	if req.ProjectID != nil {
+		projectID := strings.TrimSpace(*req.ProjectID)
+		if projectID == "" {
+			updates["project_id"] = nil
+		} else {
+			var project model.Project
+			if err := model.DB.Select("id").First(&project, "id = ?", projectID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Project not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query project"})
+			}
+			updates["project_id"] = projectID
+		}
 	}
 	if req.Nodes != nil {
 		nodes, err := normalizeJSONString(*req.Nodes)
