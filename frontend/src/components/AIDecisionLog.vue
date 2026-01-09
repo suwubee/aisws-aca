@@ -32,7 +32,7 @@
 
     <div v-else class="mobile-cards">
       <n-spin :show="loadingRecords">
-        <n-space v-if="rows.length > 0" vertical size="12">
+        <n-space v-if="rows.length > 0" vertical :size="12">
           <n-card
             v-for="row in rows"
             :key="row.id"

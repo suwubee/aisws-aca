@@ -42,7 +42,7 @@
         />
 
         <div v-else class="mobile-terminal-cards">
-          <n-space v-if="filteredTerminals.length > 0" vertical size="12">
+          <n-space v-if="filteredTerminals.length > 0" vertical :size="12">
             <n-card
               v-for="t in filteredTerminals"
               :key="t.id"

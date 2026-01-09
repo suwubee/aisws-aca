@@ -51,7 +51,7 @@
         />
 
         <div v-else class="mobile-workflow-cards">
-          <n-space v-if="filteredWorkflows.length > 0" vertical size="12">
+          <n-space v-if="filteredWorkflows.length > 0" vertical :size="12">
             <n-card
               v-for="wf in filteredWorkflows"
               :key="wf.id"

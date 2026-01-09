@@ -94,7 +94,7 @@
 
             <div v-else class="mobile-log-cards">
               <n-spin :show="loadingLogs">
-                <n-space v-if="logs.length > 0" vertical size="12">
+                <n-space v-if="logs.length > 0" vertical :size="12">
                   <n-card
                     v-for="log in logs"
                     :key="log.id"

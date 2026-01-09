@@ -52,7 +52,7 @@
         />
 
         <div v-else class="mobile-server-cards">
-          <n-space v-if="filteredServers.length > 0" vertical size="12">
+          <n-space v-if="filteredServers.length > 0" vertical :size="12">
             <n-card
               v-for="server in filteredServers"
               :key="server.id"

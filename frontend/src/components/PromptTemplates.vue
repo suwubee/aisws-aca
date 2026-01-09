@@ -12,7 +12,7 @@
       <n-empty v-if="templates.length === 0" description="暂无模板" />
 
       <div v-else class="prompt-templates-body">
-        <n-space vertical size="12">
+        <n-space vertical :size="12">
           <n-select
             v-model:value="activeKey"
             size="small"
@@ -22,12 +22,12 @@
           />
 
           <div v-if="activeTemplate" class="prompt-template">
-            <n-space vertical size="12">
+            <n-space vertical :size="12">
               <n-text depth="3">{{ activeTemplate.description || '—' }}</n-text>
               <n-text depth="3" style="font-size: 12px">Key: {{ activeTemplate.key }}</n-text>
 
               <div class="preset-row">
-                <n-space size="10" align="center" wrap>
+                <n-space :size="10" align="center" wrap>
                   <n-text depth="3" style="font-size: 12px">当前方案：</n-text>
                   <n-select
                     v-model:value="presetSelection[activeTemplate.key]"
@@ -85,7 +85,7 @@
 
               <div v-if="activeTemplate.variables && activeTemplate.variables.length > 0">
                 <n-text depth="3" style="font-size: 12px">可用变量：</n-text>
-                <n-space size="6" wrap style="margin-top: 6px">
+                <n-space :size="6" wrap style="margin-top: 6px">
                   <n-tag
                     v-for="v in activeTemplate.variables"
                     :key="v"
@@ -138,7 +138,7 @@
     title="保存为方案"
     style="width: min(520px, 94vw)"
   >
-    <n-space vertical size="10">
+    <n-space vertical :size="10">
       <n-text depth="3" style="font-size: 12px">将当前编辑区内容保存为可复用方案（不自动套用）。</n-text>
       <n-form :model="createPresetForm" label-placement="left" label-width="80" size="small">
         <n-form-item label="名称" required>

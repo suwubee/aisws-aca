@@ -28,7 +28,7 @@
     </div>
 
     <div v-if="isMobile" class="mobile-task-cards">
-      <n-space v-if="filteredTasks.length > 0" vertical size="12">
+      <n-space v-if="filteredTasks.length > 0" vertical :size="12">
         <n-card
           v-for="task in filteredTasks"
           :key="task.id"
@@ -48,7 +48,7 @@
             {{ task.description }}
           </div>
 
-          <n-space size="6" wrap>
+          <n-space :size="6" wrap>
             <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
               {{ ['低','中','高','紧急'][task.priority] }}
             </n-tag>
