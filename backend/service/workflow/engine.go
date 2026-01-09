@@ -162,6 +162,7 @@ type executionReport struct {
 
 type executionContext struct {
 	currentServerID string
+	currentWorkDir  string
 	lastCondition   *bool
 	agent           *WorkflowAgent
 }
@@ -318,6 +319,47 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 	} else {
 		ctx.agent = NewWorkflowAgent(e)
 	}
+
+	if workflow.ProjectID != nil {
+		projectID := strings.TrimSpace(*workflow.ProjectID)
+		if projectID != "" {
+			var project model.Project
+			if err := model.DB.First(&project, "id = ?", projectID).Error; err != nil {
+				e.failRun(runID, "", err)
+				e.appendExecutionReport(runID, executionReport{
+					Status:         "failed",
+					RunID:          runID,
+					WorkflowID:     workflow.ID,
+					StartedAt:      startedAt,
+					FinishedAt:     e.now(),
+					DurationMs:     e.now().Sub(startedAt).Milliseconds(),
+					NodesTotal:     nodesTotal,
+					NodesCompleted: nodesCompleted,
+					LastError:      safeError(err),
+				})
+				return
+			}
+
+			if project.ServerID != nil {
+				if serverID := strings.TrimSpace(*project.ServerID); serverID != "" {
+					ctx.currentServerID = serverID
+				}
+			}
+
+			workDir := strings.TrimSpace(project.RemotePath)
+			if workDir == "" {
+				workDir = strings.TrimSpace(project.LocalPath)
+			}
+			ctx.currentWorkDir = workDir
+
+			e.appendRunLog(runID, runLogEntry{
+				Timestamp: e.now(),
+				Level:     "info",
+				Message:   fmt.Sprintf("Project context loaded: %s (server=%s work_dir=%s)", strings.TrimSpace(project.Name), ctx.currentServerID, ctx.currentWorkDir),
+			})
+		}
+	}
+
 	maxSteps := len(nodes) * 4
 	steps := 0
 
@@ -546,23 +588,31 @@ func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *execu
 		if cmd == "" {
 			return nodeExecutionResult{}, errors.New("command is required")
 		}
+		workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir"))
+		if workDir == "" && ctx != nil {
+			workDir = strings.TrimSpace(ctx.currentWorkDir)
+		}
+		fullCmd := cmd
+		if workDir != "" {
+			fullCmd = fmt.Sprintf("cd %s && %s", workDir, cmd)
+		}
 		if ctx != nil && ctx.agent != nil {
 			decision := ctx.agent.generateNextStepSuggestion(agentSuggestionContext{
 				phase:    suggestionPhasePreExecute,
 				nodeType: nodeType,
-				command:  cmd,
+				command:  fullCmd,
 			})
 			ctx.agent.logDecision(runID, node.ID, node.Type, "", "", decision)
 			if decision != nil {
 				switch decision.Action {
 				case AgentActionWait:
-					return nodeExecutionResult{}, &workflowPauseError{decision: decision, command: cmd}
+					return nodeExecutionResult{}, &workflowPauseError{decision: decision, command: fullCmd}
 				case AgentActionFail:
 					return nodeExecutionResult{}, errors.New(strings.TrimSpace(decision.Reasoning))
 				}
 			}
 		}
-		output, err := e.runCommand(node, cmd, ctx)
+		output, err := e.runCommand(node, fullCmd, ctx)
 		if err != nil {
 			return nodeExecutionResult{Output: output}, err
 		}
@@ -646,6 +696,9 @@ func (e *WorkflowEngine) runTerminal(runID string, node workflowNode, ctx *execu
 	}
 
 	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir"))
+	if workDir == "" && ctx != nil {
+		workDir = strings.TrimSpace(ctx.currentWorkDir)
+	}
 
 	fullCmd := cmd
 	if workDir != "" {
@@ -699,12 +752,72 @@ func (e *WorkflowEngine) runTerminal(runID string, node workflowNode, ctx *execu
 }
 
 func (e *WorkflowEngine) runGit(runID string, node workflowNode, ctx *executionContext) (string, error) {
+	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir", "repo_dir", "repoDir"))
+	if workDir == "" && ctx != nil {
+		workDir = strings.TrimSpace(ctx.currentWorkDir)
+	}
+
 	command := strings.TrimSpace(getString(node.Config, "command", "cmd", "shell"))
 	if command == "" {
 		args := strings.TrimSpace(getString(node.Config, "args", "git_args", "gitArgs"))
 		if args != "" {
 			command = "git " + args
 		}
+	}
+
+	builtFromOperation := false
+	if command == "" {
+		operation := strings.ToLower(strings.TrimSpace(getString(node.Config, "operation", "op")))
+		repoURL := strings.TrimSpace(getString(node.Config, "repo_url", "repoUrl", "url"))
+		branch := strings.TrimSpace(getString(node.Config, "branch"))
+		message := strings.TrimSpace(getString(node.Config, "message", "commit_message", "commitMessage"))
+
+		quoteSingle := func(value string) string {
+			// POSIX shell single-quote escaping: close, escape, reopen.
+			return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+		}
+
+		switch operation {
+		case "", "pull":
+			if workDir == "" {
+				return "", errors.New("git pull requires work_dir")
+			}
+			if branch != "" {
+				command = fmt.Sprintf("git -C %s checkout %s && git -C %s pull", workDir, branch, workDir)
+			} else {
+				command = fmt.Sprintf("git -C %s pull", workDir)
+			}
+		case "clone":
+			if repoURL == "" {
+				return "", errors.New("git clone requires repo_url")
+			}
+			args := make([]string, 0, 6)
+			args = append(args, "clone")
+			if branch != "" {
+				args = append(args, "--branch", branch)
+			}
+			args = append(args, repoURL)
+			if workDir != "" {
+				args = append(args, workDir)
+			}
+			command = "git " + strings.Join(args, " ")
+		case "push":
+			if workDir == "" {
+				return "", errors.New("git push requires work_dir")
+			}
+			command = fmt.Sprintf("git -C %s push", workDir)
+		case "commit":
+			if workDir == "" {
+				return "", errors.New("git commit requires work_dir")
+			}
+			if message == "" {
+				return "", errors.New("git commit requires message")
+			}
+			command = fmt.Sprintf("git -C %s add -A && git -C %s commit -m %s", workDir, workDir, quoteSingle(message))
+		default:
+			return "", fmt.Errorf("unsupported git operation %q", operation)
+		}
+		builtFromOperation = true
 	}
 
 	command = strings.TrimSpace(command)
@@ -716,8 +829,7 @@ func (e *WorkflowEngine) runGit(runID string, node workflowNode, ctx *executionC
 		command = "git " + command
 	}
 
-	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir", "repo_dir", "repoDir"))
-	if workDir != "" {
+	if !builtFromOperation && workDir != "" {
 		command = fmt.Sprintf("cd %s && %s", workDir, command)
 	}
 
@@ -773,7 +885,7 @@ func (e *WorkflowEngine) runCommand(node workflowNode, command string, ctx *exec
 	if serverID == "" {
 		serverID = getString(node.Config, "server_id", "serverId")
 	}
-	if serverID == "" {
+	if serverID == "" && ctx != nil {
 		serverID = strings.TrimSpace(ctx.currentServerID)
 	}
 
@@ -835,6 +947,9 @@ func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (task
 	}
 
 	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir"))
+	if workDir == "" && ctx != nil {
+		workDir = strings.TrimSpace(ctx.currentWorkDir)
+	}
 	initialPrompt := strings.TrimSpace(getString(node.Config, "initial_prompt", "initialPrompt"))
 	autoCreateDir := getBool(node.Config, true, "auto_create_dir", "autoCreateDir")
 
@@ -843,7 +958,7 @@ func (e *WorkflowEngine) runTask(node workflowNode, ctx *executionContext) (task
 	if sid == "" {
 		sid = getString(node.Config, "server_id", "serverId")
 	}
-	if sid == "" {
+	if sid == "" && ctx != nil {
 		sid = strings.TrimSpace(ctx.currentServerID)
 	}
 	if sid != "" {
@@ -971,18 +1086,43 @@ func (e *WorkflowEngine) evaluateCondition(node workflowNode, ctx *executionCont
 	}
 
 	cmd := getString(node.Config, "command", "cmd", "shell")
+	if cmd == "" && expr != "" {
+		cmd = expr
+	}
 	if cmd == "" {
 		return false, "", errors.New("condition requires value/expression/command")
 	}
 
-	output, err := e.runCommand(node, cmd, ctx)
-	if err != nil {
-		if isCommandExitError(err) {
-			return false, output, nil
-		}
+	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir"))
+	if workDir == "" && ctx != nil {
+		workDir = strings.TrimSpace(ctx.currentWorkDir)
+	}
+	cmdToRun := cmd
+	if workDir != "" {
+		cmdToRun = fmt.Sprintf("cd %s && %s", workDir, cmd)
+	}
+
+	output, err := e.runCommand(node, cmdToRun, ctx)
+	exitOK := err == nil
+	if err != nil && !isCommandExitError(err) {
 		return false, output, err
 	}
-	return true, output, nil
+
+	contains := getString(node.Config, "contains", "match", "needle")
+	if contains != "" {
+		return strings.Contains(output, contains), output, nil
+	}
+
+	regex := getString(node.Config, "regex", "regexp")
+	if regex != "" {
+		re, reErr := regexp.Compile(regex)
+		if reErr != nil {
+			return false, output, reErr
+		}
+		return re.MatchString(output), output, nil
+	}
+
+	return exitOK, output, nil
 }
 
 func isCommandExitError(err error) bool {

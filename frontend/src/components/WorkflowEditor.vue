@@ -72,6 +72,18 @@
           </div>
         </template>
 
+        <template #node-command="slotProps">
+          <div
+            class="workflow-node workflow-node--command"
+            :class="{ 'workflow-node--selected': slotProps.selected }"
+          >
+            <Handle type="target" :position="Position.Left" :style="handleStyle('command')" />
+            <div class="workflow-node__title">{{ slotProps.data?.label || '命令' }}</div>
+            <div class="workflow-node__subtitle">command</div>
+            <Handle type="source" :position="Position.Right" :style="handleStyle('command')" />
+          </div>
+        </template>
+
         <template #node-terminal="slotProps">
           <div
             class="workflow-node workflow-node--terminal"
@@ -183,11 +195,12 @@ import { useMessage } from 'naive-ui'
 import { Handle, Position, VueFlow, useVueFlow } from '@vue-flow/core'
 import type { Connection, Edge, Node, NodeMouseEvent, Viewport } from '@vue-flow/core'
 import { useServerStore } from '@/stores/server'
+import { getWorkflow, updateWorkflow } from '@/api/workflow'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 
-type WorkflowNodeType = 'server' | 'task' | 'terminal' | 'git' | 'ai_agent' | 'condition'
+type WorkflowNodeType = 'server' | 'task' | 'command' | 'terminal' | 'git' | 'ai_agent' | 'condition'
 
 type WorkflowNodeData = {
   label: string
@@ -231,6 +244,7 @@ const defaultViewport: Viewport = { x: 0, y: 0, zoom: 1 }
 const nodeTypeItems: Array<{ type: WorkflowNodeType; label: string; color: string }> = [
   { type: 'server', label: '服务器', color: '#4f8ef7' },
   { type: 'task', label: '任务', color: '#36ad6a' },
+  { type: 'command', label: '命令', color: '#5c6bc0' },
   { type: 'terminal', label: '终端', color: '#8c8c8c' },
   { type: 'git', label: 'Git', color: '#f0a020' },
   { type: 'ai_agent', label: 'AI代理', color: '#b37feb' },
@@ -274,10 +288,11 @@ function defaultConfigForType(type: WorkflowNodeType): Record<string, string> {
       initial_prompt: ''
     }
   }
-  if (type === 'terminal') return { server_id: '', command: '' }
-  if (type === 'git') return { operation: 'clone', repo_url: '', branch: '' }
+  if (type === 'command') return { server_id: '', work_dir: '', command: '' }
+  if (type === 'terminal') return { server_id: '', work_dir: '', title: '', command: '' }
+  if (type === 'git') return { server_id: '', work_dir: '', operation: 'pull', repo_url: '', branch: '', message: '' }
   if (type === 'ai_agent') return { agent_type: 'claude', prompt: '' }
-  if (type === 'condition') return { expression: '', description: '' }
+  if (type === 'condition') return { command: '', contains: '', regex: '', description: '' }
   return {}
 }
 
@@ -309,12 +324,26 @@ function deriveNodeLabel(type: WorkflowNodeType, config: Record<string, string> 
     return serverName ? `任务: ${displayTitle} @ ${serverName}` : `任务: ${displayTitle}`
   }
 
+  if (type === 'command') {
+    const command = toOneLine(safeTrim(cfg.command))
+    const displayCommand = command ? shorten(command, 34) : ''
+    const workDir = safeTrim(cfg.work_dir)
+    const displayDir = workDir ? shorten(workDir, 18) : ''
+
+    if (serverName && displayCommand) return displayDir ? `命令: ${serverName} · ${displayCommand} · ${displayDir}` : `命令: ${serverName} · ${displayCommand}`
+    if (serverName) return displayDir ? `命令: ${serverName} · ${displayDir}` : `命令: ${serverName}`
+    if (displayCommand) return displayDir ? `命令: ${displayCommand} · ${displayDir}` : `命令: ${displayCommand}`
+    return nodeLabelForType(type)
+  }
+
   if (type === 'terminal') {
     const command = toOneLine(safeTrim(cfg.command))
     const displayCommand = command ? shorten(command, 26) : ''
+    const workDir = safeTrim(cfg.work_dir)
+    const displayDir = workDir ? shorten(workDir, 18) : ''
     if (serverName && displayCommand) return `终端: ${serverName} · ${displayCommand}`
     if (serverName) return `终端: ${serverName}`
-    if (displayCommand) return `终端: ${displayCommand}`
+    if (displayCommand) return displayDir ? `终端: ${displayCommand} · ${displayDir}` : `终端: ${displayCommand}`
     return nodeLabelForType(type)
   }
 
@@ -322,9 +351,12 @@ function deriveNodeLabel(type: WorkflowNodeType, config: Record<string, string> 
     const operation = safeTrim(cfg.operation)
     const repoUrl = safeTrim(cfg.repo_url)
     const branch = safeTrim(cfg.branch)
+    const workDir = safeTrim(cfg.work_dir)
     const repoLabel = repoUrl ? shorten(repoUrl.replace(/^https?:\/\//, ''), 26) : ''
     const opLabel = operation || 'git'
-    const base = repoLabel ? `Git: ${opLabel} ${repoLabel}` : `Git: ${opLabel}`
+    const serverPrefix = serverName ? `${serverName} · ` : ''
+    const dirSuffix = workDir ? ` · ${shorten(workDir, 18)}` : ''
+    const base = repoLabel ? `Git: ${serverPrefix}${opLabel} ${repoLabel}${dirSuffix}` : `Git: ${serverPrefix}${opLabel}${dirSuffix}`
     return branch ? `${base}#${branch}` : base
   }
 
@@ -334,8 +366,13 @@ function deriveNodeLabel(type: WorkflowNodeType, config: Record<string, string> 
   }
 
   if (type === 'condition') {
-    const expression = safeTrim(cfg.expression)
-    return expression ? `条件: ${shorten(expression, 28)}` : nodeLabelForType(type)
+    const contains = safeTrim(cfg.contains)
+    if (contains) return `条件: contains ${shorten(contains, 28)}`
+    const regex = safeTrim(cfg.regex)
+    if (regex) return `条件: /${shorten(regex, 26)}/`
+    const command = toOneLine(safeTrim(cfg.command))
+    if (command) return `条件: ${shorten(command, 30)}`
+    return nodeLabelForType(type)
   }
 
   return nodeLabelForType(type)
@@ -344,6 +381,7 @@ function deriveNodeLabel(type: WorkflowNodeType, config: Record<string, string> 
 function isWorkflowNodeType(value: unknown): value is WorkflowNodeType {
   return value === 'server' ||
     value === 'task' ||
+    value === 'command' ||
     value === 'terminal' ||
     value === 'git' ||
     value === 'ai_agent' ||
@@ -352,7 +390,6 @@ function isWorkflowNodeType(value: unknown): value is WorkflowNodeType {
 
 function mapToWorkflowNodeType(rawType: unknown): WorkflowNodeType | null {
   if (isWorkflowNodeType(rawType)) return rawType
-  if (rawType === 'command') return 'terminal'
   if (rawType === 'ai') return 'ai_agent'
   return null
 }
@@ -564,6 +601,30 @@ function fieldsForNode(type: string | undefined): NodeField[] {
     ]
   }
 
+  if (normalizedType === 'command') {
+    return [
+      {
+        kind: 'select',
+        key: 'server_id',
+        label: '服务器',
+        options: serverStore.serverOptions,
+        placeholder: '选择服务器（留空=本机）',
+        clearable: true,
+        filterable: true,
+        loading: serverStore.loading
+      },
+      { kind: 'input', key: 'work_dir', label: '工作目录', input: 'text', placeholder: '/path/to/project（可选）' },
+      {
+        kind: 'input',
+        key: 'command',
+        label: '命令',
+        input: 'textarea',
+        placeholder: '输入要执行的命令（可用于后续条件判断）',
+        autosize: { minRows: 3, maxRows: 10 }
+      }
+    ]
+  }
+
   if (normalizedType === 'terminal') {
     return [
       {
@@ -576,12 +637,14 @@ function fieldsForNode(type: string | undefined): NodeField[] {
         filterable: true,
         loading: serverStore.loading
       },
+      { kind: 'input', key: 'work_dir', label: '工作目录', input: 'text', placeholder: '/path/to/project（可选）' },
+      { kind: 'input', key: 'title', label: '会话标题', input: 'text', placeholder: '可选，留空使用节点名称' },
       {
         kind: 'input',
         key: 'command',
         label: '命令',
         input: 'textarea',
-        placeholder: '输入要执行的命令',
+        placeholder: '输入要写入终端的命令（偏交互，不建议作为条件判断来源）',
         autosize: { minRows: 3, maxRows: 10 }
       }
     ]
@@ -589,6 +652,17 @@ function fieldsForNode(type: string | undefined): NodeField[] {
 
   if (normalizedType === 'git') {
     return [
+      {
+        kind: 'select',
+        key: 'server_id',
+        label: '服务器',
+        options: serverStore.serverOptions,
+        placeholder: '选择服务器（留空=本机）',
+        clearable: true,
+        filterable: true,
+        loading: serverStore.loading
+      },
+      { kind: 'input', key: 'work_dir', label: '仓库目录', input: 'text', placeholder: '/path/to/repo（pull/push/commit 必填）' },
       {
         kind: 'select',
         key: 'operation',
@@ -601,7 +675,7 @@ function fieldsForNode(type: string | undefined): NodeField[] {
         ],
         placeholder: '选择操作'
       },
-      { kind: 'input', key: 'repo_url', label: '仓库地址', input: 'text', placeholder: 'https://...' },
+      { kind: 'input', key: 'repo_url', label: '仓库地址', input: 'text', placeholder: 'https://...（clone 必填）' },
       { kind: 'input', key: 'branch', label: '分支', input: 'text', placeholder: 'main（可选）' }
     ]
   }
@@ -628,7 +702,16 @@ function fieldsForNode(type: string | undefined): NodeField[] {
 
   if (normalizedType === 'condition') {
     return [
-      { kind: 'input', key: 'expression', label: '表达式', input: 'text', placeholder: '例如：x > 0' },
+      {
+        kind: 'input',
+        key: 'command',
+        label: '检测命令',
+        input: 'textarea',
+        placeholder: '退出码=0 视为 true；可配合 contains/regex 对输出做判断',
+        autosize: { minRows: 3, maxRows: 10 }
+      },
+      { kind: 'input', key: 'contains', label: '输出包含', input: 'text', placeholder: '可选：stdout/stderr 包含该文本则 true' },
+      { kind: 'input', key: 'regex', label: '输出正则', input: 'text', placeholder: '可选：正则匹配输出则 true' },
       {
         kind: 'input',
         key: 'description',
@@ -646,6 +729,7 @@ function fieldsForNode(type: string | undefined): NodeField[] {
 function tagTypeForNode(type: string | undefined) {
   if (type === 'task') return 'success'
   if (type === 'server') return 'info'
+  if (type === 'command') return 'info'
   if (type === 'terminal') return 'default'
   if (type === 'git') return 'warning'
   if (type === 'ai_agent') return 'warning'
@@ -725,14 +809,37 @@ function getGraphSnapshot(): WorkflowGraph {
   return base
 }
 
+function safeParseJSONArray(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw !== 'string') return []
+  const trimmed = raw.trim()
+  if (!trimmed) return []
+  try {
+    const parsed = JSON.parse(trimmed)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 async function saveWorkflow() {
   if (saving.value) return
   saving.value = true
   try {
     const snapshot = getGraphSnapshot()
     localStorage.setItem(storageKey(), JSON.stringify(snapshot))
+
+    const id = props.workflowId?.trim()
+    if (id) {
+      await updateWorkflow(id, {
+        nodes: JSON.stringify(nodes.value),
+        edges: JSON.stringify(edges.value)
+      })
+      message.success('工作流已保存到服务器')
+    } else {
+      message.success('工作流已保存到本地')
+    }
     emit('saved', snapshot)
-    message.success('工作流已保存')
   } catch (e: any) {
     message.error(e?.message || '保存失败')
   } finally {
@@ -744,12 +851,49 @@ async function loadWorkflow(options: { silent?: boolean } = {}) {
   if (loading.value) return
   loading.value = true
   try {
-    const raw = localStorage.getItem(storageKey())
-    if (!raw) {
+    const id = props.workflowId?.trim()
+
+    let parsed: WorkflowGraph | null = null
+    if (id) {
+      try {
+        const { data } = await getWorkflow(id)
+        const item = data?.item
+        const serverNodes = safeParseJSONArray(item?.nodes)
+        const serverEdges = safeParseJSONArray(item?.edges)
+        parsed = {
+          nodes: serverNodes as any[],
+          edges: serverEdges as any[]
+        }
+
+        const isEmptyServerGraph = serverNodes.length === 0 && serverEdges.length === 0
+        if (isEmptyServerGraph) {
+          const cached = localStorage.getItem(storageKey())
+          if (cached) {
+            parsed = JSON.parse(cached) as WorkflowGraph
+          }
+        }
+      } catch (e: any) {
+        const cached = localStorage.getItem(storageKey())
+        if (cached) {
+          parsed = JSON.parse(cached) as WorkflowGraph
+        } else {
+          throw e
+        }
+      }
+    } else {
+      const raw = localStorage.getItem(storageKey())
+      if (!raw) {
+        if (!options.silent) message.info('暂无已保存的工作流')
+        return
+      }
+      parsed = JSON.parse(raw) as WorkflowGraph
+    }
+
+    if (!parsed) {
       if (!options.silent) message.info('暂无已保存的工作流')
       return
     }
-    const parsed = JSON.parse(raw) as WorkflowGraph
+
     nodes.value = Array.isArray(parsed.nodes)
       ? (parsed.nodes.map(normalizeNode).filter(Boolean) as Node<WorkflowNodeData>[])
       : []
@@ -851,6 +995,10 @@ onMounted(() => {
   color: #36ad6a;
 }
 
+.node-type--command {
+  color: #5c6bc0;
+}
+
 .node-type--terminal {
   color: #8c8c8c;
 }
@@ -934,6 +1082,10 @@ onMounted(() => {
 
 .workflow-node--task {
   border-color: rgba(54, 173, 106, 0.7);
+}
+
+.workflow-node--command {
+  border-color: rgba(92, 107, 192, 0.75);
 }
 
 .workflow-node--terminal {

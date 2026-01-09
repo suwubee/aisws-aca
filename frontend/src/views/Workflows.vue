@@ -131,6 +131,15 @@
         <n-form-item label="名称" path="name">
           <n-input v-model:value="formModel.name" placeholder="例如：部署发布" />
         </n-form-item>
+        <n-form-item label="项目" path="project_id">
+          <n-select
+            v-model:value="formModel.project_id"
+            size="small"
+            :options="projectOptions"
+            clearable
+            placeholder="（可选）选择项目作为默认上下文"
+          />
+        </n-form-item>
         <n-form-item label="描述" path="description">
           <n-input
             v-model:value="formModel.description"
@@ -356,6 +365,8 @@ import type { WorkflowTemplate } from '@/api/workflow-template'
 import { applyWorkflowTemplate, getWorkflowTemplates } from '@/api/workflow-template'
 import WorkflowEditor from '@/components/WorkflowEditor.vue'
 import AIWorkflowChat from '@/components/AIWorkflowChat.vue'
+import type { Project } from '@/api/project'
+import { getProjects } from '@/api/project'
 
 const message = useMessage()
 
@@ -374,7 +385,8 @@ const saving = ref(false)
 const formRef = ref<FormInst | null>(null)
 const formModel = reactive({
   name: '',
-  description: ''
+  description: '',
+  project_id: null as string | null
 })
 
 const runningId = ref<string | null>(null)
@@ -393,6 +405,14 @@ const applyModel = reactive({
   name: '',
   description: ''
 })
+
+const projects = ref<Project[]>([])
+const loadingProjects = ref(false)
+
+const projectOptions = computed(() => projects.value.map(p => ({
+  label: p.name,
+  value: p.id
+})))
 
 const statusOptions = [
   { label: '全部状态', value: null },
@@ -697,11 +717,25 @@ async function fetchAll() {
   }
 }
 
+async function fetchProjects() {
+  if (loadingProjects.value) return
+  loadingProjects.value = true
+  try {
+    const { data } = await getProjects()
+    projects.value = data.items || []
+  } catch (e: any) {
+    projects.value = []
+  } finally {
+    loadingProjects.value = false
+  }
+}
+
 function openCreate() {
   formMode.value = 'create'
   editingWorkflow.value = null
   formModel.name = ''
   formModel.description = ''
+  formModel.project_id = null
   showForm.value = true
 }
 
@@ -710,6 +744,7 @@ function openEdit(workflow: Workflow) {
   editingWorkflow.value = workflow
   formModel.name = workflow.name || ''
   formModel.description = workflow.description || ''
+  formModel.project_id = workflow.project_id || null
   showForm.value = true
 }
 
@@ -727,6 +762,7 @@ async function submitForm() {
 
   const name = formModel.name.trim()
   const description = formModel.description.trim()
+  const projectId = formModel.project_id?.trim() || undefined
 
   if (!name) {
     message.warning('请输入工作流名称')
@@ -736,7 +772,7 @@ async function submitForm() {
   if (saving.value) return
   saving.value = true
   try {
-    const payload = { name, description: description || undefined }
+    const payload = { name, description: description || undefined, project_id: projectId }
     if (formMode.value === 'create') {
       await createWorkflow(payload)
       message.success('工作流创建成功')
@@ -785,6 +821,7 @@ onMounted(() => {
   updateIsMobile()
   window.addEventListener('resize', updateIsMobile)
   fetchAll()
+  fetchProjects()
 })
 
 onUnmounted(() => {
