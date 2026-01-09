@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -50,7 +52,7 @@ func Load() *Config {
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite",
-			DSN:    getEnv("DATABASE_DSN", "./data/aca.db"),
+			DSN:    resolveDatabaseDSN(getEnv("DATABASE_DSN", "")),
 		},
 		Auth: AuthConfig{
 			JWTSecret:     getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
@@ -76,4 +78,67 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func resolveDatabaseDSN(raw string) string {
+	dsn := strings.TrimSpace(raw)
+	if dsn == "" {
+		dsn = "./data/aca.db"
+	}
+
+	// Keep DSNs with schemes or sqlite URI forms as-is.
+	if dsn == ":memory:" || strings.HasPrefix(dsn, "file:") || strings.Contains(dsn, "://") {
+		return dsn
+	}
+
+	if filepath.IsAbs(dsn) {
+		return dsn
+	}
+
+	baseDir := resolveProjectBackendDir()
+	if baseDir == "" {
+		return filepath.Clean(dsn)
+	}
+	return filepath.Clean(filepath.Join(baseDir, dsn))
+}
+
+func resolveProjectBackendDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	if root, ok := findProjectRoot(cwd); ok {
+		backendDir := filepath.Join(root, "backend")
+		if info, err := os.Stat(backendDir); err == nil && info.IsDir() {
+			return backendDir
+		}
+	}
+
+	return cwd
+}
+
+func findProjectRoot(startDir string) (string, bool) {
+	dir := startDir
+	for {
+		backendDir := filepath.Join(dir, "backend")
+		if info, err := os.Stat(backendDir); err == nil && info.IsDir() {
+			if fileExists(filepath.Join(backendDir, "go.mod")) || fileExists(filepath.Join(backendDir, "main.go")) {
+				return dir, true
+			}
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return "", false
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
