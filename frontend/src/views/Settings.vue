@@ -204,6 +204,17 @@
         </div>
       </n-tab-pane>
 
+      <!-- 提示词模板（仅管理员） -->
+      <n-tab-pane v-if="isAdmin" name="prompt-templates" tab="提示词模板">
+        <div class="section">
+          <div class="section-header">
+            <span>提示词模板</span>
+            <n-text depth="3">全局 AI 提示词从这里读取，支持变量模板渲染</n-text>
+          </div>
+          <PromptTemplates />
+        </div>
+      </n-tab-pane>
+
       <!-- 消息中心 -->
       <n-tab-pane name="messages" tab="消息中心">
         <div class="section">
@@ -318,6 +329,7 @@ import { useServerStore } from '@/stores/server'
 import { useApprovalStore } from '@/stores/approval'
 import AgentConfig from '@/components/AgentConfig.vue'
 import LogExport from '@/components/LogExport.vue'
+import PromptTemplates from '@/components/PromptTemplates.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
 import UserManagement from '@/components/UserManagement.vue'
 

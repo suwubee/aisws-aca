@@ -152,6 +152,10 @@ func main() {
 	sshServerController := api.NewSSHServerController(cfg.Auth.JWTSecret, terminalManager)
 	sshServerController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
 
+	// 提示词模板配置（仅管理员）
+	promptTemplateController := api.NewPromptTemplateController()
+	promptTemplateController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+
 	// AI工作流API
 	sshManager := sshservice.NewSSHManager(cfg.Auth.JWTSecret)
 	automationService := task.NewAutomationService(terminalManager)

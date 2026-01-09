@@ -30,6 +30,7 @@ func InitDB(dsn string) error {
 		&WorkflowNode{},
 		&WorkflowRun{},
 		&AIWorkflowSession{},
+		&PromptTemplate{},
 		&Comment{},
 		&Secret{},
 		&SSHServer{},
@@ -93,10 +94,10 @@ type Task struct {
 	AutoCreateDir bool   `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
 
 	// AI托管配置
-	AIManaged       bool   `gorm:"default:false" json:"ai_managed"`  // 是否AI全程托管
-	AIPrompt        string `json:"ai_prompt"`                        // AI托管提示词
-	AIEndCondition  string `json:"ai_end_condition"`                 // AI结束条件
-	AIErrorHandling string `json:"ai_error_handling"`                // AI错误处理策略
+	AIManaged       bool   `gorm:"default:false" json:"ai_managed"` // 是否AI全程托管
+	AIPrompt        string `json:"ai_prompt"`                       // AI托管提示词
+	AIEndCondition  string `json:"ai_end_condition"`                // AI结束条件
+	AIErrorHandling string `json:"ai_error_handling"`               // AI错误处理策略
 }
 
 // TerminalSession 终端会话模型

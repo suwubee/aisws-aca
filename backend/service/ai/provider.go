@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/utils"
 	"go.uber.org/zap"
 )
@@ -199,36 +200,6 @@ type DecisionResult struct {
 	Input      string  `json:"input"`      // 需要输入的内容
 	Confidence float64 `json:"confidence"` // 置信度 0-1
 	Reasoning  string  `json:"reasoning"`  // 推理说明
-}
-
-// DefaultApprovalPrompt 默认的审批判断提示词
-const DefaultApprovalPrompt = `你是一个终端自动化审批助手。分析终端输出，判断是否需要输入以及输入什么。
-
-【重要】input 字段使用标准类型名称：
-- "enter" = 回车键
-- "yes" = 输入 yes 并回车
-- "y" = 输入 y 并回车
-- "1" = 输入 1 并回车
-- "" = 不需要输入
-
-判定规则：
-1) 任务完成/结果反馈（无输入提示符）：action=wait, input=""
-2) 危险操作（rm -rf、sudo、不可逆删除）：action=reject
-3) Claude Code 选择提示（Enter to confirm / ❯ 1. Yes）：action=approve, input="enter"
-4) y/n 确认提示：action=approve, input="y"
-5) 需要具体内容输入：action=wait
-6) 不确定：action=wait
-
-输出 JSON：
-{"action":"approve|reject|wait","input":"enter|yes|y|1|空","confidence":0.9,"reasoning":"说明"}
-`
-
-func buildApprovalPrompt(userPrompt string) string {
-	userPrompt = strings.TrimSpace(userPrompt)
-	if userPrompt == "" {
-		return DefaultApprovalPrompt
-	}
-	return DefaultApprovalPrompt + "\n\n额外规则（高优先级）：\n" + userPrompt + "\n"
 }
 
 func normalizeDecisionKey(key string) string {
@@ -462,7 +433,12 @@ func extractJSONObjectCandidates(text string) []string {
 
 // AnalyzeForApproval 分析终端输出并返回决策
 func (p *AIProvider) AnalyzeForApproval(ctx context.Context, config *model.AIProviderConfig, prompt, terminalOutput string) (*DecisionResult, error) {
-	systemPrompt := buildApprovalPrompt(prompt)
+	systemPrompt, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyApprovalSystemPrompt, map[string]any{
+		"extra_rules": strings.TrimSpace(prompt),
+	})
+	if err != nil {
+		return nil, err
+	}
 	response, err := p.ChatSimple(ctx, config, systemPrompt, terminalOutput)
 	if err != nil {
 		return nil, err

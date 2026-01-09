@@ -11,6 +11,7 @@ import (
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/ai"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -36,28 +37,28 @@ func NewAIWorkflowEngine(toolExecutor *ToolExecutor) *AIWorkflowEngine {
 
 // AIWorkflowSession represents an AI-driven workflow session
 type AIWorkflowSession struct {
-	ID           string                `json:"id"`
-	WorkflowID   string                `json:"workflow_id"`
-	UserGoal     string                `json:"user_goal"`
-	Status       string                `json:"status"` // running, completed, failed, paused
-	Messages     []ai.ChatMessage      `json:"messages"`
-	Steps        []AIWorkflowStep      `json:"steps"`
-	Context      map[string]any        `json:"context"`
-	StartedAt    time.Time             `json:"started_at"`
-	CompletedAt  *time.Time            `json:"completed_at"`
-	Summary      string                `json:"summary"`
+	ID          string           `json:"id"`
+	WorkflowID  string           `json:"workflow_id"`
+	UserGoal    string           `json:"user_goal"`
+	Status      string           `json:"status"` // running, completed, failed, paused
+	Messages    []ai.ChatMessage `json:"messages"`
+	Steps       []AIWorkflowStep `json:"steps"`
+	Context     map[string]any   `json:"context"`
+	StartedAt   time.Time        `json:"started_at"`
+	CompletedAt *time.Time       `json:"completed_at"`
+	Summary     string           `json:"summary"`
 }
 
 // AIWorkflowStep represents a single step in AI workflow
 type AIWorkflowStep struct {
-	ID          string     `json:"id"`
-	Iteration   int        `json:"iteration"`
-	Thought     string     `json:"thought"`
-	Action      string     `json:"action"`
-	ActionArgs  any        `json:"action_args"`
-	Result      string     `json:"result"`
-	Success     bool       `json:"success"`
-	Timestamp   time.Time  `json:"timestamp"`
+	ID         string    `json:"id"`
+	Iteration  int       `json:"iteration"`
+	Thought    string    `json:"thought"`
+	Action     string    `json:"action"`
+	ActionArgs any       `json:"action_args"`
+	Result     string    `json:"result"`
+	Success    bool      `json:"success"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // StartWorkflow starts an AI-driven workflow with user goal
@@ -84,16 +85,25 @@ func (e *AIWorkflowEngine) StartWorkflow(ctx context.Context, userGoal string) (
 	}
 
 	// Build system prompt with tools
-	systemPrompt := FormatToolsForPrompt()
+	systemPrompt, err := FormatToolsForPrompt()
+	if err != nil {
+		return nil, err
+	}
 	session.Messages = append(session.Messages, ai.ChatMessage{
 		Role:    "system",
 		Content: systemPrompt,
 	})
 
 	// Add user goal
+	userGoalPrompt, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyAIWorkflowUserGoalPrompt, map[string]any{
+		"user_goal": userGoal,
+	})
+	if err != nil {
+		userGoalPrompt = userGoal
+	}
 	session.Messages = append(session.Messages, ai.ChatMessage{
 		Role:    "user",
-		Content: fmt.Sprintf("请帮我完成以下任务：\n\n%s", userGoal),
+		Content: userGoalPrompt,
 	})
 
 	// Save session to DB
@@ -247,39 +257,39 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 			return
 		}
 
-			// Execute action
-			if parsed.Action != nil {
-				if strings.EqualFold(strings.TrimSpace(parsed.Action.Tool), "ask_user") {
-					question, _ := parsed.Action.Args["question"].(string)
-					question = strings.TrimSpace(question)
-					if question == "" {
-						question = "需要用户补充信息/确认后继续"
-					}
-
-					step := AIWorkflowStep{
-						ID:        uuid.New().String(),
-						Iteration:  iteration,
-						Thought:    parsed.Thought,
-						Action:     parsed.Action.Tool,
-						ActionArgs: parsed.Action.Args,
-						Result:     question,
-						Success:    true,
-						Timestamp:  time.Now(),
-					}
-					session.Steps = append(session.Steps, step)
-
-					session.Status = "paused"
-					session.Summary = question
-					e.saveSession(session)
-					return
+		// Execute action
+		if parsed.Action != nil {
+			if strings.EqualFold(strings.TrimSpace(parsed.Action.Tool), "ask_user") {
+				question, _ := parsed.Action.Args["question"].(string)
+				question = strings.TrimSpace(question)
+				if question == "" {
+					question = "需要用户补充信息/确认后继续"
 				}
 
-				step := e.executeAction(ctx, session, parsed, iteration)
+				step := AIWorkflowStep{
+					ID:         uuid.New().String(),
+					Iteration:  iteration,
+					Thought:    parsed.Thought,
+					Action:     parsed.Action.Tool,
+					ActionArgs: parsed.Action.Args,
+					Result:     question,
+					Success:    true,
+					Timestamp:  time.Now(),
+				}
 				session.Steps = append(session.Steps, step)
 
-				// Add observation to messages
-				observation := FormatObservation(&ToolResult{
-					Success: step.Success,
+				session.Status = "paused"
+				session.Summary = question
+				e.saveSession(session)
+				return
+			}
+
+			step := e.executeAction(ctx, session, parsed, iteration)
+			session.Steps = append(session.Steps, step)
+
+			// Add observation to messages
+			observation := FormatObservation(&ToolResult{
+				Success: step.Success,
 				Output:  step.Result,
 			})
 			session.Messages = append(session.Messages, ai.ChatMessage{

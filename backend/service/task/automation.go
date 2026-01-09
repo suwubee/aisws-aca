@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
@@ -150,23 +151,29 @@ func SendCtrlKey(sessionID string, key rune) error {
 // buildManagedPrompt 构建 AI 托管模式的提示词
 // 将用户目标、托管指令和结束条件组合成结构化提示
 func buildManagedPrompt(task *model.Task) string {
-	var parts []string
-
-	// 用户目标（必须）
-	if task.InitialPrompt != "" {
-		parts = append(parts, fmt.Sprintf("## 任务目标\n%s", task.InitialPrompt))
+	if task == nil {
+		return ""
 	}
 
-	// AI托管指令（可选）
-	if task.AIPrompt != "" {
-		parts = append(parts, fmt.Sprintf("## 执行规则\n%s", task.AIPrompt))
+	result, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyTaskManagedPrompt, map[string]any{
+		"task_initial_prompt":   strings.TrimSpace(task.InitialPrompt),
+		"task_ai_prompt":        strings.TrimSpace(task.AIPrompt),
+		"task_ai_end_condition": strings.TrimSpace(task.AIEndCondition),
+		"task_done_marker":      "ACA_TASK_DONE",
+	})
+	if err == nil {
+		return strings.TrimSpace(result)
 	}
 
-	// 结束条件（可选）
-	if task.AIEndCondition != "" {
-		parts = append(parts, fmt.Sprintf("## 完成条件\n%s\n\n当满足完成条件时，请在输出中包含标记: ACA_TASK_DONE", task.AIEndCondition))
+	// 提示词模板不可用时，降级为拼接任务字段（不引入硬编码文案）
+	parts := make([]string, 0, 3)
+	for _, chunk := range []string{task.InitialPrompt, task.AIPrompt, task.AIEndCondition} {
+		text := strings.TrimSpace(chunk)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
 	}
-
 	return strings.Join(parts, "\n\n")
 }
 
@@ -450,14 +457,14 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 					termSession.BroadcastAILogWithInput("action", "发送回车，任务开始执行", "key", "Ctrl+M")
 				}
 			}
-			} else {
-				// 回退：直接写入 PTY
-				utils.Info("Using PTY fallback")
-				promptWithEnter := promptToSend + "\r"
-				if err := session.Write([]byte(promptWithEnter)); err != nil {
-					utils.Warn("Failed to send via PTY", zap.Error(err))
-				}
+		} else {
+			// 回退：直接写入 PTY
+			utils.Info("Using PTY fallback")
+			promptWithEnter := promptToSend + "\r"
+			if err := session.Write([]byte(promptWithEnter)); err != nil {
+				utils.Warn("Failed to send via PTY", zap.Error(err))
 			}
+		}
 	}
 
 PROMPT_SENT:

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/ai"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 )
 
 type MonitorAction string
@@ -139,18 +140,23 @@ func (m *TaskMonitor) AnalyzeLogs(logs string) (*LogAnalysis, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	systemPrompt := `你是任务监控助手。根据终端日志判断：
-- has_error: 是否出错（error/failed/panic/traceback等）
-- completed: 是否完成（success/done/tests passed等）
-- needs_user: 是否需要用户干预（输入/确认/密码/y/n等）
-- retryable: 如果出错是否适合重试（超时/连接问题/429/5xx等）
-
-只输出 JSON（不要解释、不要 Markdown）：
-{"has_error":true/false,"completed":true/false,"needs_user":true/false,"retryable":true/false,"reason":"简短原因","suggestion":"建议操作"}`
+	const maxLogChars = 8000
+	lineCount := 0
+	if text != "" {
+		lineCount = strings.Count(text, "\n") + 1
+	}
+	systemPrompt, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyTaskMonitorSystemPrompt, map[string]any{
+		"log_limit":     lineCount,
+		"max_log_chars": maxLogChars,
+	})
+	if err != nil {
+		// AI 提示词模板不可用时，使用启发式分析，不返回错误
+		return fallback, nil
+	}
 
 	userMsg := text
-	if r := []rune(userMsg); len(r) > 8000 {
-		userMsg = string(r[len(r)-8000:])
+	if r := []rune(userMsg); len(r) > maxLogChars {
+		userMsg = string(r[len(r)-maxLogChars:])
 	}
 	resp, err := m.aiProvider.ChatSimple(ctx, aiConfig, systemPrompt, userMsg)
 	if err != nil {

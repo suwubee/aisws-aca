@@ -176,6 +176,14 @@ export const automationApi = {
   updateAgentConfigs: (items: AgentConfig[]) => api.put('/automation/agent-configs', { items })
 }
 
+export const promptTemplateApi = {
+  list: () => api.get('/prompt-templates'),
+  get: (key: string) => api.get(`/prompt-templates/${encodeURIComponent(key)}`),
+  update: (key: string, template: string) =>
+    api.put(`/prompt-templates/${encodeURIComponent(key)}`, { template }),
+  reset: (key: string) => api.post(`/prompt-templates/${encodeURIComponent(key)}/reset`)
+}
+
 export type * from './types'
 
 export default api
