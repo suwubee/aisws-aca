@@ -235,3 +235,47 @@ func TestProjectController_CreateProject_ServerID(t *testing.T) {
 		t.Fatalf("expected status 400, got %d", invalidServerResp.StatusCode)
 	}
 }
+
+func TestProjectController_CreateProject_GroupID(t *testing.T) {
+	app := setupProjectTestApp(t)
+
+	group := model.ProjectGroup{
+		ID:   "pg-1",
+		Name: "Portfolio",
+	}
+	if err := model.DB.Create(&group).Error; err != nil {
+		t.Fatalf("create project group failed: %v", err)
+	}
+
+	createReq := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(`{"name":"proj","group_id":" pg-1 "}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp, err := app.Test(createReq)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	defer createResp.Body.Close()
+	if createResp.StatusCode != 201 {
+		t.Fatalf("expected status 201, got %d", createResp.StatusCode)
+	}
+
+	var createBody struct {
+		Item model.Project `json:"item"`
+	}
+	if err := json.NewDecoder(createResp.Body).Decode(&createBody); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+	if createBody.Item.GroupID == nil || *createBody.Item.GroupID != group.ID {
+		t.Fatalf("expected group_id %q, got %v", group.ID, createBody.Item.GroupID)
+	}
+
+	invalidGroupReq := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(`{"name":"proj-2","group_id":"not-exist"}`))
+	invalidGroupReq.Header.Set("Content-Type", "application/json")
+	invalidGroupResp, err := app.Test(invalidGroupReq)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	defer invalidGroupResp.Body.Close()
+	if invalidGroupResp.StatusCode != 400 {
+		t.Fatalf("expected status 400, got %d", invalidGroupResp.StatusCode)
+	}
+}

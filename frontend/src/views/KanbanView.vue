@@ -6,8 +6,30 @@
         <n-button type="primary" @click="showCreateTask = true">+ 新建任务</n-button>
       </n-space>
     </div>
+    <div class="kanban-filters">
+      <n-space wrap>
+        <n-select
+          v-model:value="projectGroupFilter"
+          size="small"
+          :options="projectGroupOptions"
+          placeholder="项目集"
+          clearable
+          filterable
+          style="width: min(180px, 55vw)"
+        />
+        <n-select
+          v-model:value="projectFilter"
+          size="small"
+          :options="projectOptions"
+          placeholder="项目"
+          clearable
+          filterable
+          style="width: min(220px, 70vw)"
+        />
+      </n-space>
+    </div>
     <div class="kanban-container">
-      <Kanban />
+      <Kanban :project-id="projectFilter" :group-id="projectGroupFilter" />
     </div>
 
     <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: min(550px, 94vw)">
@@ -21,23 +43,28 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
+import { useProjectStore } from '@/stores/project'
 import Kanban from '@/components/Kanban.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
 const message = useMessage()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
+const projectStore = useProjectStore()
 
 const showCreateTask = ref(false)
+const projectGroupFilter = ref<string | null>(null)
+const projectFilter = ref<string | null>(null)
 const newTask = reactive({
   title: '',
   description: '',
   priority: 1,
   server_id: null as string | null,
+  project_id: null as string | null,
   work_dir: '',
   cli_type: 'claude',
   initial_prompt: '',
@@ -50,8 +77,38 @@ const newTask = reactive({
   ai_error_handling: 'pause'
 })
 
+const projectGroupOptions = computed(() => ([
+  { label: '全部项目集', value: null },
+  { label: '未分组', value: '__none__' },
+  ...projectStore.projectGroupOptions
+]))
+
+const projectOptions = computed(() => {
+  const base = projectStore.projects
+  const filtered = projectGroupFilter.value
+    ? base.filter(p => {
+        if (projectGroupFilter.value === '__none__') return !p.group_id
+        return p.group_id === projectGroupFilter.value
+      })
+    : base
+
+  return [
+    { label: '全部项目', value: null },
+    { label: '无项目', value: '__none__' },
+    ...filtered.map(p => {
+      const groupName = p.group_id ? projectStore.groupNameMap.get(p.group_id) : null
+      return { label: groupName ? `${groupName} / ${p.name}` : p.name, value: p.id }
+    })
+  ]
+})
+
 onMounted(() => {
   taskStore.fetchTasks()
+  projectStore.fetchAll().catch(() => {})
+})
+
+watch(projectGroupFilter, () => {
+  projectFilter.value = null
 })
 
 async function handleCreateTask() {
@@ -65,6 +122,7 @@ async function handleCreateTask() {
       description: newTask.description,
       priority: newTask.priority,
       server_id: newTask.server_id || undefined,
+      project_id: newTask.project_id || undefined,
       work_dir: newTask.work_dir,
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
@@ -95,7 +153,7 @@ async function handleCreateTask() {
 	    }
 
     Object.assign(newTask, {
-      title: '', description: '', priority: 1, server_id: null,
+      title: '', description: '', priority: 1, server_id: null, project_id: null,
       work_dir: '', cli_type: 'claude', initial_prompt: '',
       auto_create_dir: true, auto_start: false, return_to_workbench: false,
       ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'
@@ -115,6 +173,11 @@ async function handleCreateTask() {
 
 .page-header {
   padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.kanban-filters {
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-color);
 }
 

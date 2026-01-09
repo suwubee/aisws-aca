@@ -32,12 +32,20 @@ func RunMigrations(db *gorm.DB) error {
 			up: migrateAddTaskServerID,
 		},
 		{
+			id: "20260109_add_tasks_project_id",
+			up: migrateAddTaskProjectID,
+		},
+		{
 			id: "20260107_add_approval_records_server_id",
 			up: migrateAddApprovalRecordServerID,
 		},
 		{
 			id: "20260107_add_messages_server_id",
 			up: migrateAddMessageServerID,
+		},
+		{
+			id: "20260109_add_projects_group_id",
+			up: migrateAddProjectGroupID,
 		},
 	}
 
@@ -75,6 +83,20 @@ func migrateAddTaskServerID(db *gorm.DB) error {
 	return db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_server_id ON tasks(server_id)").Error
 }
 
+func migrateAddTaskProjectID(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&Task{}) {
+		return nil
+	}
+
+	if !db.Migrator().HasColumn(&Task{}, "ProjectID") {
+		if err := db.Migrator().AddColumn(&Task{}, "ProjectID"); err != nil {
+			return err
+		}
+	}
+
+	return db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)").Error
+}
+
 func migrateAddApprovalRecordServerID(db *gorm.DB) error {
 	if !db.Migrator().HasTable(&ApprovalRecord{}) {
 		return nil
@@ -101,4 +123,18 @@ func migrateAddMessageServerID(db *gorm.DB) error {
 	}
 
 	return db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_server_id ON messages(server_id)").Error
+}
+
+func migrateAddProjectGroupID(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&Project{}) {
+		return nil
+	}
+
+	if !db.Migrator().HasColumn(&Project{}, "GroupID") {
+		if err := db.Migrator().AddColumn(&Project{}, "GroupID"); err != nil {
+			return err
+		}
+	}
+
+	return db.Exec("CREATE INDEX IF NOT EXISTS idx_projects_group_id ON projects(group_id)").Error
 }

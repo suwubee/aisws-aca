@@ -12,6 +12,8 @@ export interface Task {
   rule_set_id?: string | null
   server_id?: string | null
   server?: { id: string; name: string } | null
+  project_id?: string | null
+  project?: { id: string; name: string; group?: { id: string; name: string } | null } | null
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -115,6 +117,7 @@ export const useTaskStore = defineStore('task', () => {
     description?: string
     priority?: number
     server_id?: string | null
+    project_id?: string | null
     work_dir: string
     cli_type: string
     initial_prompt: string

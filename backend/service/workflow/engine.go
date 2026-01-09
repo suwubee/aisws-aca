@@ -165,6 +165,7 @@ type executionContext struct {
 	currentWorkDir  string
 	lastCondition   *bool
 	agent           *WorkflowAgent
+	project         *model.Project
 }
 
 type nodeExecutionResult struct {
@@ -351,6 +352,7 @@ func (e *WorkflowEngine) executeWorkflowRun(workflow *model.Workflow, runID stri
 				workDir = strings.TrimSpace(project.LocalPath)
 			}
 			ctx.currentWorkDir = workDir
+			ctx.project = &project
 
 			e.appendRunLog(runID, runLogEntry{
 				Timestamp: e.now(),
@@ -629,6 +631,12 @@ func (e *WorkflowEngine) executeNode(runID string, node workflowNode, ctx *execu
 			return nodeExecutionResult{Output: output}, err
 		}
 		return nodeExecutionResult{Output: output}, nil
+	case model.NodeTypeOpsStep:
+		output, err := e.runOpsStep(runID, node, ctx)
+		if err != nil {
+			return nodeExecutionResult{Output: output}, err
+		}
+		return nodeExecutionResult{Output: output}, nil
 	case model.NodeTypeTask:
 		info, err := e.runTask(node, ctx)
 		if err != nil {
@@ -855,6 +863,189 @@ func (e *WorkflowEngine) runGit(runID string, node workflowNode, ctx *executionC
 		return output, err
 	}
 	return output, nil
+}
+
+func (e *WorkflowEngine) runOpsStep(runID string, node workflowNode, ctx *executionContext) (string, error) {
+	serverID := strings.TrimSpace(node.ServerID)
+	if serverID == "" {
+		serverID = strings.TrimSpace(getString(node.Config, "server_id", "serverId"))
+	}
+	if serverID == "" && ctx != nil {
+		serverID = strings.TrimSpace(ctx.currentServerID)
+	}
+
+	workDir := strings.TrimSpace(getString(node.Config, "work_dir", "workDir"))
+	if workDir == "" && ctx != nil {
+		workDir = strings.TrimSpace(ctx.currentWorkDir)
+	}
+
+	if ctx != nil {
+		if serverID != "" {
+			ctx.currentServerID = serverID
+		}
+		if workDir != "" {
+			ctx.currentWorkDir = workDir
+		}
+	}
+
+	sections := make([]string, 0, 2)
+
+	operation := strings.ToLower(strings.TrimSpace(getString(node.Config, "operation", "git_operation", "gitOperation")))
+	if operation != "" && operation != "none" {
+		repoURL := strings.TrimSpace(getString(node.Config, "repo_url", "repoUrl"))
+		branch := strings.TrimSpace(getString(node.Config, "branch"))
+		message := strings.TrimSpace(getString(node.Config, "message", "commit_message", "commitMessage"))
+
+		if ctx != nil && ctx.project != nil {
+			if repoURL == "" {
+				repoURL = strings.TrimSpace(ctx.project.GitRepo)
+			}
+			if branch == "" {
+				branch = strings.TrimSpace(ctx.project.GitBranch)
+			}
+		}
+
+		gitCfg := map[string]any{
+			"operation": operation,
+		}
+		if serverID != "" {
+			gitCfg["server_id"] = serverID
+		}
+		if workDir != "" {
+			gitCfg["work_dir"] = workDir
+		}
+		if repoURL != "" {
+			gitCfg["repo_url"] = repoURL
+		}
+		if branch != "" {
+			gitCfg["branch"] = branch
+		}
+		if message != "" {
+			gitCfg["message"] = message
+		}
+
+		result, err := e.executeNode(runID, workflowNode{
+			ID:       node.ID,
+			Type:     model.NodeTypeGit,
+			Name:     node.Name,
+			ServerID: serverID,
+			Config:   gitCfg,
+		}, ctx)
+		if output := strings.TrimSpace(result.Output); output != "" {
+			sections = append(sections, "Git:\n"+output)
+		}
+		if err != nil {
+			return strings.Join(sections, "\n\n"), err
+		}
+	}
+
+	action := strings.ToLower(strings.TrimSpace(getString(node.Config, "action", "action_type", "actionType")))
+	if action == "" {
+		if strings.TrimSpace(getString(node.Config, "command", "cmd", "shell")) != "" {
+			action = "command"
+		} else {
+			action = "none"
+		}
+	}
+
+	switch action {
+	case "none":
+		if len(sections) == 0 {
+			return "Ops step completed", nil
+		}
+		return strings.Join(sections, "\n\n"), nil
+	case "command":
+		command := strings.TrimSpace(getString(node.Config, "command", "cmd", "shell"))
+		if command == "" {
+			if len(sections) == 0 {
+				return "", errors.New("command is required")
+			}
+			return strings.Join(sections, "\n\n"), nil
+		}
+
+		result, err := e.executeNode(runID, workflowNode{
+			ID:       node.ID,
+			Type:     model.WorkflowNodeTypeCommand,
+			Name:     node.Name,
+			ServerID: serverID,
+			Config: map[string]any{
+				"server_id": serverID,
+				"work_dir":  workDir,
+				"command":   command,
+			},
+		}, ctx)
+		if output := strings.TrimSpace(result.Output); output != "" {
+			sections = append(sections, "Command:\n"+output)
+		}
+		if err != nil {
+			return strings.Join(sections, "\n\n"), err
+		}
+		return strings.Join(sections, "\n\n"), nil
+	case "terminal":
+		command := strings.TrimSpace(getString(node.Config, "command", "cmd", "shell"))
+		if command == "" {
+			return strings.Join(sections, "\n\n"), errors.New("terminal command is required")
+		}
+
+		title := strings.TrimSpace(getString(node.Config, "title"))
+		if title == "" {
+			title = strings.TrimSpace(node.Name)
+		}
+
+		result, err := e.executeNode(runID, workflowNode{
+			ID:       node.ID,
+			Type:     model.NodeTypeTerminal,
+			Name:     node.Name,
+			ServerID: serverID,
+			Config: map[string]any{
+				"server_id": serverID,
+				"work_dir":  workDir,
+				"title":     title,
+				"command":   command,
+			},
+		}, ctx)
+		if output := strings.TrimSpace(result.Output); output != "" {
+			sections = append(sections, "Terminal:\n"+output)
+		}
+		if err != nil {
+			return strings.Join(sections, "\n\n"), err
+		}
+		return strings.Join(sections, "\n\n"), nil
+	case "task":
+		taskCfg := map[string]any{
+			"task_id":        strings.TrimSpace(getString(node.Config, "task_id", "taskId")),
+			"title":          strings.TrimSpace(getString(node.Config, "title")),
+			"description":    strings.TrimSpace(getString(node.Config, "description")),
+			"cli_type":       strings.TrimSpace(getString(node.Config, "cli_type", "cliType")),
+			"work_dir":       workDir,
+			"initial_prompt": strings.TrimSpace(getString(node.Config, "initial_prompt", "initialPrompt")),
+			"auto_create_dir": getBool(node.Config, true,
+				"auto_create_dir", "autoCreateDir"),
+		}
+		if serverID != "" {
+			taskCfg["server_id"] = serverID
+		}
+
+		result, err := e.executeNode(runID, workflowNode{
+			ID:       node.ID,
+			Type:     model.NodeTypeTask,
+			Name:     node.Name,
+			ServerID: serverID,
+			Config:   taskCfg,
+		}, ctx)
+		if output := strings.TrimSpace(result.Output); output != "" {
+			sections = append(sections, "Task:\n"+output)
+		}
+		if err != nil {
+			return strings.Join(sections, "\n\n"), err
+		}
+		return strings.Join(sections, "\n\n"), nil
+	default:
+		if len(sections) == 0 {
+			return "", fmt.Errorf("unsupported ops_step action %q", action)
+		}
+		return strings.Join(sections, "\n\n"), fmt.Errorf("unsupported ops_step action %q", action)
+	}
 }
 
 func (e *WorkflowEngine) runWait(node workflowNode) (string, error) {

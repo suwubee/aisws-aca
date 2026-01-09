@@ -120,6 +120,38 @@
 10) `parallel/fanout/join`（后续迭代）
 - 运维多机任务的关键：对 server group fanout 执行，再汇总结果进入下一步。
 
+## 3.4 WeDo 风格“组合步骤节点”（推荐新增）：`ops_step`
+
+你提到的「服务器 + git + 任务（或命令）」在运维 Runbook 里非常常见，如果把它拆成多个节点（server → git → command/task），容易产生两类困惑：
+
+- **Git/命令到底在哪台机器执行？**（server 节点是“上下文”，还是“实体节点”？）
+- **对哪个项目/仓库执行？**（work_dir 是什么、repo_url 是什么、是否继承 project？）
+
+因此建议引入一个 WeDo/Scratch 风格的“组合块”，以 **一个节点完成一次可复用的运维步骤**：
+
+- 节点类型：`ops_step`
+- 语义：在某个目标（server/work_dir）上，先可选执行一次 git 操作，再执行一个动作（command/terminal/task/none）
+- 默认继承：若 workflow 绑定了 `project_id`，则 `server_id/work_dir/repo_url/branch` 都允许“留空继承”
+
+### 最小配置契约（建议）
+
+- `server_id`：可选（留空=继承 workflow.project 或上游上下文）
+- `work_dir`：可选（留空=继承 workflow.project 或上游上下文）
+- Git（可选）
+  - `operation`: `none|pull|clone|commit|push`
+  - `repo_url`（clone 可选，留空尝试继承 Project.git_repo）
+  - `branch`（可选，留空尝试继承 Project.git_branch）
+  - `message`（commit 必填）
+- 动作（可选）
+  - `action`: `command|terminal|task|none`
+  - `command`（command/terminal 需要）
+  - `title/cli_type/initial_prompt/auto_create_dir`（task 需要）
+
+### 解释：为何 `ops_step` 比单独 git/command 更贴近运维
+
+- 运维常见的“一个操作”本质就是：**选目标 → 准备代码/配置 → 执行动作 → 产出输出给下游判断**
+- 组合节点可以把“目标+上下文”绑定到一个块上，减少认知负担与错误配置（尤其在移动端/小屏）
+
 ## 4. 典型业务用例（你提到的场景如何落地）
 
 ### 4.1 定时在某台服务器执行命令 → AI 监控 → 条件判断 → 下一步
@@ -190,4 +222,3 @@ Sprint C（看板与项目体系融合）
 - Task 增加 `project_id`，看板支持按项目/项目集过滤
 - 可配置状态列（系统/项目级）
 - Workflows/Schedules 与项目视图融合（Runbook 中心）
-

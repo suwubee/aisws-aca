@@ -16,6 +16,17 @@
         </n-radio-group>
       </n-form-item>
 
+      <n-form-item label="项目">
+        <n-select
+          v-model:value="form.project_id"
+          :options="projectStore.projectOptions"
+          :loading="projectStore.loadingProjects || projectStore.loadingGroups"
+          clearable
+          filterable
+          placeholder="未关联（可选）"
+        />
+      </n-form-item>
+
       <n-divider>自动化配置（可选）</n-divider>
 
       <n-form-item label="工作目录">
@@ -79,6 +90,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTaskStore, type Task } from '@/stores/task'
+import { useProjectStore } from '@/stores/project'
 
 const props = defineProps<{
   show: boolean
@@ -92,6 +104,7 @@ const emit = defineEmits<{
 
 const message = useMessage()
 const taskStore = useTaskStore()
+const projectStore = useProjectStore()
 
 const showModal = computed({
   get: () => props.show,
@@ -103,6 +116,7 @@ const form = reactive({
   title: '',
   description: '',
   priority: 1,
+  project_id: null as string | null,
   work_dir: '',
   cli_type: null as string | null,
   initial_prompt: '',
@@ -130,6 +144,7 @@ function syncFormFromTask(task: Task | null) {
   form.description = task?.description ?? ''
   const priority = typeof task?.priority === 'number' ? task.priority : 1
   form.priority = Math.min(3, Math.max(0, priority))
+  form.project_id = task?.project_id ?? null
   form.work_dir = task?.work_dir ?? ''
   form.cli_type = task?.cli_type || null
   form.initial_prompt = task?.initial_prompt ?? ''
@@ -144,6 +159,7 @@ watch(
   () => [props.show, props.task] as const,
   ([show, task]) => {
     if (show) {
+      projectStore.fetchAll().catch(() => {})
       syncFormFromTask(task)
     }
   },
@@ -171,6 +187,7 @@ async function save() {
       title: form.title,
       description: form.description,
       priority: form.priority,
+      project_id: form.project_id,
       work_dir: form.work_dir,
       cli_type: form.cli_type || '',
       initial_prompt: form.initial_prompt,

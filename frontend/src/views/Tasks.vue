@@ -18,6 +18,22 @@
           clearable
           style="width: 120px"
         />
+        <n-select
+          v-model:value="projectGroupFilter"
+          :options="projectGroupOptions"
+          placeholder="项目集"
+          clearable
+          filterable
+          style="width: min(180px, 55vw)"
+        />
+        <n-select
+          v-model:value="projectFilter"
+          :options="projectOptions"
+          placeholder="项目"
+          clearable
+          filterable
+          style="width: min(220px, 70vw)"
+        />
         <n-input
           v-model:value="searchText"
           placeholder="搜索任务..."
@@ -54,6 +70,7 @@
             </n-tag>
             <n-tag v-if="task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
             <n-tag v-if="task.server?.name" size="small">{{ task.server.name }}</n-tag>
+            <n-tag v-if="task.project?.name" size="small" type="success">{{ task.project.name }}</n-tag>
           </n-space>
 
           <div v-if="task.work_dir" class="mobile-task-meta">
@@ -117,6 +134,7 @@ import { useRouter } from 'vue-router'
 import { useMessage, NButton, NTag, NSpace } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
+import { useProjectStore } from '@/stores/project'
 import TaskForm from '@/components/TaskForm.vue'
 import type { DataTableColumns } from 'naive-ui'
 
@@ -124,10 +142,13 @@ const router = useRouter()
 const message = useMessage()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
+const projectStore = useProjectStore()
 
 const loading = ref(false)
 const showCreateTask = ref(false)
 const statusFilter = ref<string | null>(null)
+const projectGroupFilter = ref<string | null>(null)
+const projectFilter = ref<string | null>(null)
 const searchText = ref('')
 const isMobile = ref(false)
 
@@ -136,6 +157,7 @@ const newTask = reactive({
   description: '',
   priority: 1,
   server_id: null as string | null,
+  project_id: null as string | null,
   work_dir: '',
   cli_type: 'claude',
   initial_prompt: '',
@@ -168,6 +190,31 @@ const statusMap: Record<string, { type: 'default' | 'info' | 'success' | 'warnin
   timeout: { type: 'error', label: '超时' }
 }
 
+const projectGroupOptions = computed(() => ([
+  { label: '全部项目集', value: null },
+  { label: '未分组', value: '__none__' },
+  ...projectStore.projectGroupOptions
+]))
+
+const projectOptions = computed(() => {
+  const base = projectStore.projects
+  const filtered = projectGroupFilter.value
+    ? base.filter(p => {
+        if (projectGroupFilter.value === '__none__') return !p.group_id
+        return p.group_id === projectGroupFilter.value
+      })
+    : base
+
+  return [
+    { label: '全部项目', value: null },
+    { label: '无项目', value: '__none__' },
+    ...filtered.map(p => {
+      const groupName = p.group_id ? projectStore.groupNameMap.get(p.group_id) : null
+      return { label: groupName ? `${groupName} / ${p.name}` : p.name, value: p.id }
+    })
+  ]
+})
+
 const columns: DataTableColumns<any> = [
   {
     title: '任务标题',
@@ -187,6 +234,16 @@ const columns: DataTableColumns<any> = [
     title: 'CLI类型',
     key: 'cli_type',
     width: 100
+  },
+  {
+    title: '项目',
+    key: 'project',
+    width: 160,
+    ellipsis: { tooltip: true },
+    render(row) {
+      const name = row.project?.name || ''
+      return name || '-'
+    }
   },
   {
     title: '工作目录',
@@ -245,6 +302,20 @@ const filteredTasks = computed(() => {
   if (statusFilter.value) {
     tasks = tasks.filter(t => t.status === statusFilter.value)
   }
+  if (projectFilter.value) {
+    if (projectFilter.value === '__none__') {
+      tasks = tasks.filter(t => !t.project_id)
+    } else {
+      tasks = tasks.filter(t => t.project_id === projectFilter.value)
+    }
+  }
+  if (projectGroupFilter.value) {
+    if (projectGroupFilter.value === '__none__') {
+      tasks = tasks.filter(t => t.project_id && !t.project?.group?.id)
+    } else {
+      tasks = tasks.filter(t => t.project?.group?.id === projectGroupFilter.value)
+    }
+  }
   if (searchText.value) {
     const search = searchText.value.toLowerCase()
     tasks = tasks.filter(t =>
@@ -262,7 +333,8 @@ async function fetchData() {
   try {
     await Promise.all([
       taskStore.fetchTasks(),
-      serverStore.fetchServers().catch(() => {})
+      serverStore.fetchServers().catch(() => {}),
+      projectStore.fetchAll().catch(() => {})
     ])
   } finally {
     loading.value = false
@@ -281,6 +353,7 @@ async function handleCreateTask() {
       description: newTask.description,
       priority: newTask.priority,
       server_id: newTask.server_id || undefined,
+      project_id: newTask.project_id || undefined,
       work_dir: newTask.work_dir,
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
@@ -294,7 +367,7 @@ async function handleCreateTask() {
     message.success('任务创建成功')
     showCreateTask.value = false
     Object.assign(newTask, {
-      title: '', description: '', priority: 1, server_id: null,
+      title: '', description: '', priority: 1, server_id: null, project_id: null,
       work_dir: '', cli_type: 'claude', initial_prompt: '',
       auto_create_dir: true, auto_start: false, return_to_workbench: true,
       ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'

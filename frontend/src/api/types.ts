@@ -91,6 +91,17 @@ export interface TaskServer {
   name: string
 }
 
+export interface TaskProjectGroup {
+  id: string
+  name: string
+}
+
+export interface TaskProject {
+  id: string
+  name: string
+  group?: TaskProjectGroup | null
+}
+
 export interface Task {
   id: string
   user_id?: string
@@ -102,6 +113,8 @@ export interface Task {
   rule_set_id: string | null
   server_id?: string | null
   server?: TaskServer | null
+  project_id?: string | null
+  project?: TaskProject | null
   created_at: ISODateTimeString
   updated_at: ISODateTimeString
   completed_at: ISODateTimeString | null
@@ -124,6 +137,8 @@ export interface ListTasksParams {
   status?: string
   priority?: string | number
   keyword?: string
+  project_id?: string
+  project_group_id?: string
 }
 
 export type ListTasksResponse = ApiItemsResponse<Task>
@@ -150,6 +165,7 @@ export interface CreateTaskRequest {
   status?: TaskStatus | string
   rule_set_id?: string | null
   server_id?: string | null
+  project_id?: string | null
   work_dir?: string
   cli_type?: string
   initial_prompt?: string
@@ -169,6 +185,7 @@ export interface UpdateTaskRequest {
   priority?: number
   rule_set_id?: string | null
   server_id?: string | null
+  project_id?: string | null
   work_dir?: string
   cli_type?: string
   initial_prompt?: string

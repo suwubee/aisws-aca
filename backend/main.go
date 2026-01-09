@@ -126,6 +126,10 @@ func main() {
 	projectController := api.NewProjectController()
 	projectController.RegisterRoutes(apiGroup)
 
+	// 项目集/项目组API
+	projectGroupController := api.NewProjectGroupController()
+	projectGroupController.RegisterRoutes(apiGroup)
+
 	// 工作流API
 	workflowController := api.NewWorkflowController(cfg.Auth.JWTSecret, terminalManager)
 	workflowController.RegisterRoutes(apiGroup)

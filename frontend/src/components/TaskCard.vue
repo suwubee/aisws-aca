@@ -37,6 +37,9 @@
         <n-tag v-if="serverLabel" size="small">
           {{ serverLabel }}
         </n-tag>
+        <n-tag v-if="projectLabel" size="small" type="success">
+          {{ projectLabel }}
+        </n-tag>
         <n-tag v-if="task.cli_type" size="small" type="info">
           {{ task.cli_type }}
         </n-tag>
@@ -86,6 +89,7 @@ import { ref, computed } from 'vue'
 import type { Task } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import { useServerStore } from '@/stores/server'
+import { useProjectStore } from '@/stores/project'
 
 const props = defineProps<{
   task: Task
@@ -103,6 +107,7 @@ const emit = defineEmits<{
 const isDragging = ref(false)
 const terminalStore = useTerminalStore()
 const serverStore = useServerStore()
+const projectStore = useProjectStore()
 
 const relatedTerminals = computed(() =>
   terminalStore.terminals.filter(t => t.task_id === props.task.id)
@@ -174,6 +179,15 @@ const serverLabel = computed(() => {
   if (props.task.server?.name) return props.task.server.name
   if (!props.task.server_id) return null
   return serverStore.getServerName(props.task.server_id) || props.task.server_id
+})
+
+const projectLabel = computed(() => {
+  const project = props.task.project
+  if (project?.name) {
+    return project.group?.name ? `${project.group.name}/${project.name}` : project.name
+  }
+  if (!props.task.project_id) return null
+  return projectStore.getProjectName(props.task.project_id) || props.task.project_id
 })
 
 function taskStatusGroup(status: string) {

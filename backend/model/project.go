@@ -15,6 +15,8 @@ type Project struct {
 
 	Type string `gorm:"not null;default:local;index" json:"type"` // local, remote, git
 
+	GroupID *string `gorm:"index" json:"group_id"`
+
 	LocalPath  string  `json:"local_path"`
 	ServerID   *string `gorm:"index" json:"server_id"`
 	RemotePath string  `json:"remote_path"`
@@ -26,6 +28,14 @@ type Project struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ProjectGroup 项目集/项目组（Portfolio/Group）
+type ProjectGroup struct {
+	ID          string  `gorm:"primaryKey" json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	ParentID    *string `gorm:"index" json:"parent_id"`
 }
 
 const (

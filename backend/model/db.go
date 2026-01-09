@@ -24,6 +24,7 @@ func InitDB(dsn string) error {
 		&User{},
 		&Task{},
 		&Project{},
+		&ProjectGroup{},
 		&CLIProfile{},
 		&Workflow{},
 		&WorkflowTemplate{},
@@ -80,6 +81,7 @@ type Task struct {
 	ID          string     `gorm:"primaryKey" json:"id"`
 	UserID      string     `gorm:"index" json:"user_id"`
 	ServerID    *string    `gorm:"index" json:"server_id"`
+	ProjectID   *string    `gorm:"index" json:"project_id"`
 	Title       string     `gorm:"not null" json:"title"`
 	Description string     `json:"description"`
 	Status      string     `gorm:"default:todo;index" json:"status"` // todo, in_progress, done, archived

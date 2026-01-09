@@ -21,6 +21,7 @@ type CreateProjectRequest struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Type        string            `json:"type"` // local, remote, git
+	GroupID     *string           `json:"group_id"`
 	LocalPath   string            `json:"local_path"`
 	ServerID    *string           `json:"server_id"`
 	RemotePath  string            `json:"remote_path"`
@@ -33,6 +34,7 @@ type UpdateProjectRequest struct {
 	Name        *string            `json:"name"`
 	Description *string            `json:"description"`
 	Type        *string            `json:"type"` // local, remote, git
+	GroupID     *string            `json:"group_id"`
 	LocalPath   *string            `json:"local_path"`
 	ServerID    *string            `json:"server_id"`
 	RemotePath  *string            `json:"remote_path"`
@@ -44,6 +46,8 @@ type UpdateProjectRequest struct {
 var (
 	errProjectServerNotFound = errors.New("server not found")
 	errProjectServerQuery    = errors.New("failed to query server")
+	errProjectGroupNotFound  = errors.New("project group not found")
+	errProjectGroupQuery     = errors.New("failed to query project group")
 )
 
 func normalizeProjectType(value string) (string, error) {
@@ -74,6 +78,17 @@ func validateSSHServerID(serverID string) error {
 			return errProjectServerNotFound
 		}
 		return errProjectServerQuery
+	}
+	return nil
+}
+
+func validateProjectGroupID(groupID string) error {
+	var group model.ProjectGroup
+	if err := model.DB.First(&group, "id = ?", groupID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errProjectGroupNotFound
+		}
+		return errProjectGroupQuery
 	}
 	return nil
 }
@@ -119,11 +134,26 @@ func (ctrl *ProjectController) CreateProject(c *fiber.Ctx) error {
 		}
 	}
 
+	var groupID *string
+	if req.GroupID != nil {
+		trimmed := strings.TrimSpace(*req.GroupID)
+		if trimmed != "" {
+			if err := validateProjectGroupID(trimmed); err != nil {
+				if errors.Is(err, errProjectGroupNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Project group not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query project group"})
+			}
+			groupID = &trimmed
+		}
+	}
+
 	project := model.Project{
 		ID:          uuid.New().String(),
 		Name:        name,
 		Description: req.Description,
 		Type:        projectType,
+		GroupID:     groupID,
 		LocalPath:   strings.TrimSpace(req.LocalPath),
 		ServerID:    serverID,
 		RemotePath:  strings.TrimSpace(req.RemotePath),
@@ -192,6 +222,20 @@ func (ctrl *ProjectController) UpdateProject(c *fiber.Ctx) error {
 	}
 	if req.LocalPath != nil {
 		updates["local_path"] = strings.TrimSpace(*req.LocalPath)
+	}
+	if req.GroupID != nil {
+		trimmed := strings.TrimSpace(*req.GroupID)
+		if trimmed == "" {
+			updates["group_id"] = nil
+		} else {
+			if err := validateProjectGroupID(trimmed); err != nil {
+				if errors.Is(err, errProjectGroupNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Project group not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query project group"})
+			}
+			updates["group_id"] = trimmed
+		}
 	}
 	if req.ServerID != nil {
 		trimmed := strings.TrimSpace(*req.ServerID)

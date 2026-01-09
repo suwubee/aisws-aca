@@ -30,6 +30,7 @@ type CreateTaskRequest struct {
 	Status      string  `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
 	ServerID    *string `json:"server_id"`
+	ProjectID   *string `json:"project_id"`
 	// 自动化配置
 	WorkDir       string `json:"work_dir"`
 	CLIType       string `json:"cli_type"`
@@ -49,6 +50,7 @@ type UpdateTaskRequest struct {
 	Priority    *int    `json:"priority"`
 	Status      *string `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
+	ProjectID   *string `json:"project_id"`
 	// 自动化配置
 	WorkDir       *string `json:"work_dir"`
 	CLIType       *string `json:"cli_type"`
@@ -72,9 +74,21 @@ type TaskServerInfo struct {
 	Name string `json:"name"`
 }
 
+type TaskProjectGroupInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type TaskProjectInfo struct {
+	ID    string                `json:"id"`
+	Name  string                `json:"name"`
+	Group *TaskProjectGroupInfo `json:"group,omitempty"`
+}
+
 type TaskListItem struct {
 	model.Task
-	Server *TaskServerInfo `json:"server,omitempty"`
+	Server  *TaskServerInfo  `json:"server,omitempty"`
+	Project *TaskProjectInfo `json:"project,omitempty"`
 }
 
 var allowedTaskStatuses = map[string]struct{}{
@@ -170,6 +184,21 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		}
 	}
 
+	var projectID *string
+	if req.ProjectID != nil {
+		trimmed := strings.TrimSpace(*req.ProjectID)
+		if trimmed != "" {
+			var project model.Project
+			if err := model.DB.First(&project, "id = ?", trimmed).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Project not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query project"})
+			}
+			projectID = &trimmed
+		}
+	}
+
 	task := model.Task{
 		ID:            uuid.New().String(),
 		Title:         req.Title,
@@ -178,6 +207,7 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		Priority:      req.Priority,
 		RuleSetID:     req.RuleSetID,
 		ServerID:      serverID,
+		ProjectID:     projectID,
 		OrderIndex:    float64(time.Now().UnixNano()),
 		WorkDir:       req.WorkDir,
 		CLIType:       cliType,
@@ -198,24 +228,39 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 	return c.Status(201).JSON(fiber.Map{"item": task})
 }
 
-func enrichTasksWithServerInfo(tasks []model.Task) ([]TaskListItem, error) {
+func enrichTasks(tasks []model.Task) ([]TaskListItem, error) {
 	serverInfoByID := map[string]*TaskServerInfo{}
 	uniqueServerIDs := map[string]struct{}{}
 	serverIDs := make([]string, 0)
 
+	uniqueProjectIDs := map[string]struct{}{}
+	projectIDs := make([]string, 0)
+
 	for _, t := range tasks {
 		if t.ServerID == nil {
+			// noop
+		} else {
+			serverID := strings.TrimSpace(*t.ServerID)
+			if serverID != "" {
+				if _, ok := uniqueServerIDs[serverID]; !ok {
+					uniqueServerIDs[serverID] = struct{}{}
+					serverIDs = append(serverIDs, serverID)
+				}
+			}
+		}
+
+		if t.ProjectID == nil {
 			continue
 		}
-		serverID := strings.TrimSpace(*t.ServerID)
-		if serverID == "" {
+		pid := strings.TrimSpace(*t.ProjectID)
+		if pid == "" {
 			continue
 		}
-		if _, ok := uniqueServerIDs[serverID]; ok {
+		if _, ok := uniqueProjectIDs[pid]; ok {
 			continue
 		}
-		uniqueServerIDs[serverID] = struct{}{}
-		serverIDs = append(serverIDs, serverID)
+		uniqueProjectIDs[pid] = struct{}{}
+		projectIDs = append(projectIDs, pid)
 	}
 
 	if len(serverIDs) > 0 {
@@ -229,6 +274,54 @@ func enrichTasksWithServerInfo(tasks []model.Task) ([]TaskListItem, error) {
 		}
 	}
 
+	projectInfoByID := map[string]*TaskProjectInfo{}
+	groupInfoByID := map[string]*TaskProjectGroupInfo{}
+
+	if len(projectIDs) > 0 {
+		var projects []model.Project
+		if err := model.DB.Select("id", "name", "group_id").Where("id IN ?", projectIDs).Find(&projects).Error; err != nil {
+			return nil, err
+		}
+
+		groupIDs := make([]string, 0)
+		seenGroupIDs := map[string]struct{}{}
+		for _, p := range projects {
+			if p.GroupID == nil {
+				continue
+			}
+			gid := strings.TrimSpace(*p.GroupID)
+			if gid == "" {
+				continue
+			}
+			if _, ok := seenGroupIDs[gid]; ok {
+				continue
+			}
+			seenGroupIDs[gid] = struct{}{}
+			groupIDs = append(groupIDs, gid)
+		}
+
+		if len(groupIDs) > 0 {
+			var groups []model.ProjectGroup
+			if err := model.DB.Select("id", "name").Where("id IN ?", groupIDs).Find(&groups).Error; err != nil {
+				return nil, err
+			}
+			for _, g := range groups {
+				groupInfoByID[g.ID] = &TaskProjectGroupInfo{ID: g.ID, Name: g.Name}
+			}
+		}
+
+		for _, p := range projects {
+			info := &TaskProjectInfo{ID: p.ID, Name: p.Name}
+			if p.GroupID != nil {
+				gid := strings.TrimSpace(*p.GroupID)
+				if gid != "" {
+					info.Group = groupInfoByID[gid]
+				}
+			}
+			projectInfoByID[p.ID] = info
+		}
+	}
+
 	items := make([]TaskListItem, len(tasks))
 	for i, t := range tasks {
 		item := TaskListItem{Task: t}
@@ -236,6 +329,12 @@ func enrichTasksWithServerInfo(tasks []model.Task) ([]TaskListItem, error) {
 			serverID := strings.TrimSpace(*t.ServerID)
 			if serverID != "" {
 				item.Server = serverInfoByID[serverID]
+			}
+		}
+		if t.ProjectID != nil {
+			pid := strings.TrimSpace(*t.ProjectID)
+			if pid != "" {
+				item.Project = projectInfoByID[pid]
 			}
 		}
 		items[i] = item
@@ -249,9 +348,20 @@ func (ctrl *TaskController) ListTasks(c *fiber.Ctx) error {
 	status := c.Query("status")
 	priority := c.Query("priority")
 	keyword := c.Query("keyword")
+	projectID := strings.TrimSpace(c.Query("project_id"))
+	groupID := strings.TrimSpace(c.Query("project_group_id"))
+	if groupID == "" {
+		groupID = strings.TrimSpace(c.Query("group_id"))
+	}
 
 	query := model.DB.Model(&model.Task{})
 
+	if projectID != "" {
+		query = query.Where("project_id = ?", projectID)
+	}
+	if groupID != "" {
+		query = query.Joins("JOIN projects ON projects.id = tasks.project_id").Where("projects.group_id = ?", groupID)
+	}
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -267,7 +377,7 @@ func (ctrl *TaskController) ListTasks(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
 	}
 
-	items, err := enrichTasksWithServerInfo(tasks)
+	items, err := enrichTasks(tasks)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
 	}
@@ -370,6 +480,21 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 			updates["rule_set_id"] = *req.RuleSetID
 		}
 	}
+	if req.ProjectID != nil {
+		trimmed := strings.TrimSpace(*req.ProjectID)
+		if trimmed == "" {
+			updates["project_id"] = nil
+		} else {
+			var project model.Project
+			if err := model.DB.First(&project, "id = ?", trimmed).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Project not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query project"})
+			}
+			updates["project_id"] = trimmed
+		}
+	}
 	// 自动化配置字段
 	if req.WorkDir != nil {
 		updates["work_dir"] = *req.WorkDir
@@ -464,12 +589,26 @@ func (ctrl *TaskController) MoveTask(c *fiber.Ctx) error {
 
 // GetTasksByStatus 按状态获取任务（用于Kanban）
 func (ctrl *TaskController) GetTasksByStatus(c *fiber.Ctx) error {
+	projectID := strings.TrimSpace(c.Query("project_id"))
+	groupID := strings.TrimSpace(c.Query("project_group_id"))
+	if groupID == "" {
+		groupID = strings.TrimSpace(c.Query("group_id"))
+	}
+
+	query := model.DB.Model(&model.Task{})
+	if projectID != "" {
+		query = query.Where("project_id = ?", projectID)
+	}
+	if groupID != "" {
+		query = query.Joins("JOIN projects ON projects.id = tasks.project_id").Where("projects.group_id = ?", groupID)
+	}
+
 	var tasks []model.Task
-	if err := model.DB.Order("order_index").Find(&tasks).Error; err != nil {
+	if err := query.Order("order_index").Find(&tasks).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
 	}
 
-	items, err := enrichTasksWithServerInfo(tasks)
+	items, err := enrichTasks(tasks)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
 	}

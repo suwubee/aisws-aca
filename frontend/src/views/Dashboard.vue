@@ -95,6 +95,7 @@ const newTask = reactive({
   description: '',
   priority: 1,
   server_id: null as string | null,
+  project_id: null as string | null,
   work_dir: '',
   cli_type: 'claude',
   initial_prompt: '',
@@ -145,6 +146,7 @@ async function handleCreateTask() {
       description: newTask.description,
       priority: newTask.priority,
       server_id: newTask.server_id || undefined,
+      project_id: newTask.project_id || undefined,
       work_dir: newTask.work_dir,
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
@@ -178,7 +180,7 @@ async function handleCreateTask() {
 
     // 重置表单
     Object.assign(newTask, {
-      title: '', description: '', priority: 1, server_id: null,
+      title: '', description: '', priority: 1, server_id: null, project_id: null,
       work_dir: '', cli_type: 'claude', initial_prompt: '',
       auto_create_dir: true, auto_start: false, return_to_workbench: true,
       ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'

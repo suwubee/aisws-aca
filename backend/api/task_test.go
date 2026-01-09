@@ -268,3 +268,77 @@ func TestTaskController_GetTasksByStatus_IncludesServerInfo(t *testing.T) {
 		t.Fatalf("expected server info %q/%q, got %v", server.ID, server.Name, items[0].Server)
 	}
 }
+
+func TestTaskController_CreateTask_WithProjectInfo(t *testing.T) {
+	app := setupTaskTestApp(t)
+
+	group := model.ProjectGroup{ID: "pg-1", Name: "Portfolio"}
+	if err := model.DB.Create(&group).Error; err != nil {
+		t.Fatalf("create project group failed: %v", err)
+	}
+
+	project := model.Project{
+		ID:      "p-1",
+		Name:    "ProjectA",
+		Type:    model.ProjectTypeLocal,
+		GroupID: &group.ID,
+	}
+	if err := model.DB.Create(&project).Error; err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/tasks", bytes.NewBufferString(`{"title":"task-1","project_id":"p-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected status 201, got %d", resp.StatusCode)
+	}
+
+	listReq := httptest.NewRequest("GET", "/api/tasks", nil)
+	listResp, err := app.Test(listReq)
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", listResp.StatusCode)
+	}
+
+	var listBody struct {
+		Items []struct {
+			ID        string  `json:"id"`
+			Title     string  `json:"title"`
+			ProjectID *string `json:"project_id"`
+			Project   *struct {
+				ID    string `json:"id"`
+				Name  string `json:"name"`
+				Group *struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"group"`
+			} `json:"project"`
+		} `json:"items"`
+	}
+
+	if err := json.NewDecoder(listResp.Body).Decode(&listBody); err != nil {
+		t.Fatalf("decode list response failed: %v", err)
+	}
+	if len(listBody.Items) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(listBody.Items))
+	}
+
+	item := listBody.Items[0]
+	if item.ProjectID == nil || *item.ProjectID != project.ID {
+		t.Fatalf("expected project_id %q, got %v", project.ID, item.ProjectID)
+	}
+	if item.Project == nil || item.Project.ID != project.ID || item.Project.Name != project.Name {
+		t.Fatalf("expected project info %q/%q, got %+v", project.ID, project.Name, item.Project)
+	}
+	if item.Project.Group == nil || item.Project.Group.ID != group.ID || item.Project.Group.Name != group.Name {
+		t.Fatalf("expected project group info %q/%q, got %+v", group.ID, group.Name, item.Project.Group)
+	}
+}

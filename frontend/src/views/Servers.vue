@@ -298,6 +298,7 @@ const newTask = reactive<TaskFormModel>({
   description: '',
   priority: 1,
   server_id: null,
+  project_id: null,
   work_dir: '',
   cli_type: 'claude',
   initial_prompt: '',
@@ -551,6 +552,7 @@ async function handleCreateTask() {
       description: newTask.description,
       priority: newTask.priority,
       server_id: newTask.server_id || undefined,
+      project_id: newTask.project_id || undefined,
       work_dir: newTask.work_dir,
       cli_type: newTask.cli_type || 'claude',
       initial_prompt: newTask.initial_prompt,
@@ -585,6 +587,7 @@ async function handleCreateTask() {
     newTask.description = ''
     newTask.priority = 1
     newTask.server_id = null
+    newTask.project_id = null
     newTask.work_dir = ''
     newTask.cli_type = 'claude'
     newTask.initial_prompt = ''

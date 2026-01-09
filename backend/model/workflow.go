@@ -8,6 +8,7 @@ const (
 	NodeTypeTask      = "task"      // create and run task
 	NodeTypeTerminal  = "terminal"  // execute command via terminal session
 	NodeTypeGit       = "git"       // git operations
+	NodeTypeOpsStep   = "ops_step"  // ops/runbook composite step (server+git+action)
 	NodeTypeAIAgent   = "ai_agent"  // AI analysis/decision
 	NodeTypeCondition = "condition" // branching
 	NodeTypeParallel  = "parallel"  // parallel execution (engine-dependent)

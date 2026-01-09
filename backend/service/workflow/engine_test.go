@@ -246,6 +246,61 @@ func TestWorkflowEngine_RunWorkflow_ExecutesCommandsSequentially(t *testing.T) {
 	}
 }
 
+func TestWorkflowEngine_RunWorkflow_OpsStepExecutesGitThenCommand(t *testing.T) {
+	initWorkflowEngineTestDB(t)
+
+	nodes, _ := json.Marshal([]map[string]any{
+		{
+			"id":   "n1",
+			"type": model.NodeTypeOpsStep,
+			"name": "step-1",
+			"config": map[string]any{
+				"work_dir":  "/repo",
+				"operation": "pull",
+				"command":   "echo hi",
+			},
+		},
+	})
+	workflow := model.Workflow{
+		ID:    "wf-ops-step",
+		Name:  "wf",
+		Nodes: string(nodes),
+		Edges: "[]",
+	}
+	if err := model.DB.Create(&workflow).Error; err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+
+	exec := &fakeCommandExecutor{
+		results: map[string]struct {
+			output string
+			err    error
+		}{
+			"git -C /repo pull":          {output: "already up to date\n"},
+			"cd /repo && echo hi":        {output: "hi\n"},
+		},
+	}
+
+	engine := NewWorkflowEngine(nil, nil, nil)
+	engine.localExecutor = exec
+	engine.startAsync = func(fn func()) { fn() }
+	engine.newAgent = func(*WorkflowEngine) *WorkflowAgent { return nil }
+
+	if _, err := engine.RunWorkflow(workflow.ID); err != nil {
+		t.Fatalf("RunWorkflow error: %v", err)
+	}
+
+	if len(exec.calls) != 2 {
+		t.Fatalf("expected 2 commands, got %v", exec.calls)
+	}
+	if exec.calls[0] != "git -C /repo pull" {
+		t.Fatalf("expected first command to be git pull, got %q", exec.calls[0])
+	}
+	if exec.calls[1] != "cd /repo && echo hi" {
+		t.Fatalf("expected second command to be step command, got %q", exec.calls[1])
+	}
+}
+
 func TestWorkflowEngine_RunWorkflow_CommandFailureMarksFailed(t *testing.T) {
 	initWorkflowEngineTestDB(t)
 

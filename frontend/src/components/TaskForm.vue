@@ -36,6 +36,18 @@
       </n-gi>
     </n-grid>
 
+    <n-form-item label="项目">
+      <n-select
+        v-model:value="model.project_id"
+        :options="projectStore.projectOptions"
+        :loading="projectStore.loadingProjects || projectStore.loadingGroups"
+        clearable
+        filterable
+        placeholder="未关联（可选）"
+        :disabled="disabled"
+      />
+    </n-form-item>
+
     <n-divider style="margin: 8px 0">自动化配置</n-divider>
 
     <n-grid :cols="2" :x-gap="12">
@@ -105,12 +117,14 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useServerStore } from '@/stores/server'
+import { useProjectStore } from '@/stores/project'
 
 export interface TaskFormModel {
   title: string
   description: string
   priority: number
   server_id: string | null
+  project_id: string | null
   work_dir: string
   cli_type: string
   initial_prompt: string
@@ -130,6 +144,7 @@ defineProps<{
 }>()
 
 const serverStore = useServerStore()
+const projectStore = useProjectStore()
 
 const cliOptions = [
   { label: 'Claude Code', value: 'claude' },
@@ -152,6 +167,6 @@ const errorHandlingOptions = [
 
 onMounted(() => {
   serverStore.fetchServers().catch(() => {})
+  projectStore.fetchAll().catch(() => {})
 })
 </script>
-

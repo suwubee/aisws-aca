@@ -149,6 +149,11 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
   },
   {
+    label: '项目管理',
+    key: 'projects',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📦')
+  },
+  {
     label: '终端管理',
     key: 'terminals',
     icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
@@ -182,6 +187,7 @@ const activeMenu = computed(() => {
   if (path.startsWith('/kanban')) return 'kanban'
   if (path.startsWith('/ai-intelligence')) return 'ai-intelligence'
   if (path.startsWith('/servers')) return 'servers'
+  if (path.startsWith('/projects')) return 'projects'
   if (path.startsWith('/tasks') || path.startsWith('/task/')) return 'tasks'
   if (path.startsWith('/workflows')) return 'workflows'
   if (path.startsWith('/logs')) return 'logs'
@@ -196,6 +202,7 @@ const currentPageName = computed(() => {
   if (path.startsWith('/kanban')) return '任务看板'
   if (path.startsWith('/ai-intelligence')) return 'AI 智能'
   if (path.startsWith('/servers')) return '服务器管理'
+  if (path.startsWith('/projects')) return '项目管理'
   if (path.startsWith('/tasks') || path.startsWith('/task/')) return '任务管理'
   if (path.startsWith('/workflows')) return '工作流'
   if (path.startsWith('/logs')) return '日志管理'
@@ -217,6 +224,9 @@ function handleMenuChange(key: string) {
       break
     case 'servers':
       router.push('/servers')
+      break
+    case 'projects':
+      router.push('/projects')
       break
     case 'tasks':
       router.push('/tasks')

@@ -139,6 +139,14 @@ import { useTerminalStore } from '@/stores/terminal'
 import TaskCard from './TaskCard.vue'
 import TaskEditModal from './TaskEditModal.vue'
 
+const props = withDefaults(defineProps<{
+  projectId?: string | null
+  groupId?: string | null
+}>(), {
+  projectId: null,
+  groupId: null
+})
+
 const message = useMessage()
 const router = useRouter()
 const taskStore = useTaskStore()
@@ -176,8 +184,32 @@ watch(showEditModal, (show) => {
   }
 })
 
+function matchesFilters(task: Task) {
+  const projectId = props.projectId
+  if (projectId) {
+    if (projectId === '__none__') {
+      if (task.project_id) return false
+    } else if (task.project_id !== projectId) {
+      return false
+    }
+  }
+
+  const groupId = props.groupId
+  if (groupId) {
+    if (groupId === '__none__') {
+      if (!task.project_id) return false
+      if (task.project?.group?.id) return false
+    } else if (task.project?.group?.id !== groupId) {
+      return false
+    }
+  }
+
+  return true
+}
+
 function getTasksByStatus(status: string) {
-  return taskStore.tasksByStatus[status as keyof typeof taskStore.tasksByStatus] || []
+  const tasks = taskStore.tasksByStatus[status as keyof typeof taskStore.tasksByStatus] || []
+  return tasks.filter(matchesFilters)
 }
 
 function getTaskCount(status: string) {

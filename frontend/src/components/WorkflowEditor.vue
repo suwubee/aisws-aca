@@ -108,6 +108,18 @@
           </div>
         </template>
 
+        <template #node-ops_step="slotProps">
+          <div
+            class="workflow-node workflow-node--ops-step"
+            :class="{ 'workflow-node--selected': slotProps.selected }"
+          >
+            <Handle type="target" :position="Position.Left" :style="handleStyle('ops_step')" />
+            <div class="workflow-node__title">{{ slotProps.data?.label || '步骤' }}</div>
+            <div class="workflow-node__subtitle">ops_step</div>
+            <Handle type="source" :position="Position.Right" :style="handleStyle('ops_step')" />
+          </div>
+        </template>
+
         <template #node-ai_agent="slotProps">
           <div
             class="workflow-node workflow-node--ai-agent"
@@ -155,7 +167,7 @@
         </n-space>
 
         <n-form label-placement="top" size="small">
-          <template v-for="field in fieldsForNode(selectedNode.type)" :key="field.key">
+          <template v-for="field in fieldsForNode(selectedNode.type, selectedNode.data?.config)" :key="field.key">
             <n-form-item :label="field.label">
               <n-select
                 v-if="field.kind === 'select'"
@@ -200,7 +212,7 @@ import { getWorkflow, updateWorkflow } from '@/api/workflow'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 
-type WorkflowNodeType = 'server' | 'task' | 'command' | 'terminal' | 'git' | 'ai_agent' | 'condition'
+type WorkflowNodeType = 'server' | 'task' | 'command' | 'terminal' | 'git' | 'ops_step' | 'ai_agent' | 'condition'
 
 type WorkflowNodeData = {
   label: string
@@ -247,6 +259,7 @@ const nodeTypeItems: Array<{ type: WorkflowNodeType; label: string; color: strin
   { type: 'command', label: '命令', color: '#5c6bc0' },
   { type: 'terminal', label: '终端', color: '#8c8c8c' },
   { type: 'git', label: 'Git', color: '#f0a020' },
+  { type: 'ops_step', label: '步骤', color: '#2dd4bf' },
   { type: 'ai_agent', label: 'AI代理', color: '#b37feb' },
   { type: 'condition', label: '条件', color: '#d03050' }
 ]
@@ -291,6 +304,23 @@ function defaultConfigForType(type: WorkflowNodeType): Record<string, string> {
   if (type === 'command') return { server_id: '', work_dir: '', command: '' }
   if (type === 'terminal') return { server_id: '', work_dir: '', title: '', command: '' }
   if (type === 'git') return { server_id: '', work_dir: '', operation: 'pull', repo_url: '', branch: '', message: '' }
+  if (type === 'ops_step') {
+    return {
+      server_id: '',
+      work_dir: '',
+      operation: 'none',
+      repo_url: '',
+      branch: '',
+      message: '',
+      action: 'command',
+      command: '',
+      title: '',
+      description: '',
+      cli_type: 'claude',
+      initial_prompt: '',
+      auto_create_dir: 'true'
+    }
+  }
   if (type === 'ai_agent') return { agent_type: 'claude', prompt: '' }
   if (type === 'condition') return { command: '', contains: '', regex: '', description: '' }
   return {}
@@ -360,6 +390,39 @@ function deriveNodeLabel(type: WorkflowNodeType, config: Record<string, string> 
     return branch ? `${base}#${branch}` : base
   }
 
+  if (type === 'ops_step') {
+    const operation = safeTrim(cfg.operation)
+    const repoUrl = safeTrim(cfg.repo_url)
+    const branch = safeTrim(cfg.branch)
+    const message = safeTrim(cfg.message)
+    const action = safeTrim(cfg.action) || 'command'
+    const command = toOneLine(safeTrim(cfg.command))
+    const workDir = safeTrim(cfg.work_dir)
+
+    const parts: string[] = []
+    if (serverName) parts.push(serverName)
+    if (workDir) parts.push(shorten(workDir, 18))
+
+    if (operation && operation !== 'none') {
+      const opPart = repoUrl
+        ? `git:${operation} ${shorten(repoUrl.replace(/^https?:\/\//, ''), 22)}${branch ? `#${shorten(branch, 12)}` : ''}`
+        : `git:${operation}${branch ? `#${shorten(branch, 12)}` : ''}`
+      parts.push(opPart)
+      if (operation === 'commit' && message) parts.push(shorten(message, 18))
+    }
+
+    if (action === 'task') {
+      const title = safeTrim(cfg.title)
+      parts.push(title ? `task:${shorten(title, 18)}` : 'task')
+    } else if (action === 'terminal') {
+      parts.push(command ? `terminal:${shorten(command, 22)}` : 'terminal')
+    } else if (action === 'command') {
+      parts.push(command ? `cmd:${shorten(command, 22)}` : 'cmd')
+    }
+
+    return parts.length > 0 ? `步骤: ${parts.join(' · ')}` : nodeLabelForType(type)
+  }
+
   if (type === 'ai_agent') {
     const agentType = safeTrim(cfg.agent_type)
     return agentType ? `AI代理: ${agentType}` : nodeLabelForType(type)
@@ -384,6 +447,7 @@ function isWorkflowNodeType(value: unknown): value is WorkflowNodeType {
     value === 'command' ||
     value === 'terminal' ||
     value === 'git' ||
+    value === 'ops_step' ||
     value === 'ai_agent' ||
     value === 'condition'
 }
@@ -542,7 +606,7 @@ const cliTypeOptions: SelectOption[] = [
   { label: 'Gemini CLI', value: 'gemini' }
 ]
 
-function fieldsForNode(type: string | undefined): NodeField[] {
+function fieldsForNode(type: string | undefined, config?: Record<string, string>): NodeField[] {
   const normalizedType = mapToWorkflowNodeType(type)
   if (!normalizedType) return []
 
@@ -680,6 +744,94 @@ function fieldsForNode(type: string | undefined): NodeField[] {
     ]
   }
 
+  if (normalizedType === 'ops_step') {
+    const action = safeTrim(config?.action).toLowerCase() || 'command'
+
+    const baseFields: NodeField[] = [
+      {
+        kind: 'select',
+        key: 'server_id',
+        label: '服务器',
+        options: serverStore.serverOptions,
+        placeholder: '选择服务器（留空=继承上下文/项目）',
+        clearable: true,
+        filterable: true,
+        loading: serverStore.loading
+      },
+      { kind: 'input', key: 'work_dir', label: '工作目录', input: 'text', placeholder: '/path/to/project（留空=继承上下文/项目）' },
+      {
+        kind: 'select',
+        key: 'operation',
+        label: 'Git 操作',
+        options: [
+          { label: 'none', value: 'none' },
+          { label: 'pull', value: 'pull' },
+          { label: 'clone', value: 'clone' },
+          { label: 'commit', value: 'commit' },
+          { label: 'push', value: 'push' }
+        ],
+        placeholder: '可选：先执行 git 操作'
+      },
+      { kind: 'input', key: 'repo_url', label: 'Git 仓库', input: 'text', placeholder: 'https://...（clone 可选，留空尝试继承 Project.git_repo）' },
+      { kind: 'input', key: 'branch', label: 'Git 分支', input: 'text', placeholder: 'main（可选，留空尝试继承 Project.git_branch）' },
+      { kind: 'input', key: 'message', label: 'Commit 信息', input: 'text', placeholder: 'git commit -m ...（commit 必填）' },
+      {
+        kind: 'select',
+        key: 'action',
+        label: '动作',
+        options: [
+          { label: 'command', value: 'command' },
+          { label: 'terminal', value: 'terminal' },
+          { label: 'task', value: 'task' },
+          { label: 'none', value: 'none' }
+        ],
+        placeholder: '选择该步骤要执行的动作'
+      }
+    ]
+
+    if (action === 'task') {
+      return [
+        ...baseFields,
+        { kind: 'input', key: 'title', label: '任务标题', input: 'text', placeholder: '可选，留空使用节点名称' },
+        {
+          kind: 'select',
+          key: 'cli_type',
+          label: 'CLI 类型',
+          options: cliTypeOptions,
+          placeholder: '选择 CLI 工具'
+        },
+        { kind: 'input', key: 'initial_prompt', label: '初始提示', input: 'textarea', placeholder: '可选：启动后自动输入的提示内容' },
+        {
+          kind: 'select',
+          key: 'auto_create_dir',
+          label: '自动创建目录',
+          options: [
+            { label: 'true', value: 'true' },
+            { label: 'false', value: 'false' }
+          ],
+          placeholder: '默认 true'
+        }
+      ]
+    }
+
+    if (action === 'terminal') {
+      return [
+        ...baseFields,
+        { kind: 'input', key: 'title', label: '会话标题', input: 'text', placeholder: '可选，留空使用节点名称' },
+        { kind: 'input', key: 'command', label: '命令', input: 'textarea', placeholder: '写入终端的命令（偏交互）', autosize: { minRows: 3, maxRows: 10 } }
+      ]
+    }
+
+    if (action === 'command') {
+      return [
+        ...baseFields,
+        { kind: 'input', key: 'command', label: '命令', input: 'textarea', placeholder: '执行命令（可用于后续条件判断）', autosize: { minRows: 3, maxRows: 10 } }
+      ]
+    }
+
+    return baseFields
+  }
+
   if (normalizedType === 'ai_agent') {
     return [
       {
@@ -732,6 +884,7 @@ function tagTypeForNode(type: string | undefined) {
   if (type === 'command') return 'info'
   if (type === 'terminal') return 'default'
   if (type === 'git') return 'warning'
+  if (type === 'ops_step') return 'info'
   if (type === 'ai_agent') return 'warning'
   if (type === 'condition') return 'error'
   return 'default'
@@ -1007,6 +1160,10 @@ onMounted(() => {
   color: #f0a020;
 }
 
+.node-type--ops_step {
+  color: #2dd4bf;
+}
+
 .node-type--ai_agent {
   color: #b37feb;
 }
@@ -1094,6 +1251,10 @@ onMounted(() => {
 
 .workflow-node--git {
   border-color: rgba(240, 160, 32, 0.75);
+}
+
+.workflow-node--ops-step {
+  border-color: rgba(45, 212, 191, 0.75);
 }
 
 .workflow-node--ai-agent {
