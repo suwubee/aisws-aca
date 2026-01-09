@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ai-coding-assistant/middleware"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 )
 
@@ -14,7 +13,7 @@ func TestPromptTemplatePresetEndpoints_AdminCanCreateApplyAndDelete(t *testing.T
 	app, _, apiGroup := setupTestAppWithAuth(t)
 
 	ctrl := NewPromptTemplateController()
-	ctrl.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+	ctrl.RegisterRoutes(apiGroup)
 
 	token := loginForToken(t, app, "admin", "admin123")
 	key := promptsvc.TemplateKeyApprovalSystemPrompt

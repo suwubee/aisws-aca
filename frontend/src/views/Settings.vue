@@ -208,8 +208,8 @@
         </div>
       </n-tab-pane>
 
-      <!-- 提示词模板（仅管理员） -->
-      <n-tab-pane v-if="isAdmin" name="prompt-templates" tab="提示词模板">
+      <!-- 提示词模板 -->
+      <n-tab-pane name="prompt-templates" tab="提示词模板">
         <div class="section">
           <div class="section-header">
             <span>提示词模板</span>
