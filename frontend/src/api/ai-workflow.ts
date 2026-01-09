@@ -33,3 +33,7 @@ export function getAIWorkflowSession(id: string) {
 export function listAIWorkflowSessions() {
   return api.get('/ai-workflow/sessions')
 }
+
+export function postAIWorkflowMessage(id: string, message: string) {
+  return api.post(`/ai-workflow/session/${id}/message`, { message })
+}

@@ -41,6 +41,7 @@
         </div>
 
         <n-data-table
+          v-if="!isMobile"
           :columns="columns"
           :data="filteredWorkflows"
           :loading="loading"
@@ -48,6 +49,66 @@
           size="small"
           striped
         />
+
+        <div v-else class="mobile-workflow-cards">
+          <n-space v-if="filteredWorkflows.length > 0" vertical size="12">
+            <n-card
+              v-for="wf in filteredWorkflows"
+              :key="wf.id"
+              size="small"
+              class="mobile-workflow-card"
+            >
+              <template #header>
+                <div class="mobile-workflow-card__header">
+                  <span class="mobile-workflow-card__title">{{ wf.name || wf.id.slice(0, 8) }}</span>
+                  <n-tag
+                    size="small"
+                    :bordered="false"
+                    :type="statusTagType(String(wf.status))"
+                  >
+                    {{ statusLabel(String(wf.status)) }}
+                  </n-tag>
+                </div>
+              </template>
+
+              <div class="mobile-workflow-card__meta">
+                <span class="label">节点</span>
+                <span class="value">{{ wf.node_count ?? 0 }}</span>
+              </div>
+              <div class="mobile-workflow-card__meta">
+                <span class="label">最近运行</span>
+                <span class="value">{{ formatDateTime(wf.last_run_at) }}</span>
+              </div>
+
+              <template #footer>
+                <n-space justify="end" size="small" wrap>
+                  <n-button size="small" type="primary" quaternary @click="openDesigner(wf)">设计</n-button>
+                  <n-button size="small" quaternary @click="openEdit(wf)">编辑</n-button>
+                  <n-button
+                    size="small"
+                    type="success"
+                    quaternary
+                    :loading="runningId === wf.id"
+                    @click="run(wf)"
+                  >
+                    运行
+                  </n-button>
+                  <n-popconfirm
+                    positive-text="确定"
+                    negative-text="取消"
+                    @positive-click="() => { void remove(wf) }"
+                  >
+                    <template #trigger>
+                      <n-button size="small" type="error" quaternary :loading="deletingId === wf.id">删除</n-button>
+                    </template>
+                    确定删除工作流「{{ wf.name }}」吗？
+                  </n-popconfirm>
+                </n-space>
+              </template>
+            </n-card>
+          </n-space>
+          <n-empty v-else description="暂无工作流" />
+        </div>
       </n-card>
     </div>
 
@@ -271,10 +332,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
   NButton,
+  NCard,
   NDataTable,
+  NEmpty,
   NPopconfirm,
   NSpace,
   NTag,
@@ -297,6 +360,7 @@ import AIWorkflowChat from '@/components/AIWorkflowChat.vue'
 const message = useMessage()
 
 const activeTab = ref('ai')
+const isMobile = ref(false)
 const loading = ref(false)
 const workflows = ref<Workflow[]>([])
 
@@ -718,8 +782,19 @@ async function remove(workflow: Workflow) {
 }
 
 onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
   fetchAll()
 })
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
+
+function updateIsMobile() {
+  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
+}
 </script>
 
 <style scoped>
@@ -796,5 +871,46 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: #e8e8e8;
+}
+
+.mobile-workflow-cards {
+  padding-top: 6px;
+}
+
+.mobile-workflow-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobile-workflow-card__title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-workflow-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.mobile-workflow-card__meta .label {
+  color: #9ca3af;
+  width: 64px;
+  flex-shrink: 0;
+}
+
+.mobile-workflow-card__meta .value {
+  color: #e5e7eb;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

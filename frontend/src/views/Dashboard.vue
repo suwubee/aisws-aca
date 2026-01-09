@@ -158,19 +158,23 @@ async function handleCreateTask() {
     message.success('任务创建成功')
     showCreateTask.value = false
 
-    // 如果设置了自动启动，则启动任务
-    if (newTask.auto_start && newTask.work_dir) {
-      try {
-        const result = await taskStore.startTask(task.id)
-        if (result.terminal_id) {
-          await terminalStore.fetchTerminals()
-          terminalStore.setActiveTerminal(result.terminal_id)
-        }
-        message.success('任务已自动启动')
-      } catch (e) {
-        message.warning('任务创建成功，但自动启动失败')
-      }
-    }
+	    // 如果设置了自动启动，则启动任务
+	    if (newTask.auto_start && newTask.work_dir) {
+	      try {
+	        const result = await taskStore.startTask(task.id)
+	        if (result.terminal_id) {
+	          await terminalStore.fetchTerminals()
+	          terminalStore.setActiveTerminal(result.terminal_id)
+	        }
+	        if (result?.needs_user_action) {
+	          message.warning(result.user_action_hint || '任务已启动但需要用户确认')
+	        } else {
+	          message.success('任务已自动启动')
+	        }
+	      } catch (e) {
+	        message.warning('任务创建成功，但自动启动失败')
+	      }
+	    }
 
     // 重置表单
     Object.assign(newTask, {

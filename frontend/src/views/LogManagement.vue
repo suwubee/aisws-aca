@@ -7,7 +7,7 @@
 
     <div class="content-area">
       <!-- 会话列表 -->
-      <div class="sessions-panel">
+      <div v-if="!isMobile || !selectedSession" class="sessions-panel">
         <div class="panel-header">
           <span class="panel-title">终端会话</span>
           <n-button size="small" quaternary @click="fetchSessions" :loading="loadingSessions">
@@ -37,10 +37,13 @@
       </div>
 
       <!-- 日志详情 -->
-      <div class="logs-panel">
+      <div v-if="!isMobile || selectedSession" class="logs-panel">
         <template v-if="selectedSession">
           <div class="panel-header">
             <span class="panel-title">
+              <n-button v-if="isMobile" size="small" quaternary @click="selectedSession = null">
+                ← 会话
+              </n-button>
               {{ selectedSession.title }} 的日志
               <n-tag size="small" :bordered="false">{{ logsTotal }} 条</n-tag>
             </span>
@@ -77,6 +80,7 @@
 
           <div class="logs-table-container">
             <n-data-table
+              v-if="!isMobile"
               :columns="columns"
               :data="logs"
               :loading="loadingLogs"
@@ -87,6 +91,61 @@
               @update:page="handlePageChange"
               @update:page-size="handlePageSizeChange"
             />
+
+            <div v-else class="mobile-log-cards">
+              <n-spin :show="loadingLogs">
+                <n-space v-if="logs.length > 0" vertical size="12">
+                  <n-card
+                    v-for="log in logs"
+                    :key="log.id"
+                    size="small"
+                    class="mobile-log-card"
+                  >
+                    <template #header>
+                      <div class="mobile-log-card__header">
+                        <n-tag
+                          size="small"
+                          :bordered="false"
+                          :type="log.log_type === 'input' ? 'info' : 'success'"
+                        >
+                          {{ log.log_type === 'input' ? '输入' : '输出' }}
+                        </n-tag>
+                        <span class="mobile-log-card__time">{{ formatTime(log.created_at) }}</span>
+                      </div>
+                    </template>
+
+                    <pre class="mobile-log-card__content">{{ cleanContent(log.content) }}</pre>
+
+                    <template #footer>
+                      <n-popconfirm
+                        positive-text="确定"
+                        negative-text="取消"
+                        @positive-click="() => { void deleteLog(log.id) }"
+                      >
+                        <template #trigger>
+                          <n-button size="small" type="error" quaternary>删除</n-button>
+                        </template>
+                        确定删除此日志?
+                      </n-popconfirm>
+                    </template>
+                  </n-card>
+                </n-space>
+                <n-empty v-else description="暂无日志" />
+              </n-spin>
+
+              <div v-if="logsTotal > 0" class="mobile-log-pagination">
+                <n-pagination
+                  :page="pagination.page"
+                  :page-size="pagination.pageSize"
+                  :item-count="pagination.itemCount"
+                  :page-sizes="pagination.pageSizes"
+                  size="small"
+                  show-size-picker
+                  @update:page="handlePageChange"
+                  @update:page-size="handlePageSizeChange"
+                />
+              </div>
+            </div>
           </div>
         </template>
         <div v-else class="empty-state full">
@@ -99,14 +158,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, reactive, onMounted } from 'vue'
+import { ref, h, reactive, onMounted, onUnmounted } from 'vue'
 import {
   NButton,
+  NCard,
+  NEmpty,
   NTag,
   NInput,
+  NPagination,
   NSelect,
   NPopconfirm,
   NDataTable,
+  NSpin,
   useMessage,
   DataTableColumns
 } from 'naive-ui'
@@ -137,6 +200,7 @@ const logs = ref<LogEntry[]>([])
 const logsTotal = ref(0)
 const loadingSessions = ref(false)
 const loadingLogs = ref(false)
+const isMobile = ref(false)
 const searchKeyword = ref('')
 const filterType = ref<string | null>(null)
 
@@ -329,8 +393,19 @@ function formatTime(dateStr: string) {
 }
 
 onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
   fetchSessions()
 })
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
+
+function updateIsMobile() {
+  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
+}
 </script>
 
 <style scoped>
@@ -449,6 +524,64 @@ onMounted(() => {
   flex: 1;
   overflow: auto;
   padding: 16px;
+}
+
+.mobile-log-cards {
+  padding: 8px 0;
+}
+
+.mobile-log-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobile-log-card__time {
+  font-size: 12px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.mobile-log-card__content {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.mobile-log-pagination {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .content-area {
+    padding: 12px;
+  }
+
+  .sessions-panel,
+  .logs-panel {
+    width: 100%;
+    border-right: none;
+  }
+
+  .panel-header {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .panel-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .logs-table-container {
+    padding: 12px;
+  }
 }
 
 .empty-state {

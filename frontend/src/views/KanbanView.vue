@@ -78,17 +78,21 @@ async function handleCreateTask() {
     message.success('任务创建成功')
     showCreateTask.value = false
 
-    if (newTask.auto_start && newTask.work_dir) {
-      try {
-        const result = await taskStore.startTask(task.id)
-        if (result.terminal_id) {
-          await terminalStore.fetchTerminals()
-        }
-        message.success('任务已自动启动')
-      } catch (e) {
-        message.warning('任务创建成功，但自动启动失败')
-      }
-    }
+	    if (newTask.auto_start && newTask.work_dir) {
+	      try {
+	        const result = await taskStore.startTask(task.id)
+	        if (result.terminal_id) {
+	          await terminalStore.fetchTerminals()
+	        }
+	        if (result?.needs_user_action) {
+	          message.warning(result.user_action_hint || '任务已启动但需要用户确认')
+	        } else {
+	          message.success('任务已自动启动')
+	        }
+	      } catch (e) {
+	        message.warning('任务创建成功，但自动启动失败')
+	      }
+	    }
 
     Object.assign(newTask, {
       title: '', description: '', priority: 1, server_id: null,

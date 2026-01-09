@@ -12,6 +12,8 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	sshservice "github.com/ai-coding-assistant/service/ssh"
+	"github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/service/workflow"
 	"github.com/ai-coding-assistant/utils"
@@ -151,11 +153,14 @@ func main() {
 	sshServerController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
 
 	// AI工作流API
-	toolExecutor := workflow.NewToolExecutor(nil, nil, nil)
+	sshManager := sshservice.NewSSHManager(cfg.Auth.JWTSecret)
+	automationService := task.NewAutomationService(terminalManager)
+	toolExecutor := workflow.NewToolExecutor(sshManager, automationService, workflow.NewTerminalManagerAdapter(terminalManager))
 	api.InitAIWorkflowEngine(toolExecutor)
 	aiWorkflowGroup := apiGroup.Group("/ai-workflow")
 	aiWorkflowGroup.Post("/start", api.StartAIWorkflow)
 	aiWorkflowGroup.Get("/session/:id", api.GetAIWorkflowSession)
+	aiWorkflowGroup.Post("/session/:id/message", api.PostAIWorkflowMessage)
 	aiWorkflowGroup.Get("/sessions", api.ListAIWorkflowSessions)
 
 	// 静态文件服务

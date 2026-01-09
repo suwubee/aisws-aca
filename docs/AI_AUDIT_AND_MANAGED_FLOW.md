@@ -124,6 +124,8 @@
 - 任务状态仅接受 `todo/in_progress/paused/done/failed/timeout/archived`，不再兼容 `pending/completed`；`/tasks/by-status` 将 `paused` 归入“进行中”、`failed/timeout` 归入“已完成”列显示。
 - 终端 WebSocket 补齐 `approval_result` 与 `ai_log` 字段，前端可正确接收审批事件与 AI 日志。
 - 增加 `POST /api/terminals/:id/input`，审批中心可在非终端页面直接发送输入，完成“检测 → 展示 → 手动处理 → 落库”的闭环。
-- `reset-data` 会尝试关闭所有终端会话并清理相关表数据，避免仅删库导致“列表仍有终端/进程未结束”的假重置。
-- 移动端支持：菜单改为抽屉、表格支持横向滚动、弹窗宽度自适应。
-- 终端输入稳定性：避免在隐藏容器里初始化 xterm、切换/展开面板时自动 fit，并修复长粘贴导致输入发送失败。
+- `reset-data` 会尝试关闭所有终端会话，并清理除 `users` 与内置 `workflow_templates` 外的全部业务数据（任务/终端/日志/审批/消息/服务器/项目/工作流/规则/AI Provider 等），避免“假重置”。
+- 终端输入稳定性：前端 xterm 在容器可见时再 open/fit，初次渲染补一帧 fit；WebSocket 断线自动重连，降低“无法输入/光标错位”的概率。
+- 审批/AI 日志稳定性：避免组件卸载后仍持续重连 WebSocket，减少异常更新与资源泄漏。
+- 移动端体验：Kanban/工作流/日志/AI 决策日志等长列表切换为 card 模式；移动端判定增加 coarse pointer + 横屏覆盖，菜单使用抽屉、弹窗宽度自适应。
+- 托管启动安全提示：当 CLI 命令不可用（例如 `claude` 不在 PATH）时自动暂停任务并提示用户手动确认（如尝试 `claude` 或 `npx claude`），避免把提示词误当作 shell 命令执行。

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
@@ -21,6 +22,7 @@ type AIWorkflowEngine struct {
 	aiProvider    *ai.AIProvider
 	toolExecutor  *ToolExecutor
 	maxIterations int
+	inflight      sync.Map // sessionID -> struct{}
 }
 
 // NewAIWorkflowEngine creates a new AI workflow engine
@@ -100,7 +102,85 @@ func (e *AIWorkflowEngine) StartWorkflow(ctx context.Context, userGoal string) (
 	}
 
 	// Start execution loop in background
-	go e.executeLoop(context.Background(), session, aiConfig)
+	if !e.startExecution(session, aiConfig) {
+		return session, errors.New("workflow session already running")
+	}
+
+	return session, nil
+}
+
+func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *model.AIProviderConfig) bool {
+	if e == nil || session == nil || aiConfig == nil {
+		return false
+	}
+
+	id := strings.TrimSpace(session.ID)
+	if id == "" {
+		return false
+	}
+
+	if _, loaded := e.inflight.LoadOrStore(id, struct{}{}); loaded {
+		return false
+	}
+
+	go func() {
+		defer e.inflight.Delete(id)
+		e.executeLoop(context.Background(), session, aiConfig)
+	}()
+
+	return true
+}
+
+// ResumeWorkflow appends a user message and resumes a paused workflow session.
+func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string, userMessage string) (*AIWorkflowSession, error) {
+	if e == nil {
+		return nil, errors.New("engine is nil")
+	}
+
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return nil, errors.New("session id required")
+	}
+
+	msg := strings.TrimSpace(userMessage)
+	if msg == "" {
+		return nil, errors.New("message is required")
+	}
+
+	session, err := e.GetSession(id)
+	if err != nil {
+		return nil, err
+	}
+
+	status := strings.ToLower(strings.TrimSpace(session.Status))
+	if status != "paused" {
+		return nil, errors.New("session is not paused")
+	}
+
+	aiConfig, err := e.aiProvider.GetDefaultConfig()
+	if err != nil {
+		return nil, fmt.Errorf("no AI provider configured: %w", err)
+	}
+
+	if session.Context == nil {
+		session.Context = make(map[string]any)
+	}
+
+	session.Messages = append(session.Messages, ai.ChatMessage{
+		Role:    "user",
+		Content: msg,
+	})
+	session.Status = "running"
+	session.Summary = ""
+	session.CompletedAt = nil
+
+	if err := e.saveSession(session); err != nil {
+		return nil, err
+	}
+
+	if !e.startExecution(session, aiConfig) {
+		return session, errors.New("workflow session already running")
+	}
 
 	return session, nil
 }
@@ -115,7 +195,13 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 		}
 	}()
 
+	iterationBase := 0
+	if session != nil {
+		iterationBase = len(session.Steps)
+	}
+
 	for i := 0; i < e.maxIterations; i++ {
+		iteration := iterationBase + i
 		select {
 		case <-ctx.Done():
 			session.Status = "cancelled"
@@ -161,14 +247,39 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 			return
 		}
 
-		// Execute action
-		if parsed.Action != nil {
-			step := e.executeAction(ctx, session, parsed, i)
-			session.Steps = append(session.Steps, step)
+			// Execute action
+			if parsed.Action != nil {
+				if strings.EqualFold(strings.TrimSpace(parsed.Action.Tool), "ask_user") {
+					question, _ := parsed.Action.Args["question"].(string)
+					question = strings.TrimSpace(question)
+					if question == "" {
+						question = "需要用户补充信息/确认后继续"
+					}
 
-			// Add observation to messages
-			observation := FormatObservation(&ToolResult{
-				Success: step.Success,
+					step := AIWorkflowStep{
+						ID:        uuid.New().String(),
+						Iteration:  iteration,
+						Thought:    parsed.Thought,
+						Action:     parsed.Action.Tool,
+						ActionArgs: parsed.Action.Args,
+						Result:     question,
+						Success:    true,
+						Timestamp:  time.Now(),
+					}
+					session.Steps = append(session.Steps, step)
+
+					session.Status = "paused"
+					session.Summary = question
+					e.saveSession(session)
+					return
+				}
+
+				step := e.executeAction(ctx, session, parsed, iteration)
+				session.Steps = append(session.Steps, step)
+
+				// Add observation to messages
+				observation := FormatObservation(&ToolResult{
+					Success: step.Success,
 				Output:  step.Result,
 			})
 			session.Messages = append(session.Messages, ai.ChatMessage{

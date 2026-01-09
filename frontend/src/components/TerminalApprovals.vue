@@ -129,6 +129,8 @@ interface AILogEntry {
 }
 const aiLogs = ref<AILogEntry[]>([])
 let aiLogWs: WebSocket | null = null
+let aiLogReconnectTimer: number | null = null
+let destroyed = false
 
 function formatLogTime(date: Date) {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
@@ -146,10 +148,16 @@ function getTypeLabel(type: string) {
 }
 
 function connectAILogWs() {
+  if (destroyed) return
   if (!props.terminalId) return
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token')
   const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws?sessionId=${props.terminalId}&token=${token}`
+
+  if (aiLogReconnectTimer) {
+    clearTimeout(aiLogReconnectTimer)
+    aiLogReconnectTimer = null
+  }
 
   aiLogWs = new WebSocket(wsUrl)
   aiLogWs.onmessage = (event) => {
@@ -166,7 +174,15 @@ function connectAILogWs() {
     }
   }
   aiLogWs.onclose = () => {
-    setTimeout(() => props.terminalId && connectAILogWs(), 5000)
+    aiLogWs = null
+    if (destroyed) return
+    if (!props.terminalId) return
+    aiLogReconnectTimer = window.setTimeout(() => {
+      aiLogReconnectTimer = null
+      if (destroyed) return
+      if (!props.terminalId) return
+      connectAILogWs()
+    }, 2000)
   }
 }
 
@@ -251,7 +267,12 @@ function cleanPrompt(content: string): string {
 watch(() => props.terminalId, (newId) => {
   fetchRecords(false)
   // 重连AI日志WebSocket
+  if (aiLogReconnectTimer) {
+    clearTimeout(aiLogReconnectTimer)
+    aiLogReconnectTimer = null
+  }
   if (aiLogWs) {
+    aiLogWs.onclose = null
     aiLogWs.close()
     aiLogWs = null
   }
@@ -265,8 +286,14 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  destroyed = true
   if (refreshTimer) clearInterval(refreshTimer)
+  if (aiLogReconnectTimer) {
+    clearTimeout(aiLogReconnectTimer)
+    aiLogReconnectTimer = null
+  }
   if (aiLogWs) {
+    aiLogWs.onclose = null
     aiLogWs.close()
     aiLogWs = null
   }

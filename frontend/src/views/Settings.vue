@@ -38,7 +38,7 @@
           </div>
           <n-card size="small" style="max-width: 400px">
             <n-space vertical>
-              <n-text depth="3">重置所有数据将删除：日志、终端会话、任务、审批记录、消息等</n-text>
+              <n-text depth="3">重置所有数据将删除除用户与内置模板外的所有数据：任务、终端、日志、审批、消息、服务器/项目/工作流/规则配置等</n-text>
               <n-popconfirm @positive-click="() => { void resetAllData() }" positive-text="确定重置" negative-text="取消">
                 <template #trigger>
                   <n-button type="error" :loading="resettingData">
@@ -314,6 +314,8 @@ import { automationApi, authApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
+import { useServerStore } from '@/stores/server'
+import { useApprovalStore } from '@/stores/approval'
 import AgentConfig from '@/components/AgentConfig.vue'
 import LogExport from '@/components/LogExport.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
@@ -340,6 +342,8 @@ const message = useMessage()
 const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
+const serverStore = useServerStore()
+const approvalStore = useApprovalStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 // ===== Account Settings =====
@@ -392,9 +396,13 @@ async function resetAllData() {
     terminalStore.terminals.forEach(t => t.ws?.close())
     terminalStore.terminals = []
     terminalStore.activeTerminalId = null
+    approvalStore.pendingApprovals = []
+    serverStore.servers = []
+    serverStore.loaded = false
     await Promise.allSettled([
       taskStore.fetchTasks(),
-      terminalStore.fetchTerminals()
+      terminalStore.fetchTerminals(),
+      serverStore.fetchServers({ force: true })
     ])
   } catch (e) {
     message.error('重置失败')

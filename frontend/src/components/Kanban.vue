@@ -1,6 +1,6 @@
 <template>
   <div v-if="isMobile" class="kanban-mobile">
-    <n-tabs v-model:value="mobileTab" type="line" animated>
+    <n-tabs v-model:value="mobileTab" type="segment" animated size="small">
       <n-tab-pane name="todo" :tab="`待办 (${getTaskCount('todo')})`">
         <div class="mobile-task-list">
           <TaskCard
@@ -124,7 +124,6 @@
   </div>
 
   <TaskEditModal
-    v-if="editingTask"
     v-model:show="showEditModal"
     :task="editingTask"
     @saved="handleTaskSaved"
@@ -155,7 +154,8 @@ const isMobile = ref(false)
 const mobileTab = ref('todo')
 
 function updateIsMobile() {
-  isMobile.value = window.innerWidth <= 768
+  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
 }
 
 const draggedTask = ref<Task | null>(null)
@@ -270,7 +270,11 @@ async function handleOpenTerminal(task: Task) {
 async function handleStartTask(task: Task) {
   try {
     const result = await taskStore.startTask(task.id)
-    message.success('任务已启动')
+    if (result?.needs_user_action) {
+      message.warning(result.user_action_hint || '任务已暂停，等待用户确认')
+    } else {
+      message.success('任务已启动')
+    }
     // 切换到新创建的终端
     if (result.terminal_id) {
       await terminalStore.fetchTerminals()

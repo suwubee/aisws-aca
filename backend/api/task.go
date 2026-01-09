@@ -96,6 +96,21 @@ func normalizeTaskStatus(status string) (string, bool) {
 	return s, ok
 }
 
+var allowedCLITypes = map[string]struct{}{
+	"claude": {},
+	"codex":  {},
+	"gemini": {},
+}
+
+func normalizeCLIType(value string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(value))
+	if s == "" {
+		return "claude", true
+	}
+	_, ok := allowedCLITypes[s]
+	return s, ok
+}
+
 func taskStatusGroup(status string) string {
 	s := strings.ToLower(strings.TrimSpace(status))
 	switch s {
@@ -129,8 +144,10 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 	}
 
 	cliType := req.CLIType
-	if cliType == "" {
-		cliType = "claude"
+	if normalized, ok := normalizeCLIType(cliType); ok {
+		cliType = normalized
+	} else {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cli_type"})
 	}
 
 	autoCreateDir := true
@@ -358,7 +375,11 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 		updates["work_dir"] = *req.WorkDir
 	}
 	if req.CLIType != nil {
-		updates["cli_type"] = *req.CLIType
+		if normalized, ok := normalizeCLIType(*req.CLIType); ok {
+			updates["cli_type"] = normalized
+		} else {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid cli_type"})
+		}
 	}
 	if req.InitialPrompt != nil {
 		updates["initial_prompt"] = *req.InitialPrompt
@@ -482,15 +503,17 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 	if taskModel.Status == "in_progress" {
 		var terminal model.TerminalSession
 		if err := model.DB.Where("task_id = ?", id).Order("created_at desc").First(&terminal).Error; err == nil {
-			return c.JSON(fiber.Map{
-				"message":     "Task already running",
-				"task":        taskModel,
-				"terminal_id": terminal.ID,
-				"work_dir":    taskModel.WorkDir,
-				"cli_started": true,
-			})
+				return c.JSON(fiber.Map{
+					"message":     "Task already running",
+					"task":        taskModel,
+					"terminal_id": terminal.ID,
+					"work_dir":    taskModel.WorkDir,
+					"cli_started": true,
+					"needs_user_action": false,
+					"user_action_hint":  "",
+				})
+			}
 		}
-	}
 
 	result, err := ctrl.automationService.StartTask(&taskModel)
 	if err != nil {
@@ -500,14 +523,16 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(fiber.Map{
-		"message":     "Task started",
-		"task":        result.Task,
-		"terminal_id": result.Terminal.ID(),
-		"work_dir":    result.WorkDir,
-		"cli_started": result.CLIStarted,
-	})
-}
+		return c.JSON(fiber.Map{
+			"message":           "Task started",
+			"task":              result.Task,
+			"terminal_id":       result.Terminal.ID(),
+			"work_dir":          result.WorkDir,
+			"cli_started":       result.CLIStarted,
+			"needs_user_action": result.NeedsUserAction,
+			"user_action_hint":  result.UserActionHint,
+		})
+	}
 
 // GetTaskTerminals 获取任务关联的终端列表
 func (ctrl *TaskController) GetTaskTerminals(c *fiber.Ctx) error {

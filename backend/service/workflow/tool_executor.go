@@ -104,8 +104,12 @@ func (e *ToolExecutor) createTask(args map[string]any, sessionCtx map[string]any
 	cliType, _ := args["cli_type"].(string)
 	prompt, _ := args["initial_prompt"].(string)
 
+	cliType = strings.ToLower(strings.TrimSpace(cliType))
 	if cliType == "" {
 		cliType = "claude"
+	}
+	if cliType != "claude" && cliType != "codex" && cliType != "gemini" {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid cli_type: %s (allowed: claude, codex, gemini)", cliType)}
 	}
 
 	var serverID *string
@@ -164,6 +168,15 @@ func (e *ToolExecutor) startTask(args map[string]any) *ToolResult {
 	terminalID := ""
 	if result != nil && result.Terminal != nil {
 		terminalID = result.Terminal.ID()
+	}
+
+	if result != nil && result.NeedsUserAction {
+		output := fmt.Sprintf("任务已创建并暂停等待用户确认\nID: %s\n终端ID: %s\n提示: %s", task.ID, terminalID, strings.TrimSpace(result.UserActionHint))
+		return &ToolResult{
+			Success: true,
+			Output:  output,
+			Data:    map[string]string{"task_id": task.ID, "terminal_id": terminalID},
+		}
 	}
 
 	return &ToolResult{

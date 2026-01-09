@@ -200,7 +200,7 @@ const manualResponses = reactive<Record<string, string>>({})
 const respondingMap = reactive<Record<string, boolean>>({})
 
 const pendingApprovals = computed(() =>
-  [...approvalStore.pendingApprovals.value].sort((a, b) => b.receivedAt - a.receivedAt)
+  [...approvalStore.pendingApprovals].sort((a, b) => b.receivedAt - a.receivedAt)
 )
 
 const unreadCount = computed(() => pendingApprovals.value.length)

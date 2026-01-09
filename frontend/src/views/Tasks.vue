@@ -313,8 +313,12 @@ function openTerminal(terminalId: string) {
 
 async function startTask(task: any) {
   try {
-    await taskStore.startTask(task.id)
-    message.success('任务已启动')
+    const result = await taskStore.startTask(task.id)
+    if (result?.needs_user_action) {
+      message.warning(result.user_action_hint || '任务已暂停，等待用户确认')
+    } else {
+      message.success('任务已启动')
+    }
     fetchData()
   } catch (e: any) {
     message.error(e.message || '启动失败')
@@ -333,7 +337,8 @@ async function deleteTask(taskId: string) {
 onMounted(fetchData)
 
 function updateIsMobile() {
-  isMobile.value = window.innerWidth <= 768
+  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
 }
 
 onMounted(() => {

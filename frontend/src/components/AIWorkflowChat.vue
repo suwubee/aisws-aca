@@ -100,6 +100,21 @@
               >
                 {{ activeSession.summary }}
               </n-alert>
+
+              <div v-if="activeSession.status === 'paused'" class="resume-panel">
+                <n-input
+                  v-model:value="resumeMessage"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  placeholder="补充信息/确认后继续（Ctrl+Enter 发送）"
+                  @keydown.ctrl.enter.prevent="resumeWorkflow"
+                />
+                <n-space justify="end" style="margin-top: 8px">
+                  <n-button size="small" :loading="resuming" :disabled="!resumeMessage.trim()" type="primary" @click="resumeWorkflow">
+                    继续执行
+                  </n-button>
+                </n-space>
+              </div>
             </div>
 
             <n-empty v-if="!activeSession.steps?.length" description="暂无步骤" />
@@ -144,7 +159,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
-import { getAIWorkflowSession, listAIWorkflowSessions, startAIWorkflow, type AIWorkflowSession } from '@/api/ai-workflow'
+import { getAIWorkflowSession, listAIWorkflowSessions, postAIWorkflowMessage, startAIWorkflow, type AIWorkflowSession } from '@/api/ai-workflow'
 
 type SessionListItem = {
   id: string
@@ -157,6 +172,8 @@ const message = useMessage()
 
 const goal = ref('')
 const starting = ref(false)
+const resumeMessage = ref('')
+const resuming = ref(false)
 
 const sessions = ref<SessionListItem[]>([])
 const loadingSessions = ref(false)
@@ -165,7 +182,7 @@ const activeSessionId = ref<string | null>(null)
 const activeSession = ref<AIWorkflowSession | null>(null)
 const loadingSession = ref(false)
 
-const terminalStatuses = new Set(['completed', 'failed', 'cancelled'])
+const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'paused'])
 const pollIntervalMs = 2000
 
 let pollTimer: number | null = null
@@ -264,7 +281,31 @@ async function selectSession(id: string) {
 
   activeSessionId.value = nextId
   activeSession.value = null
+  resumeMessage.value = ''
   await refreshActive(true)
+}
+
+async function resumeWorkflow() {
+  const id = activeSessionId.value
+  if (!id) return
+  const text = safeText(resumeMessage.value)
+  if (!text) {
+    message.warning('请输入补充信息')
+    return
+  }
+
+  resuming.value = true
+  try {
+    await postAIWorkflowMessage(id, text)
+    resumeMessage.value = ''
+    await fetchSessions({ silent: true })
+    await refreshActive(true)
+    message.success('已提交，工作流继续执行')
+  } catch (e: any) {
+    message.error(normalizeError(e, '提交失败'))
+  } finally {
+    resuming.value = false
+  }
 }
 
 async function startWorkflow() {
@@ -280,6 +321,7 @@ async function startWorkflow() {
     const id = safeText(data?.session_id)
     if (!id) throw new Error('invalid start response')
     goal.value = ''
+    resumeMessage.value = ''
     await fetchSessions({ silent: true })
     await selectSession(id)
     message.success('工作流已启动')

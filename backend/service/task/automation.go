@@ -172,11 +172,13 @@ func buildManagedPrompt(task *model.Task) string {
 
 // StartTaskResult 启动任务结果
 type StartTaskResult struct {
-	Task       *model.Task  `json:"task"`
-	Terminal   taskTerminal `json:"terminal"`
-	WorkDir    string       `json:"work_dir"`
-	CLIStarted bool         `json:"cli_started"`
-	Error      string       `json:"error,omitempty"`
+	Task            *model.Task  `json:"task"`
+	Terminal        taskTerminal `json:"terminal"`
+	WorkDir         string       `json:"work_dir"`
+	CLIStarted      bool         `json:"cli_started"`
+	NeedsUserAction bool         `json:"needs_user_action,omitempty"`
+	UserActionHint  string       `json:"user_action_hint,omitempty"`
+	Error           string       `json:"error,omitempty"`
 }
 
 // StartTask 启动自动化任务
@@ -302,6 +304,45 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		termSession.BroadcastAILog("action", fmt.Sprintf("启动 %s CLI", cliConfig.Type))
 	}
 
+	pauseForUserAction := func(hint string) {
+		text := strings.TrimSpace(hint)
+		if text == "" {
+			text = "需要用户确认后继续"
+		}
+
+		result.NeedsUserAction = true
+		result.UserActionHint = text
+
+		if termSession, ok := session.(*terminal.Session); ok {
+			termSession.BroadcastAILog("warning", text)
+		}
+
+		s.updateTaskStatus(task.ID, "paused", text)
+		s.createTaskMessage(task.ID, session.ID(), "approval_needed", "需要确认：CLI 启动方式", text)
+	}
+
+	// 快速判断：命令不存在时不要继续发送提示，避免把 prompt 当作 shell 命令执行
+	if termSession, ok := session.(*terminal.Session); ok {
+		sleep(800 * time.Millisecond)
+		scroll := strings.ToLower(string(termSession.Scrollback()))
+		cmdLower := strings.ToLower(strings.TrimSpace(cliConfig.Command))
+		if cmdLower != "" && (strings.Contains(scroll, cmdLower+": command not found") || strings.Contains(scroll, cmdLower+": not found") || strings.Contains(scroll, "command not found: "+cmdLower)) {
+			hint := "未检测到 CLI 命令可用：可能未安装或不在 PATH。\n"
+			switch strings.ToLower(strings.TrimSpace(cliConfig.Type)) {
+			case "claude":
+				hint += "请在终端中手动尝试执行：claude 或 npx claude（确认可进入 Claude Code 后再继续）。"
+			case "codex":
+				hint += "请确认 codex 已安装并可直接执行：codex。"
+			case "gemini":
+				hint += "请确认 gemini CLI 已安装并可直接执行：gemini。"
+			default:
+				hint += "请确认 CLI 已安装并可直接执行。"
+			}
+			pauseForUserAction(hint)
+			return result, nil
+		}
+	}
+
 	// 5. 如果有初始提示或AI托管模式，等待 CLI 启动后输入
 	promptToSend := task.InitialPrompt
 	if task.AIManaged {
@@ -309,6 +350,17 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 	}
 
 	if promptToSend != "" {
+		termSession, ok := session.(*terminal.Session)
+		if !ok {
+			// 无法读取元数据/scrollback 时，降级为直接写入提示（保持与旧行为一致，避免卡住）
+			promptWithEnter := promptToSend + "\r"
+			if err := session.Write([]byte(promptWithEnter)); err != nil {
+				utils.Warn("Failed to send prompt via PTY fallback", zap.Error(err))
+			}
+			utils.Info("Prompt sent via PTY fallback (no terminal metadata)")
+			goto PROMPT_SENT
+		}
+
 		// 使用detector检测CLI是否准备好
 		maxWait := 30 * time.Second
 		checkInterval := 500 * time.Millisecond
@@ -320,42 +372,44 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		for time.Since(startTime) < maxWait {
 			sleep(checkInterval)
 			// 检查终端元数据中的AI状态
-			if termSession, ok := session.(*terminal.Session); ok {
-				if meta := termSession.Metadata(); meta != nil && meta.AIAssistant != nil {
-					utils.Debug("CLI state check",
-						zap.Bool("detected", meta.AIAssistant.Detected),
-						zap.String("state", meta.AIAssistant.State))
-					if meta.AIAssistant.Detected {
-						state := meta.AIAssistant.State
-						if state == "waiting_input" || state == "working" {
-							cliReady = true
-							utils.Info("CLI ready detected", zap.String("state", state))
-							break
-						}
+			if meta := termSession.Metadata(); meta != nil && meta.AIAssistant != nil {
+				utils.Debug("CLI state check",
+					zap.Bool("detected", meta.AIAssistant.Detected),
+					zap.String("state", meta.AIAssistant.State))
+				if meta.AIAssistant.Detected {
+					state := meta.AIAssistant.State
+					if state == "waiting_input" || state == "working" {
+						cliReady = true
+						utils.Info("CLI ready detected", zap.String("state", state))
+						break
 					}
 				}
-			} else {
-				utils.Warn("Type assertion failed for terminal.Session")
 			}
 		}
 
 		if !cliReady {
-			utils.Warn("CLI ready timeout, sending prompt anyway")
-			if termSession, ok := session.(*terminal.Session); ok {
-				termSession.BroadcastAILog("info", "CLI就绪检测超时，继续发送提示")
+			utils.Warn("CLI ready timeout, pausing task instead of sending prompt")
+			hint := "CLI 就绪检测超时：未能确认已进入 AI CLI 交互界面，已暂停任务以避免误操作。\n"
+			switch strings.ToLower(strings.TrimSpace(cliConfig.Type)) {
+			case "claude":
+				hint += "请打开终端确认已进入 Claude Code（可尝试执行 claude 或 npx claude），然后再继续。"
+			case "codex":
+				hint += "请打开终端确认已进入 Codex CLI（可尝试执行 codex），然后再继续。"
+			case "gemini":
+				hint += "请打开终端确认已进入 Gemini CLI（可尝试执行 gemini），然后再继续。"
+			default:
+				hint += "请打开终端确认已进入目标 CLI，然后再继续。"
 			}
-		} else {
-			if termSession, ok := session.(*terminal.Session); ok {
-				termSession.BroadcastAILog("info", "CLI已就绪，准备发送提示")
-			}
+			pauseForUserAction(hint)
+			return result, nil
 		}
+
+		termSession.BroadcastAILog("info", "CLI已就绪，准备发送提示")
 
 		// 获取 tmux 会话名称
 		var tmuxSession string
-		if termSession, ok := session.(*terminal.Session); ok {
-			if meta := termSession.Metadata(); meta != nil {
-				tmuxSession = meta.TmuxSession
-			}
+		if meta := termSession.Metadata(); meta != nil {
+			tmuxSession = meta.TmuxSession
 		}
 
 		// 优先使用 tmux send-keys（指定完整目标）
@@ -396,15 +450,17 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 					termSession.BroadcastAILogWithInput("action", "发送回车，任务开始执行", "key", "Ctrl+M")
 				}
 			}
-		} else {
-			// 回退：直接写入 PTY
-			utils.Info("Using PTY fallback")
-			promptWithEnter := promptToSend + "\r"
-			if err := session.Write([]byte(promptWithEnter)); err != nil {
-				utils.Warn("Failed to send via PTY", zap.Error(err))
+			} else {
+				// 回退：直接写入 PTY
+				utils.Info("Using PTY fallback")
+				promptWithEnter := promptToSend + "\r"
+				if err := session.Write([]byte(promptWithEnter)); err != nil {
+					utils.Warn("Failed to send via PTY", zap.Error(err))
+				}
 			}
-		}
 	}
+
+PROMPT_SENT:
 
 	utils.Info("Task automation started",
 		zap.String("task_id", task.ID),

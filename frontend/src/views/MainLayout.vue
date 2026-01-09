@@ -269,7 +269,8 @@ onMounted(() => {
 })
 
 function updateIsMobile() {
-  isMobile.value = window.innerWidth <= 768
+  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
   if (!isMobile.value) {
     showMobileMenu.value = false
   }

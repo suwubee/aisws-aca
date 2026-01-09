@@ -1,8 +1,8 @@
 <template>
   <div class="ai-decision-log">
-    <div class="header">
+      <div class="header">
       <span class="title">AI 决策日志</span>
-      <n-space align="center" size="small">
+      <n-space align="center" size="small" wrap>
         <n-select
           v-model:value="selectedTerminalId"
           size="small"
@@ -11,7 +11,7 @@
           :loading="loadingTerminals"
           :options="terminalOptions"
           placeholder="按终端ID筛选"
-          style="width: 260px"
+          style="width: min(260px, 70vw)"
           @update:value="handleTerminalChange"
         />
         <n-button size="small" quaternary @click="refresh" :loading="loadingRecords">
@@ -21,6 +21,7 @@
     </div>
 
     <n-data-table
+      v-if="!isMobile"
       :columns="columns"
       :data="rows"
       :loading="loadingRecords"
@@ -28,6 +29,43 @@
       size="small"
       striped
     />
+
+    <div v-else class="mobile-cards">
+      <n-spin :show="loadingRecords">
+        <n-space v-if="rows.length > 0" vertical size="12">
+          <n-card
+            v-for="row in rows"
+            :key="row.id"
+            size="small"
+            class="mobile-card"
+          >
+            <template #header>
+              <div class="mobile-card__header">
+                <n-tag
+                  size="small"
+                  :bordered="false"
+                  :type="actionTagType(row.action_display) as any"
+                >
+                  {{ row.action_display || '—' }}
+                </n-tag>
+                <span class="mobile-card__time">{{ formatDateTime(row.created_at) }}</span>
+              </div>
+            </template>
+
+            <div class="mobile-card__meta">
+              <span class="label">终端</span>
+              <span class="value">{{ row.terminal_label }}</span>
+            </div>
+            <div class="mobile-card__meta">
+              <span class="label">置信度</span>
+              <span class="value">{{ row.confidence_display }}</span>
+            </div>
+            <pre class="mobile-card__reason">{{ row.reasoning_display }}</pre>
+          </n-card>
+        </n-space>
+        <n-empty v-else description="暂无记录" />
+      </n-spin>
+    </div>
 
     <div class="footer">
       <n-pagination
@@ -45,8 +83,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
-import { NButton, NDataTable, NPagination, NSelect, NSpace, NTag, useMessage } from 'naive-ui'
+import { computed, h, onMounted, onUnmounted, ref } from 'vue'
+import { NButton, NCard, NDataTable, NEmpty, NPagination, NSelect, NSpace, NSpin, NTag, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { automationApi, terminalApi } from '@/api'
 
@@ -96,6 +134,7 @@ const loadingRecords = ref(false)
 const page = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
+const isMobile = ref(false)
 
 const terminalLabelMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
@@ -385,9 +424,20 @@ function handlePageSizeChange(nextPageSize: number) {
 }
 
 onMounted(() => {
+  updateIsMobile()
+  window.addEventListener('resize', updateIsMobile)
   fetchTerminals()
   fetchRecords()
 })
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
+})
+
+function updateIsMobile() {
+  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
+}
 </script>
 
 <style scoped>
@@ -411,5 +461,59 @@ onMounted(() => {
 .footer {
   display: flex;
   justify-content: flex-end;
+}
+
+.mobile-cards {
+  padding: 4px 0;
+}
+
+.mobile-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobile-card__time {
+  font-size: 12px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.mobile-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.mobile-card__meta .label {
+  color: #9ca3af;
+  width: 64px;
+  flex-shrink: 0;
+}
+
+.mobile-card__meta .value {
+  color: #e5e7eb;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-card__reason {
+  margin: 10px 0 0 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 10px 12px;
+  max-height: 40vh;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 </style>

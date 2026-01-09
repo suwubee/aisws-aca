@@ -284,7 +284,11 @@ async function ensureServerLoaded(serverId?: string | null) {
 async function handleStartTask() {
   try {
     const result = await taskStore.startTask(taskId.value)
-    message.success('任务已启动')
+    if (result?.needs_user_action) {
+      message.warning(result.user_action_hint || '任务已暂停，等待用户确认')
+    } else {
+      message.success('任务已启动')
+    }
     if (result.terminal_id) {
       await terminalStore.fetchTerminals()
       terminalStore.setActiveTerminal(result.terminal_id)

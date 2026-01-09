@@ -72,3 +72,33 @@ func ListAIWorkflowSessions(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"items": sessions})
 }
+
+// PostAIWorkflowMessage appends a user message and resumes a paused session.
+// POST /api/ai-workflow/session/:id/message
+func PostAIWorkflowMessage(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "session id required"})
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	if aiWorkflowEngine == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
+	}
+
+	session, err := aiWorkflowEngine.ResumeWorkflow(c.Context(), id, req.Message)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "已提交补充信息，工作流继续执行",
+		"session": session,
+	})
+}

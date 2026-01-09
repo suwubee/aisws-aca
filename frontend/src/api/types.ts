@@ -192,6 +192,8 @@ export interface StartTaskResponse {
   terminal_id: string
   work_dir: string
   cli_started: boolean
+  needs_user_action?: boolean
+  user_action_hint?: string
 }
 
 // ===== Comments =====

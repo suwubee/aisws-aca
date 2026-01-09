@@ -38,9 +38,9 @@ type ToolResult struct {
 	Data       any    `json:"data,omitempty"`
 }
 
-// GetAvailableTools returns all available tool definitions
-func GetAvailableTools() []ToolDefinition {
-	return []ToolDefinition{
+	// GetAvailableTools returns all available tool definitions
+	func GetAvailableTools() []ToolDefinition {
+		return []ToolDefinition{
 		{
 			Name:        "list_servers",
 			Description: "列出所有可用的服务器",
@@ -54,19 +54,19 @@ func GetAvailableTools() []ToolDefinition {
 			},
 			Required: []string{"server_id"},
 		},
-		{
-			Name:        "create_task",
-			Description: "创建一个新任务",
-			Parameters: map[string]ToolParam{
-				"title":          {Type: "string", Description: "任务标题"},
-				"description":    {Type: "string", Description: "任务描述"},
-				"server_id":      {Type: "string", Description: "目标服务器ID（可选）"},
-				"work_dir":       {Type: "string", Description: "工作目录"},
-				"cli_type":       {Type: "string", Description: "CLI类型", Enum: []string{"claude", "cursor", "aider"}, Default: "claude"},
-				"initial_prompt": {Type: "string", Description: "初始提示词"},
+			{
+				Name:        "create_task",
+				Description: "创建一个新任务",
+				Parameters: map[string]ToolParam{
+					"title":          {Type: "string", Description: "任务标题"},
+					"description":    {Type: "string", Description: "任务描述"},
+					"server_id":      {Type: "string", Description: "目标服务器ID（可选）"},
+					"work_dir":       {Type: "string", Description: "工作目录"},
+					"cli_type":       {Type: "string", Description: "CLI类型", Enum: []string{"claude", "codex", "gemini"}, Default: "claude"},
+					"initial_prompt": {Type: "string", Description: "初始提示词"},
+				},
+				Required: []string{"title"},
 			},
-			Required: []string{"title"},
-		},
 		{
 			Name:        "start_task",
 			Description: "启动一个已创建的任务",
@@ -115,20 +115,29 @@ func GetAvailableTools() []ToolDefinition {
 			},
 			Required: []string{"terminal_id"},
 		},
-		{
-			Name:        "wait",
-			Description: "等待指定时间",
-			Parameters: map[string]ToolParam{
-				"seconds": {Type: "integer", Description: "等待秒数", Default: 5},
-				"reason":  {Type: "string", Description: "等待原因"},
+			{
+				Name:        "wait",
+				Description: "等待指定时间",
+				Parameters: map[string]ToolParam{
+					"seconds": {Type: "integer", Description: "等待秒数", Default: 5},
+					"reason":  {Type: "string", Description: "等待原因"},
+				},
+				Required: []string{"seconds"},
 			},
-			Required: []string{"seconds"},
-		},
-		{
-			Name:        "complete_workflow",
-			Description: "标记工作流完成",
-			Parameters: map[string]ToolParam{
-				"summary": {Type: "string", Description: "完成总结"},
+			{
+				Name:        "ask_user",
+				Description: "当信息不足或需要用户确认时，暂停工作流并向用户提问（用户回复后可继续）",
+				Parameters: map[string]ToolParam{
+					"question": {Type: "string", Description: "要向用户确认的问题（尽量给出明确选项）"},
+					"context":  {Type: "string", Description: "补充上下文（可选）"},
+				},
+				Required: []string{"question"},
+			},
+			{
+				Name:        "complete_workflow",
+				Description: "标记工作流完成",
+				Parameters: map[string]ToolParam{
+					"summary": {Type: "string", Description: "完成总结"},
 				"status":  {Type: "string", Description: "完成状态", Enum: []string{"success", "partial", "failed"}, Default: "success"},
 			},
 			Required: []string{"summary"},
@@ -136,8 +145,8 @@ func GetAvailableTools() []ToolDefinition {
 	}
 }
 
-// ReActSystemPrompt returns the ReAct framework system prompt
-const ReActSystemPrompt = `你是一个智能DevOps助手，使用ReAct（Reasoning + Acting）框架来完成任务。
+	// ReActSystemPrompt returns the ReAct framework system prompt
+	const ReActSystemPrompt = `你是一个智能DevOps助手，使用ReAct（Reasoning + Acting）框架来完成任务。
 
 ## 工作模式
 你需要按照以下循环工作：
@@ -167,14 +176,21 @@ const ReActSystemPrompt = `你是一个智能DevOps助手，使用ReAct（Reason
 {"status": "success|partial|failed", "summary": "完成总结"}
 </complete>
 
-## 重要规则
-1. 每次只能执行一个action
-2. 必须等待observation后再继续下一步
-3. 遇到错误时，分析原因并尝试修复
-4. 不要假设执行结果，必须等待实际反馈
-5. 任务完成后必须使用<complete>标签结束
+	## 重要规则
+	1. 每次只能执行一个action
+	2. 必须等待observation后再继续下一步
+	3. 遇到错误时，分析原因并尝试修复
+	4. 不要假设执行结果，必须等待实际反馈
+	5. 任务完成后必须使用<complete>标签结束
 
-`
+	## ACA 平台背景（必须遵守）
+	- 你运行在 AI Coding Assistant（ACA）的“AI 工作流”中，可通过工具创建任务/启动任务/查看日志。
+	- 若用户明确要求使用某个 AI Coding Agent CLI（如 Claude Code / Codex / Gemini CLI）：
+	  - 必须优先使用 create_task + start_task，让对应 CLI 在终端中执行；不要用 execute_command 直接绕过 CLI 完成交付（除非用户明确要求“直接执行命令”）。
+	  - Claude Code 常见启动命令是 claude；如果环境未安装，可能需要 npx claude。当你无法确认应使用哪一个，先用 ask_user 向用户确认，而不是自行猜测。
+	  - start_task 之后必须通过 check_task_status / get_terminal_logs 验证任务确实在运行；若 CLI 未启动或卡住，使用 ask_user 请求用户补充信息/确认安装情况。
+
+	`
 
 // ParsedResponse represents parsed AI response
 type ParsedResponse struct {

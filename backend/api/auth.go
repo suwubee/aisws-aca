@@ -310,25 +310,94 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 		closeErr = ctrl.terminalManager.CloseAllSessions()
 	}
 
-	// 按依赖顺序清理（子表 -> 父表），并兼容旧库/旧表缺失的情况
-	tables := []string{
+	protectedTables := map[string]struct{}{
+		"users":             {},
+		"schema_migrations": {}, // 保留迁移记录，避免重复执行迁移
+	}
+
+	// 按依赖顺序清理（子表 -> 父表），并清理所有业务数据表（默认保留用户表与内置模板）
+	ordered := []string{
 		"logs",
 		"approval_records",
 		"ai_sessions",
 		"messages",
 		"terminal_sessions",
+		"comments",
+		"workflow_runs",
+		"workflow_nodes",
+		"workflows",
+		"ai_workflow_sessions",
 		"tasks",
+		"projects",
+		"cli_profiles",
+		"secrets",
+		"ssh_servers",
+		"server_groups",
+		"ai_provider_configs",
+		"agent_configs",
+		"rule_sets",
+		"workflow_templates", // 保留内置模板，仅删除自定义模板
 	}
 
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		tables, err := tx.Migrator().GetTables()
+		if err != nil {
+			return err
+		}
+
+		present := make(map[string]struct{}, len(tables))
 		for _, table := range tables {
-			if !tx.Migrator().HasTable(table) {
+			name := strings.TrimSpace(table)
+			if name == "" {
 				continue
 			}
-			if err := tx.Exec("DELETE FROM " + table).Error; err != nil {
+			present[name] = struct{}{}
+		}
+
+		handled := make(map[string]struct{}, len(present))
+
+		deleteAll := func(table string) error {
+			return tx.Exec("DELETE FROM " + table).Error
+		}
+
+		for _, table := range ordered {
+			if _, ok := present[table]; !ok {
+				continue
+			}
+			handled[table] = struct{}{}
+			if _, ok := protectedTables[table]; ok {
+				continue
+			}
+			if strings.HasPrefix(table, "sqlite_") {
+				continue
+			}
+			if table == "workflow_templates" {
+				if err := tx.Exec("DELETE FROM workflow_templates WHERE is_builtin = ?", false).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if err := deleteAll(table); err != nil {
 				return err
 			}
 		}
+
+		// 清理未列入 ordered 的其他业务表，避免漏删（保留 protectedTables 与 sqlite 内置表）
+		for table := range present {
+			if _, ok := handled[table]; ok {
+				continue
+			}
+			if _, ok := protectedTables[table]; ok {
+				continue
+			}
+			if strings.HasPrefix(table, "sqlite_") {
+				continue
+			}
+			if err := deleteAll(table); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to reset data"})

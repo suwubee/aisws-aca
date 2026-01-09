@@ -288,6 +288,8 @@ function handleMenuSelect(key: string) {
 .task-meta {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
 .terminal-badge {
