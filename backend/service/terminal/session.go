@@ -560,7 +560,7 @@ func (s *Session) handleApproval(output string) {
 			zap.String("action", string(result.Action)),
 			zap.String("input", result.Input))
 
-		if err := s.Write([]byte(result.Input)); err != nil {
+		if err := s.sendApprovalInput(result.Input); err != nil {
 			utils.Error("Failed to write approval input", zap.Error(err))
 		} else {
 			approvalEvent.AutoHandled = true
@@ -618,6 +618,71 @@ func (s *Session) handleApproval(output string) {
 		Message:        recordPrompt,
 		ApprovalResult: approvalEvent,
 	})
+}
+
+// sendApprovalInput sends auto-approval input to the terminal.
+//
+// For tmux-backed sessions, use `tmux send-keys C-m` for a single Enter to avoid
+// edge cases where writing a raw newline-like byte does not confirm selection UIs
+// (e.g., Claude Code trust prompt: "Enter to confirm").
+func (s *Session) sendApprovalInput(input string) error {
+	normalized := normalizeApprovalEnterInput(input)
+	if normalized == "\r" {
+		tmuxSession := s.currentTmuxSession()
+		if tmuxSession != "" {
+			// Keep input logs consistent even when bypassing PTY write.
+			s.addInputLog([]byte("\r"))
+
+			target := tmuxSession + ":0.0"
+			if err := sendTmuxKeys(target, "C-m", false); err == nil {
+				utils.Info("Approval input sent via tmux key",
+					zap.String("terminal", s.id),
+					zap.String("target", target),
+					zap.String("key", "C-m"))
+				return nil
+			} else {
+				utils.Warn("tmux send-keys for approval failed, falling back to PTY write",
+					zap.String("terminal", s.id),
+					zap.String("target", target),
+					zap.Error(err))
+			}
+		}
+	}
+	return s.Write([]byte(input))
+}
+
+func (s *Session) currentTmuxSession() string {
+	s.metaMutex.RLock()
+	tmuxSession := strings.TrimSpace(s.metadata.TmuxSession)
+	s.metaMutex.RUnlock()
+	return tmuxSession
+}
+
+func normalizeApprovalEnterInput(input string) string {
+	// Normalize common variants (some callers may pass \n or \r\n).
+	normalized := strings.ReplaceAll(input, "\r\n", "\r")
+	normalized = strings.ReplaceAll(normalized, "\n", "\r")
+	return normalized
+}
+
+func sendTmuxKeys(target string, keys string, literal bool) error {
+	args := []string{"send-keys", "-t", target}
+	if literal {
+		args = append(args, "-l")
+	}
+	args = append(args, "--", keys)
+
+	cmd := execCommand("tmux", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		utils.Warn("tmux send-keys failed",
+			zap.String("target", target),
+			zap.String("keys", keys),
+			zap.String("output", string(out)),
+			zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // wait 等待进程退出
