@@ -33,6 +33,8 @@ func InitDB(dsn string) error {
 		&PromptTemplate{},
 		&PromptTemplatePreset{},
 		&KeyBinding{},
+		&ScheduledJob{},
+		&ScheduledJobRun{},
 		&Comment{},
 		&Secret{},
 		&SSHServer{},

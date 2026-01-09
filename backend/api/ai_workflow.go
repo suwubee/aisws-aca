@@ -9,8 +9,9 @@ import (
 var aiWorkflowEngine *workflow.AIWorkflowEngine
 
 // InitAIWorkflowEngine initializes the AI workflow engine
-func InitAIWorkflowEngine(toolExecutor *workflow.ToolExecutor) {
+func InitAIWorkflowEngine(toolExecutor *workflow.ToolExecutor) *workflow.AIWorkflowEngine {
 	aiWorkflowEngine = workflow.NewAIWorkflowEngine(toolExecutor)
+	return aiWorkflowEngine
 }
 
 // StartAIWorkflow starts an AI-driven workflow

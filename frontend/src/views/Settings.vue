@@ -219,6 +219,17 @@
         </div>
       </n-tab-pane>
 
+      <!-- 计划任务 -->
+      <n-tab-pane name="schedules" tab="计划任务">
+        <div class="section">
+          <div class="section-header">
+            <span>计划任务</span>
+            <n-text depth="3">支持 cron / 单次定时，运行任务或 AI 工作流</n-text>
+          </div>
+          <ScheduledJobs />
+        </div>
+      </n-tab-pane>
+
       <!-- 提示词模板 -->
       <n-tab-pane name="prompt-templates" tab="提示词模板">
         <div class="section">
@@ -347,6 +358,7 @@ import KeyBindings from '@/components/KeyBindings.vue'
 import LogExport from '@/components/LogExport.vue'
 import PromptTemplates from '@/components/PromptTemplates.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
+import ScheduledJobs from '@/components/ScheduledJobs.vue'
 import UserManagement from '@/components/UserManagement.vue'
 
 // Types

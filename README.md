@@ -7,6 +7,7 @@
 - **单用户登录认证** - 简单安全的用户认证
 - **终端托管** - PTY会话管理，支持多终端并行
 - **Kanban任务看板** - 可视化任务状态管理
+- **计划任务（Cron）** - 定时运行任务或 AI 工作流（cron/单次）
 - **AI代理检测** - 自动检测Claude Code等AI工具的运行状态
 - **自动化审批接口** - 预留OpenAI API集成接口，支持自动化审批
 
@@ -122,6 +123,15 @@ ai-coding-assistant/
 - `POST /api/automation/execute` - 执行命令
 - `GET /api/automation/config` - 获取配置
 - `PUT /api/automation/config` - 更新配置
+
+### 计划任务
+- `GET /api/schedules` - 获取计划任务列表
+- `POST /api/schedules` - 创建计划任务
+- `GET /api/schedules/:id` - 获取计划任务详情
+- `PUT /api/schedules/:id` - 更新计划任务
+- `DELETE /api/schedules/:id` - 删除计划任务
+- `POST /api/schedules/:id/run` - 立即运行一次
+- `GET /api/schedules/:id/runs` - 获取运行记录
 
 ## 环境变量
 

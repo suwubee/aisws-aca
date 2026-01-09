@@ -201,6 +201,17 @@ export const keyBindingApi = {
   reset: (id: string) => api.post(`/key-bindings/${encodeURIComponent(id)}/reset`)
 }
 
+export const scheduleApi = {
+  list: () => api.get('/schedules'),
+  get: (id: string) => api.get(`/schedules/${encodeURIComponent(id)}`),
+  create: (payload: any) => api.post('/schedules', payload),
+  update: (id: string, payload: any) => api.put(`/schedules/${encodeURIComponent(id)}`, payload),
+  delete: (id: string) => api.delete(`/schedules/${encodeURIComponent(id)}`),
+  runNow: (id: string) => api.post(`/schedules/${encodeURIComponent(id)}/run`),
+  listRuns: (id: string, params?: { limit?: number; offset?: number }) =>
+    api.get(`/schedules/${encodeURIComponent(id)}/runs`, { params })
+}
+
 export type * from './types'
 
 export default api

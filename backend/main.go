@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ai-coding-assistant/api"
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/schedule"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/service/terminal"
@@ -164,12 +166,24 @@ func main() {
 	sshManager := sshservice.NewSSHManager(cfg.Auth.JWTSecret)
 	automationService := task.NewAutomationService(terminalManager)
 	toolExecutor := workflow.NewToolExecutor(sshManager, automationService, workflow.NewTerminalManagerAdapter(terminalManager))
-	api.InitAIWorkflowEngine(toolExecutor)
+	aiWorkflowEngine := api.InitAIWorkflowEngine(toolExecutor)
 	aiWorkflowGroup := apiGroup.Group("/ai-workflow")
 	aiWorkflowGroup.Post("/start", api.StartAIWorkflow)
 	aiWorkflowGroup.Get("/session/:id", api.GetAIWorkflowSession)
 	aiWorkflowGroup.Post("/session/:id/message", api.PostAIWorkflowMessage)
 	aiWorkflowGroup.Get("/sessions", api.ListAIWorkflowSessions)
+
+	// 计划任务调度器（cron/定时运行任务或 AI 工作流）
+	scheduleExecutor := schedule.DefaultExecutor{
+		Automation: automationService,
+		AIWorkflow: aiWorkflowEngine,
+	}
+	scheduleManager := schedule.NewManager(scheduleExecutor, 15*time.Second)
+	scheduleManager.Start()
+	defer scheduleManager.Stop()
+
+	scheduleController := api.NewScheduleController(scheduleManager)
+	scheduleController.RegisterRoutes(apiGroup)
 
 	// 静态文件服务
 	staticFS, err := fs.Sub(staticFiles, "static")

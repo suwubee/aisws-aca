@@ -359,6 +359,8 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	assertTableCount(t, &model.AIProviderConfig{}, 0)
 	assertTableCount(t, &model.AgentConfig{}, 0)
 	assertTableCount(t, &model.RuleSet{}, 0)
+	assertTableCount(t, &model.ScheduledJob{}, 0)
+	assertTableCount(t, &model.ScheduledJobRun{}, 0)
 
 	// Builtin templates should remain, while custom templates should be deleted.
 	var tplCount int64
