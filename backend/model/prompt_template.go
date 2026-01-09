@@ -10,6 +10,9 @@ type PromptTemplate struct {
 	Description string      `json:"description"`
 	Template    string      `gorm:"type:text" json:"template"`
 	Variables   StringArray `gorm:"type:text" json:"variables"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	// ActivePresetID indicates which preset is currently applied to this template.
+	// Empty means the template is manually edited or reset without tracking.
+	ActivePresetID string    `gorm:"index" json:"active_preset_id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }

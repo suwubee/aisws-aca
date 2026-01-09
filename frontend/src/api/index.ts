@@ -181,7 +181,16 @@ export const promptTemplateApi = {
   get: (key: string) => api.get(`/prompt-templates/${encodeURIComponent(key)}`),
   update: (key: string, template: string) =>
     api.put(`/prompt-templates/${encodeURIComponent(key)}`, { template }),
-  reset: (key: string) => api.post(`/prompt-templates/${encodeURIComponent(key)}/reset`)
+  reset: (key: string) => api.post(`/prompt-templates/${encodeURIComponent(key)}/reset`),
+
+  listPresets: (key: string) =>
+    api.get(`/prompt-templates/${encodeURIComponent(key)}/presets`),
+  createPreset: (key: string, payload: { name: string; description?: string; template: string }) =>
+    api.post(`/prompt-templates/${encodeURIComponent(key)}/presets`, payload),
+  applyPreset: (key: string, presetId: string) =>
+    api.post(`/prompt-templates/${encodeURIComponent(key)}/presets/${encodeURIComponent(presetId)}/apply`),
+  deletePreset: (key: string, presetId: string) =>
+    api.delete(`/prompt-templates/${encodeURIComponent(key)}/presets/${encodeURIComponent(presetId)}`)
 }
 
 export type * from './types'

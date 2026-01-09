@@ -119,6 +119,10 @@
                 <n-space vertical style="width: 100%">
                   <n-select v-model:value="defaultAutomation.aiProviderId" :options="providerOptions" placeholder="选择AI Provider（可选）" clearable />
                   <n-input v-model:value="defaultAutomation.aiPrompt" type="textarea" :rows="3" placeholder="AI判断提示词（可选）" />
+                  <n-text depth="3" style="font-size: 12px">
+                    提示：此处为规则集的 AI 规则补充（会注入到全局审批系统提示词的变量 <n-text code>extra_rules</n-text>）。
+                    全局系统提示词请在「提示词模板」中配置。
+                  </n-text>
                 </n-space>
               </n-form-item>
 

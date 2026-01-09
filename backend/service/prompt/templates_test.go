@@ -37,6 +37,9 @@ func TestEnsureDefaults_CreatesTemplates(t *testing.T) {
 		if strings.TrimSpace(tpl.Template) == "" {
 			t.Fatalf("template %q should not be empty", key)
 		}
+		if strings.TrimSpace(tpl.ActivePresetID) == "" {
+			t.Fatalf("template %q should have default active_preset_id", key)
+		}
 	}
 }
 

@@ -34,21 +34,21 @@ type builtinTemplate struct {
 var builtinTemplates = []builtinTemplate{
 	{
 		Key:         TemplateKeyApprovalSystemPrompt,
-		Name:        "审批：AI 系统提示词",
-		Description: "用于 AI 辅助审批的系统提示词模板；可通过变量 extra_rules 注入规则集的 ai_prompt。",
+		Name:        "AI 审核：系统提示词",
+		Description: "用于 AI 辅助审批（AI 审核终端输出/提示是否需要输入以及输入什么）的系统提示词模板；可通过变量 extra_rules 注入规则集的 ai_prompt。",
 		Variables:   []string{"extra_rules"},
 		File:        "defaults/approval_system_prompt.tmpl",
 	},
 	{
 		Key:         TemplateKeyTaskMonitorSystemPrompt,
-		Name:        "任务监控：AI 系统提示词",
-		Description: "用于任务监控（终端日志分析）的系统提示词模板。",
+		Name:        "任务监控：系统提示词",
+		Description: "用于任务监控（终端日志分析/状态判断）的系统提示词模板。",
 		Variables:   []string{"log_limit", "max_log_chars"},
 		File:        "defaults/task_monitor_system_prompt.tmpl",
 	},
 	{
 		Key:         TemplateKeyTaskManagedPrompt,
-		Name:        "任务托管：提示词模板",
+		Name:        "AI 任务：托管提示词模板",
 		Description: "用于 AI 托管模式下发送给 CLI 的提示词模板（由任务字段与完成标记渲染）。",
 		Variables:   []string{"task_initial_prompt", "task_ai_prompt", "task_ai_end_condition", "task_done_marker"},
 		File:        "defaults/task_managed_prompt.tmpl",
@@ -62,7 +62,7 @@ var builtinTemplates = []builtinTemplate{
 	},
 	{
 		Key:         TemplateKeyAIWorkflowUserGoalPrompt,
-		Name:        "AI 工作流：用户目标提示词",
+		Name:        "AI 工作流：用户目标包装模板",
 		Description: "用于 AI 工作流启动时包装用户目标的提示词模板。",
 		Variables:   []string{"user_goal"},
 		File:        "defaults/ai_workflow_user_goal_prompt.tmpl",
@@ -89,6 +89,9 @@ func EnsureDefaults() error {
 		return errors.New("database not initialized")
 	}
 	for _, t := range builtinTemplates {
+		if _, err := ensureDefaultPreset(model.DB, t.Key); err != nil {
+			return err
+		}
 		if err := ensureDefaultTemplate(model.DB, t.Key); err != nil {
 			return err
 		}
@@ -166,13 +169,15 @@ func UpdateTemplate(key string, templateText string) (*model.PromptTemplate, err
 	if err := model.DB.Model(&model.PromptTemplate{}).
 		Where("key = ?", item.Key).
 		Updates(map[string]any{
-			"template":   text,
-			"updated_at": now,
+			"template":         text,
+			"active_preset_id": "",
+			"updated_at":       now,
 		}).Error; err != nil {
 		return nil, err
 	}
 
 	item.Template = text
+	item.ActivePresetID = ""
 	item.UpdatedAt = now
 	return item, nil
 }
@@ -200,17 +205,24 @@ func ResetTemplateToDefault(key string) (*model.PromptTemplate, error) {
 		return nil, err
 	}
 
+	defaultPreset, err := ensureDefaultPreset(model.DB, k)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now()
 	if err := model.DB.Model(&model.PromptTemplate{}).
 		Where("key = ?", item.Key).
 		Updates(map[string]any{
-			"template":   defaultText,
-			"updated_at": now,
+			"template":         defaultText,
+			"active_preset_id": defaultPreset.ID,
+			"updated_at":       now,
 		}).Error; err != nil {
 		return nil, err
 	}
 
 	item.Template = defaultText
+	item.ActivePresetID = defaultPreset.ID
 	item.UpdatedAt = now
 	return item, nil
 }
@@ -273,19 +285,49 @@ func ensureDefaultTemplate(db *gorm.DB, key string) error {
 		return err
 	}
 
+	defaultPreset, err := ensureDefaultPreset(db, k)
+	if err != nil {
+		return err
+	}
+
 	now := time.Now()
 	record := &model.PromptTemplate{
-		Key:         def.Key,
-		Name:        def.Name,
-		Description: def.Description,
-		Template:    defaultText,
-		Variables:   model.StringArray(append([]string(nil), def.Variables...)),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Key:            def.Key,
+		Name:           def.Name,
+		Description:    def.Description,
+		Template:       defaultText,
+		Variables:      model.StringArray(append([]string(nil), def.Variables...)),
+		ActivePresetID: defaultPreset.ID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(record).Error; err != nil {
 		return err
+	}
+
+	// Keep metadata in sync (name/description/variables), without overriding template content.
+	if err := db.Model(&model.PromptTemplate{}).
+		Where("key = ?", def.Key).
+		Updates(map[string]any{
+			"name":        def.Name,
+			"description": def.Description,
+			"variables":   model.StringArray(append([]string(nil), def.Variables...)),
+		}).Error; err != nil {
+		return err
+	}
+
+	// Backfill active preset id only when template matches the builtin default content.
+	var existing model.PromptTemplate
+	if err := db.Select("key", "template", "active_preset_id").First(&existing, "key = ?", def.Key).Error; err != nil {
+		return err
+	}
+	if strings.TrimSpace(existing.ActivePresetID) == "" && strings.TrimSpace(existing.Template) == strings.TrimSpace(defaultText) {
+		if err := db.Model(&model.PromptTemplate{}).
+			Where("key = ?", def.Key).
+			Update("active_preset_id", defaultPreset.ID).Error; err != nil {
+			return err
+		}
 	}
 
 	return nil

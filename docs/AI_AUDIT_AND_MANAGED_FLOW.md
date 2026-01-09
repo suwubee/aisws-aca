@@ -14,6 +14,8 @@
 - **RuleSet（审批规则集）**：`backend/model/db.go` 中 `RuleSet`，支持 `manual/auto_yes/smart` 三种模式，并可配置黑白名单与 AI Provider。
 - **ApprovalRecord（审批记录）**：`backend/model/db.go` 中 `ApprovalRecord`，记录每次审批的提示片段/输入/规则命中/AI 决策说明。
 - **Message（消息中心）**：`backend/model/db.go` 中 `Message`，用于“需要干预/被阻止/告警”等通知类信息。
+- **PromptTemplate（提示词模板）**：`backend/model/prompt_template.go`，系统级提示词统一从数据库读取（非硬编码），支持变量渲染。
+- **PromptTemplatePreset（提示词方案）**：`backend/model/prompt_template_preset.go`，每个模板 Key 可保存多个命名方案，并可一键套用。
 
 **任务状态（建议按此理解）**
 
@@ -27,7 +29,36 @@
 
 ---
 
-## 2) AI 审核（审批）流程
+## 2) 提示词模板系统（全局配置，不再硬编码）
+
+### 2.1 设计目标
+
+- **避免硬编码**：所有系统级 AI 提示词从数据库读取；代码只保留“默认模板文件”（可恢复默认）。
+- **可编辑 + 可选择**：在前端系统设置中可直接编辑模板，并可创建/选择多个“方案（Preset）”。
+- **动态信息用变量注入**：规则集、日志上下文、任务字段等通过变量渲染进入模板（而不是拼接固定文案）。
+
+### 2.2 入口与 UI
+
+- 前端入口：系统设置 → `提示词模板`（管理员可见）
+- 后端 API（管理员）：`/api/prompt-templates`、`/api/prompt-templates/:key`、`/api/prompt-templates/:key/presets`
+
+### 2.3 当前内置模板 Key（与业务绑定点）
+
+- `approval.system_prompt`：AI 审核系统提示词（变量：`extra_rules`，来自规则集 `ai_prompt`）
+- `task_monitor.system_prompt`：任务监控系统提示词（变量：`log_limit`、`max_log_chars`）
+- `task.managed_prompt`：AI 任务托管提示词模板（变量：`task_initial_prompt`、`task_ai_prompt`、`task_ai_end_condition`、`task_done_marker`）
+- `ai_workflow.system_prompt`：AI 工作流系统提示词（变量：`tools`）
+- `ai_workflow.user_goal_prompt`：AI 工作流用户目标包装模板（变量：`user_goal`）
+
+### 2.4 方案（Preset）机制
+
+- 每个模板 Key 内置一个 **默认方案**（`name=默认`，`is_builtin=true`）。
+- 套用方案会同时更新：
+  - 模板内容 `template`
+  - 当前生效方案 `active_preset_id`
+- 直接编辑/保存模板会清空 `active_preset_id`（表示当前为自定义内容）。
+
+## 3) AI 审核（审批）流程
 
 ### 2.1 触发：检测到“等待审批”提示
 
@@ -81,7 +112,7 @@
 
 ---
 
-## 3) AI 托管流程
+## 4) AI 托管流程
 
 入口：`backend/api/task.go` 的 `StartTask()` → `backend/service/task/automation.go` 的 `AutomationService.StartTask()`
 
@@ -119,12 +150,13 @@
 
 ---
 
-## 4) 体验优化要点（本次已落地）
+## 5) 体验优化要点（本次已落地）
 
 - 任务状态仅接受 `todo/in_progress/paused/done/failed/timeout/archived`，不再兼容 `pending/completed`；`/tasks/by-status` 将 `paused` 归入“进行中”、`failed/timeout` 归入“已完成”列显示。
 - 终端 WebSocket 补齐 `approval_result` 与 `ai_log` 字段，前端可正确接收审批事件与 AI 日志。
 - 增加 `POST /api/terminals/:id/input`，审批中心可在非终端页面直接发送输入，完成“检测 → 展示 → 手动处理 → 落库”的闭环。
 - `reset-data` 会尝试关闭所有终端会话，并清理除 `users` 与内置 `workflow_templates` 外的全部业务数据（任务/终端/日志/审批/消息/服务器/项目/工作流/规则/AI Provider 等），避免“假重置”。
+- 所有系统级 AI 提示词从数据库模板读取（不再硬编码），并支持在系统设置中编辑、保存为方案、选择/套用方案（含变量渲染）。
 - 终端输入稳定性：前端 xterm 在容器可见时再 open/fit，初次渲染补一帧 fit；WebSocket 断线自动重连，降低“无法输入/光标错位”的概率。
 - 审批/AI 日志稳定性：避免组件卸载后仍持续重连 WebSocket，减少异常更新与资源泄漏。
 - 移动端体验：Kanban/工作流/日志/AI 决策日志等长列表切换为 card 模式；移动端判定增加 coarse pointer + 横屏覆盖，菜单使用抽屉、弹窗宽度自适应。

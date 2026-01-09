@@ -17,6 +17,12 @@ type UpdatePromptTemplateRequest struct {
 	Template string `json:"template"`
 }
 
+type CreatePromptTemplatePresetRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Template    string `json:"template"`
+}
+
 func (ctrl *PromptTemplateController) ListPromptTemplates(c *fiber.Ctx) error {
 	items, err := prompt.ListTemplates()
 	if err != nil {
@@ -57,10 +63,65 @@ func (ctrl *PromptTemplateController) ResetPromptTemplate(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Prompt template reset", "item": item})
 }
 
+func (ctrl *PromptTemplateController) ListPromptTemplatePresets(c *fiber.Ctx) error {
+	key := strings.TrimSpace(c.Params("key"))
+	items, err := prompt.ListPresets(key)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"items": items})
+}
+
+func (ctrl *PromptTemplateController) CreatePromptTemplatePreset(c *fiber.Ctx) error {
+	key := strings.TrimSpace(c.Params("key"))
+	var req CreatePromptTemplatePresetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	item, err := prompt.CreatePreset(key, prompt.CreatePresetRequest{
+		Name:        req.Name,
+		Description: req.Description,
+		Template:    req.Template,
+	})
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "Prompt template preset created", "item": item})
+}
+
+func (ctrl *PromptTemplateController) DeletePromptTemplatePreset(c *fiber.Ctx) error {
+	key := strings.TrimSpace(c.Params("key"))
+	id := strings.TrimSpace(c.Params("id"))
+	if err := prompt.DeletePreset(key, id); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "Prompt template preset deleted"})
+}
+
+func (ctrl *PromptTemplateController) ApplyPromptTemplatePreset(c *fiber.Ctx) error {
+	key := strings.TrimSpace(c.Params("key"))
+	id := strings.TrimSpace(c.Params("id"))
+	item, preset, err := prompt.ApplyPreset(key, id)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{
+		"message": "Prompt template preset applied",
+		"item":    item,
+		"preset":  preset,
+	})
+}
+
 func (ctrl *PromptTemplateController) RegisterRoutes(app fiber.Router) {
 	prompts := app.Group("/prompt-templates")
 	prompts.Get("/", ctrl.ListPromptTemplates)
 	prompts.Get("/:key", ctrl.GetPromptTemplate)
 	prompts.Put("/:key", ctrl.UpdatePromptTemplate)
 	prompts.Post("/:key/reset", ctrl.ResetPromptTemplate)
+
+	prompts.Get("/:key/presets", ctrl.ListPromptTemplatePresets)
+	prompts.Post("/:key/presets", ctrl.CreatePromptTemplatePreset)
+	prompts.Delete("/:key/presets/:id", ctrl.DeletePromptTemplatePreset)
+	prompts.Post("/:key/presets/:id/apply", ctrl.ApplyPromptTemplatePreset)
 }
