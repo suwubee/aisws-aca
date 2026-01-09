@@ -7,6 +7,7 @@ import (
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -401,6 +402,10 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 		return nil
 	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to reset data"})
+	}
+
+	if err := promptsvc.EnsureDefaults(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to restore builtin prompt templates"})
 	}
 
 	resp := fiber.Map{"message": "All data has been reset"}

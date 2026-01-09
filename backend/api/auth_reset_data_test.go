@@ -11,6 +11,7 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -374,6 +375,24 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	if customCount != 0 {
 		t.Fatalf("expected custom workflow templates to be deleted, got %d", customCount)
 	}
+
+	// Builtin prompt templates should be restored (used by AI approval/task automation/workflows).
+	var promptCount int64
+	if err := model.DB.Model(&model.PromptTemplate{}).Count(&promptCount).Error; err != nil {
+		t.Fatalf("count prompt templates failed: %v", err)
+	}
+	expectedPromptCount := int64(len(promptsvc.SupportedTemplateKeys()))
+	if promptCount != expectedPromptCount {
+		t.Fatalf("expected %d prompt templates after reset, got %d", expectedPromptCount, promptCount)
+	}
+
+	var presetCount int64
+	if err := model.DB.Model(&model.PromptTemplatePreset{}).Count(&presetCount).Error; err != nil {
+		t.Fatalf("count prompt template presets failed: %v", err)
+	}
+	if presetCount < expectedPromptCount {
+		t.Fatalf("expected at least %d prompt template presets after reset, got %d", expectedPromptCount, presetCount)
+	}
 }
 
 func assertTableCount(t *testing.T, modelPtr any, expected int64) {
@@ -388,4 +407,3 @@ func assertTableCount(t *testing.T, modelPtr any, expected int64) {
 		t.Fatalf("%s", buf.String())
 	}
 }
-

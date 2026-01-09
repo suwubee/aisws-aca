@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/ai-coding-assistant/model"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -56,5 +58,18 @@ func TestPromptTemplateEndpoints_NonAdminCanList(t *testing.T) {
 	}
 	if len(listBody.Items) == 0 {
 		t.Fatalf("expected non-empty prompt templates list")
+	}
+
+	updatePayload := bytes.NewBufferString(`{"template":"x"}`)
+	updateReq := httptest.NewRequest("PUT", "/api/prompt-templates/"+promptsvc.TemplateKeyApprovalSystemPrompt, updatePayload)
+	updateReq.Header.Set("Authorization", "Bearer "+token)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateResp, err := app.Test(updateReq)
+	if err != nil {
+		t.Fatalf("update request failed: %v", err)
+	}
+	defer updateResp.Body.Close()
+	if updateResp.StatusCode != 403 {
+		t.Fatalf("expected update status 403 for non-admin, got %d", updateResp.StatusCode)
 	}
 }

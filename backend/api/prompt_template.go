@@ -3,6 +3,7 @@ package api
 import (
 	"strings"
 
+	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
 )
@@ -117,11 +118,13 @@ func (ctrl *PromptTemplateController) RegisterRoutes(app fiber.Router) {
 	prompts := app.Group("/prompt-templates")
 	prompts.Get("/", ctrl.ListPromptTemplates)
 	prompts.Get("/:key", ctrl.GetPromptTemplate)
-	prompts.Put("/:key", ctrl.UpdatePromptTemplate)
-	prompts.Post("/:key/reset", ctrl.ResetPromptTemplate)
-
 	prompts.Get("/:key/presets", ctrl.ListPromptTemplatePresets)
-	prompts.Post("/:key/presets", ctrl.CreatePromptTemplatePreset)
-	prompts.Delete("/:key/presets/:id", ctrl.DeletePromptTemplatePreset)
-	prompts.Post("/:key/presets/:id/apply", ctrl.ApplyPromptTemplatePreset)
+
+	// Admin-only write operations.
+	admin := prompts.Group("", middleware.RequireRole("admin"))
+	admin.Put("/:key", ctrl.UpdatePromptTemplate)
+	admin.Post("/:key/reset", ctrl.ResetPromptTemplate)
+	admin.Post("/:key/presets", ctrl.CreatePromptTemplatePreset)
+	admin.Delete("/:key/presets/:id", ctrl.DeletePromptTemplatePreset)
+	admin.Post("/:key/presets/:id/apply", ctrl.ApplyPromptTemplatePreset)
 }

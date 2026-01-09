@@ -4,71 +4,72 @@
       <n-button size="small" quaternary :loading="loading" @click="fetchTemplates">刷新</n-button>
     </template>
 
+    <n-text v-if="!isAdmin" depth="3" style="display: block; margin-bottom: 10px; font-size: 12px">
+      当前为只读模式：需要管理员权限才能编辑模板或套用/保存方案。
+    </n-text>
+
     <n-spin :show="loading">
       <n-empty v-if="templates.length === 0" description="暂无模板" />
 
-      <n-tabs
-        v-else
-        v-model:value="activeKey"
-        type="segment"
-        size="small"
-        animated
-      >
-        <n-tab-pane
-          v-for="tpl in templates"
-          :key="tpl.key"
-          :name="tpl.key"
-          :tab="tpl.name || tpl.key"
-        >
-          <div class="prompt-template">
+      <div v-else class="prompt-templates-body">
+        <n-space vertical size="12">
+          <n-select
+            v-model:value="activeKey"
+            size="small"
+            :options="templateOptions"
+            placeholder="选择一个模板"
+            style="min-width: 260px; max-width: 100%"
+          />
+
+          <div v-if="activeTemplate" class="prompt-template">
             <n-space vertical size="12">
-              <n-text depth="3">{{ tpl.description || '—' }}</n-text>
-              <n-text depth="3" style="font-size: 12px">Key: {{ tpl.key }}</n-text>
+              <n-text depth="3">{{ activeTemplate.description || '—' }}</n-text>
+              <n-text depth="3" style="font-size: 12px">Key: {{ activeTemplate.key }}</n-text>
 
               <div class="preset-row">
                 <n-space size="10" align="center" wrap>
                   <n-text depth="3" style="font-size: 12px">当前方案：</n-text>
                   <n-select
-                    v-model:value="presetSelection[tpl.key]"
+                    v-model:value="presetSelection[activeTemplate.key]"
                     size="small"
-                    style="min-width: 200px"
-                    :options="presetOptions(tpl.key)"
-                    :loading="presetLoading[tpl.key] === true"
+                    style="min-width: 200px; max-width: 100%"
+                    :options="presetOptions(activeTemplate.key)"
+                    :loading="presetLoading[activeTemplate.key] === true"
                     placeholder="选择方案"
                   />
                   <n-button
                     size="small"
-                    :disabled="!canApplyPreset(tpl)"
-                    :loading="applyingPresetKey === tpl.key"
-                    @click="applySelectedPreset(tpl)"
+                    :disabled="!isAdmin || !canApplyPreset(activeTemplate)"
+                    :loading="applyingPresetKey === activeTemplate.key"
+                    @click="applySelectedPreset(activeTemplate)"
                   >
                     套用方案
                   </n-button>
                   <n-button
                     size="small"
                     quaternary
-                    :disabled="creatingPresetKey === tpl.key"
-                    @click="openCreatePreset(tpl)"
+                    :disabled="!isAdmin || creatingPresetKey === activeTemplate.key"
+                    @click="openCreatePreset(activeTemplate)"
                   >
                     保存为方案
                   </n-button>
                   <n-popconfirm
-                    v-if="canDeleteSelectedPreset(tpl.key)"
+                    v-if="isAdmin && canDeleteSelectedPreset(activeTemplate.key)"
                     positive-text="删除"
                     negative-text="取消"
-                    @positive-click="deleteSelectedPreset(tpl.key)"
+                    @positive-click="deleteSelectedPreset(activeTemplate.key)"
                   >
                     <template #trigger>
                       <n-button
                         size="small"
                         quaternary
                         type="error"
-                        :loading="deletingPresetKey === tpl.key"
+                        :loading="deletingPresetKey === activeTemplate.key"
                       >
                         删除方案
                       </n-button>
                     </template>
-                    确定删除方案「{{ selectedPresetName(tpl.key) }}」吗？
+                    确定删除方案「{{ selectedPresetName(activeTemplate.key) }}」吗？
                   </n-popconfirm>
                   <n-button
                     v-else
@@ -82,11 +83,11 @@
                 </n-space>
               </div>
 
-              <div v-if="tpl.variables && tpl.variables.length > 0">
+              <div v-if="activeTemplate.variables && activeTemplate.variables.length > 0">
                 <n-text depth="3" style="font-size: 12px">可用变量：</n-text>
                 <n-space size="6" wrap style="margin-top: 6px">
                   <n-tag
-                    v-for="v in tpl.variables"
+                    v-for="v in activeTemplate.variables"
                     :key="v"
                     size="small"
                     :bordered="false"
@@ -98,35 +99,36 @@
               </div>
 
               <n-input
-                v-model:value="drafts[tpl.key]"
+                v-model:value="drafts[activeTemplate.key]"
                 type="textarea"
                 :rows="12"
+                :readonly="!isAdmin"
                 placeholder="请输入提示词模板（Go template 语法）"
               />
 
               <n-space justify="end" size="small" wrap>
                 <n-button
                   size="small"
-                  :disabled="savingKey === tpl.key"
-                  :loading="resettingKey === tpl.key"
-                  @click="resetToDefault(tpl.key)"
+                  :disabled="!isAdmin || savingKey === activeTemplate.key"
+                  :loading="resettingKey === activeTemplate.key"
+                  @click="resetToDefault(activeTemplate.key)"
                 >
                   恢复默认
                 </n-button>
                 <n-button
                   type="primary"
                   size="small"
-                  :loading="savingKey === tpl.key"
-                  :disabled="!isDirty(tpl.key)"
-                  @click="save(tpl.key)"
+                  :loading="savingKey === activeTemplate.key"
+                  :disabled="!isAdmin || !isDirty(activeTemplate.key)"
+                  @click="save(activeTemplate.key)"
                 >
                   保存
                 </n-button>
               </n-space>
             </n-space>
           </div>
-        </n-tab-pane>
-      </n-tabs>
+        </n-space>
+      </div>
     </n-spin>
   </n-card>
 
@@ -155,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
   NButton,
   NCard,
@@ -168,13 +170,12 @@ import {
   NSelect,
   NSpace,
   NSpin,
-  NTabPane,
-  NTabs,
   NTag,
   NText,
   useMessage
 } from 'naive-ui'
 import { promptTemplateApi } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 
 interface PromptTemplateItem {
   key: string
@@ -195,10 +196,21 @@ interface PromptTemplatePresetItem {
 }
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const loading = ref(false)
 const templates = ref<PromptTemplateItem[]>([])
 const activeKey = ref<string>('')
+const templateOptions = computed(() =>
+  templates.value.map(tpl => ({
+    label: tpl.name || tpl.key,
+    value: tpl.key
+  }))
+)
+const activeTemplate = computed(() =>
+  templates.value.find(tpl => tpl.key === activeKey.value) || null
+)
 
 const drafts = reactive<Record<string, string>>({})
 const originals = reactive<Record<string, string>>({})
@@ -239,9 +251,9 @@ function applyItems(items: PromptTemplateItem[]) {
     originals[item.key] = item.template ?? ''
     presetSelection[item.key] = String(item.active_preset_id || '')
   })
-  if (!activeKey.value && items.length > 0) {
-    activeKey.value = items[0].key
-  }
+  const current = String(activeKey.value || '').trim()
+  const hasCurrent = current !== '' && items.some(i => i.key === current)
+  if (!hasCurrent && items.length > 0) activeKey.value = items[0].key
 }
 
 function presetOptions(key: string) {
@@ -456,6 +468,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.prompt-templates-body {
+  padding: 2px 0;
+}
+
 .prompt-template {
   padding: 6px 2px;
 }
