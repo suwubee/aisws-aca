@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/keybinding"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/utils"
 	"go.uber.org/zap"
@@ -221,30 +222,21 @@ func normalizeDecisionKey(key string) string {
 // convertInputType 将标准输入类型转换为实际输入内容
 func convertInputType(input string) string {
 	input = strings.TrimSpace(strings.ToLower(input))
-	switch input {
-	case "enter", "回车", "confirm":
-		return "\r"
-	case "yes":
-		return "yes\r"
-	case "y":
-		return "y\r"
-	case "no":
-		return "no\r"
-	case "n":
-		return "n\r"
-	case "1":
-		return "1\r"
-	case "2":
-		return "2\r"
-	case "":
+	if input == "" {
 		return ""
-	default:
-		// 如果不是标准类型，保持原样（可能是自定义输入）
-		if !strings.HasSuffix(input, "\r") && input != "" {
-			return input + "\r"
-		}
-		return input
 	}
+
+	if id := keybinding.Alias(input); id != "" {
+		if out, err := keybinding.ResolvePty(id); err == nil && out != "" {
+			return out
+		}
+	}
+
+	// 如果不是标准类型，保持原样（可能是自定义输入）
+	if !strings.HasSuffix(input, "\r") {
+		return input + "\r"
+	}
+	return input
 }
 
 func normalizeDecisionAction(action string) string {

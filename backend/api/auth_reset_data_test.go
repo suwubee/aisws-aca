@@ -11,6 +11,7 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/keybinding"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -158,12 +159,12 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	}
 
 	cliProfile := model.CLIProfile{
-		ID:         uuid.NewString(),
-		Name:       "Default Claude",
-		Type:       model.CLIProfileTypeClaude,
-		Command:    "claude",
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:        uuid.NewString(),
+		Name:      "Default Claude",
+		Type:      model.CLIProfileTypeClaude,
+		Command:   "claude",
+		CreatedAt: now,
+		UpdatedAt: now,
 		DefaultArgs: model.StringArray{
 			"--help",
 		},
@@ -208,14 +209,14 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	}
 
 	aiWorkflowSession := model.AIWorkflowSession{
-		ID:        uuid.NewString(),
+		ID:         uuid.NewString(),
 		WorkflowID: workflowID,
-		UserGoal:  "goal",
-		Status:    "running",
-		Messages:  "[]",
-		Steps:     "[]",
-		Context:   "{}",
-		StartedAt: now,
+		UserGoal:   "goal",
+		Status:     "running",
+		Messages:   "[]",
+		Steps:      "[]",
+		Context:    "{}",
+		StartedAt:  now,
 	}
 	if err := model.DB.Create(&aiWorkflowSession).Error; err != nil {
 		t.Fatalf("create ai workflow session failed: %v", err)
@@ -284,21 +285,21 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	}
 
 	ruleSet := model.RuleSet{
-		ID:               uuid.NewString(),
-		Name:             "Test Rule",
-		Type:             "task",
-		ApprovalMode:     "manual",
-		AutoInputType:    "yes",
+		ID:                uuid.NewString(),
+		Name:              "Test Rule",
+		Type:              "task",
+		ApprovalMode:      "manual",
+		AutoInputType:     "yes",
 		WhitelistPatterns: "[]",
 		BlacklistPatterns: "[]",
-		ContextLines:     50,
-		DetectClaudeCode: true,
-		DetectCodex:      true,
-		DetectGemini:     true,
-		NotifyOnBlock:    true,
-		NotifyOnApprove:  false,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ContextLines:      50,
+		DetectClaudeCode:  true,
+		DetectCodex:       true,
+		DetectGemini:      true,
+		NotifyOnBlock:     true,
+		NotifyOnApprove:   false,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	if err := model.DB.Create(&ruleSet).Error; err != nil {
 		t.Fatalf("create rule set failed: %v", err)
@@ -392,6 +393,16 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	}
 	if presetCount < expectedPromptCount {
 		t.Fatalf("expected at least %d prompt template presets after reset, got %d", expectedPromptCount, presetCount)
+	}
+
+	// Builtin key bindings should be restored (used by terminal shortcuts/automation).
+	var keyBindingCount int64
+	if err := model.DB.Model(&model.KeyBinding{}).Count(&keyBindingCount).Error; err != nil {
+		t.Fatalf("count key bindings failed: %v", err)
+	}
+	expectedKeyBindingCount := int64(len(keybinding.SupportedIDs()))
+	if keyBindingCount != expectedKeyBindingCount {
+		t.Fatalf("expected %d key bindings after reset, got %d", expectedKeyBindingCount, keyBindingCount)
 	}
 }
 

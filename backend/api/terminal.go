@@ -194,6 +194,7 @@ func (ctrl *TerminalController) LinkTask(c *fiber.Ctx) error {
 type WSMessage struct {
 	Type           string                    `json:"type"`
 	Data           string                    `json:"data,omitempty"`
+	Action         string                    `json:"action,omitempty"`
 	Cols           uint16                    `json:"cols,omitempty"`
 	Rows           uint16                    `json:"rows,omitempty"`
 	Metadata       *terminal.SessionMetadata `json:"metadata,omitempty"`
@@ -250,6 +251,13 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 				data, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					session.Write(data)
+				}
+			case "key_action":
+				if err := session.SendKeyAction(msg.Action); err != nil {
+					utils.Warn("Failed to send key action",
+						zap.String("terminal", session.ID()),
+						zap.String("action", msg.Action),
+						zap.Error(err))
 				}
 			case "resize":
 				session.Resize(msg.Cols, msg.Rows)

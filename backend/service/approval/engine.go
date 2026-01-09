@@ -11,6 +11,7 @@ import (
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/ai"
 	"github.com/ai-coding-assistant/service/detector"
+	"github.com/ai-coding-assistant/service/keybinding"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -599,18 +600,16 @@ func matchPattern(text, pattern string) bool {
 }
 
 func getAutoInput(inputType string) string {
-	switch inputType {
-	case "yes":
-		return "yes\r"
-	case "y":
-		return "y\r"
-	case "enter":
-		return "\r"
-	case "option1":
-		return "1\r"
-	default:
+	id := keybinding.Alias(inputType)
+	if id == "" {
+		id = keybinding.IDYes
+	}
+	out, err := keybinding.ResolvePty(id)
+	if err != nil || out == "" {
+		// Safe fallback for automation.
 		return "yes\r"
 	}
+	return out
 }
 
 func getPriorityByType(msgType string) int {

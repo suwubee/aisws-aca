@@ -7,6 +7,7 @@ import (
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/keybinding"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
@@ -406,6 +407,9 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 
 	if err := promptsvc.EnsureDefaults(); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to restore builtin prompt templates"})
+	}
+	if err := keybinding.EnsureDefaults(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to restore builtin key bindings"})
 	}
 
 	resp := fiber.Map{"message": "All data has been reset"}

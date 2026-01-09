@@ -156,6 +156,10 @@ func main() {
 	promptTemplateController := api.NewPromptTemplateController()
 	promptTemplateController.RegisterRoutes(apiGroup)
 
+	// 全局按键绑定（系统设置：终端快捷键/自动化共用）
+	keyBindingController := api.NewKeyBindingController()
+	keyBindingController.RegisterRoutes(apiGroup)
+
 	// AI工作流API
 	sshManager := sshservice.NewSSHManager(cfg.Auth.JWTSecret)
 	automationService := task.NewAutomationService(terminalManager)

@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/approval"
 	"github.com/ai-coding-assistant/service/detector"
+	"github.com/ai-coding-assistant/service/keybinding"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/creack/pty"
 	"github.com/google/uuid"
@@ -622,33 +624,31 @@ func (s *Session) handleApproval(output string) {
 
 // sendApprovalInput sends auto-approval input to the terminal.
 //
-// For tmux-backed sessions, use `tmux send-keys C-m` for a single Enter to avoid
-// edge cases where writing a raw newline-like byte does not confirm selection UIs
-// (e.g., Claude Code trust prompt: "Enter to confirm").
+// For tmux-backed sessions, prefer `tmux send-keys` to avoid edge cases where
+// writing raw control bytes does not trigger selection UIs (e.g., Claude Code
+// trust prompt: "Enter to confirm").
 func (s *Session) sendApprovalInput(input string) error {
-	normalized := normalizeApprovalEnterInput(input)
-	if normalized == "\r" {
-		tmuxSession := s.currentTmuxSession()
-		if tmuxSession != "" {
-			// Keep input logs consistent even when bypassing PTY write.
-			s.addInputLog([]byte("\r"))
+	normalized := normalizeApprovalInput(input)
 
-			target := tmuxSession + ":0.0"
-			if err := sendTmuxKeys(target, "C-m", false); err == nil {
-				utils.Info("Approval input sent via tmux key",
-					zap.String("terminal", s.id),
-					zap.String("target", target),
-					zap.String("key", "C-m"))
-				return nil
-			} else {
-				utils.Warn("tmux send-keys for approval failed, falling back to PTY write",
-					zap.String("terminal", s.id),
-					zap.String("target", target),
-					zap.Error(err))
-			}
+	tmuxSession := s.currentTmuxSession()
+	if tmuxSession != "" {
+		target := tmuxSession + ":0.0"
+		if err := s.sendTmuxInput(target, normalized); err == nil {
+			// Keep input logs consistent even when bypassing PTY write.
+			s.addInputLog([]byte(normalized))
+			utils.Info("Approval input sent via tmux",
+				zap.String("terminal", s.id),
+				zap.String("target", target))
+			return nil
+		} else {
+			utils.Warn("tmux send-keys for approval failed, falling back to PTY write",
+				zap.String("terminal", s.id),
+				zap.String("target", target),
+				zap.Error(err))
 		}
 	}
-	return s.Write([]byte(input))
+
+	return s.Write([]byte(normalized))
 }
 
 func (s *Session) currentTmuxSession() string {
@@ -658,11 +658,141 @@ func (s *Session) currentTmuxSession() string {
 	return tmuxSession
 }
 
-func normalizeApprovalEnterInput(input string) string {
-	// Normalize common variants (some callers may pass \n or \r\n).
-	normalized := strings.ReplaceAll(input, "\r\n", "\r")
-	normalized = strings.ReplaceAll(normalized, "\n", "\r")
-	return normalized
+func normalizeApprovalInput(input string) string {
+	// Normalize common variants (some callers may pass \r\n).
+	return strings.ReplaceAll(input, "\r\n", "\r")
+}
+
+// SendKeyAction sends a configured key binding preset to the terminal.
+func (s *Session) SendKeyAction(actionID string) error {
+	id := keybinding.Alias(actionID)
+	if id == "" {
+		return errors.New("key action is required")
+	}
+
+	item, err := keybinding.Get(id)
+	if err != nil {
+		return err
+	}
+	decoded, err := keybinding.DecodePtyInput(item.PtyInput)
+	if err != nil {
+		return err
+	}
+	if decoded == "" {
+		return errors.New("key action resolved to empty input")
+	}
+
+	tmuxSession := s.currentTmuxSession()
+	if tmuxSession != "" {
+		target := tmuxSession + ":0.0"
+		tmuxKeys := strings.TrimSpace(item.TmuxKeys)
+		if tmuxKeys != "" && len(decoded) == 1 {
+			if err := sendTmuxKeys(target, tmuxKeys, item.TmuxLiteral); err == nil {
+				s.addInputLog([]byte(decoded))
+				return nil
+			}
+		}
+
+		if err := s.sendTmuxInput(target, decoded); err == nil {
+			s.addInputLog([]byte(decoded))
+			return nil
+		}
+	}
+
+	return s.Write([]byte(decoded))
+}
+
+func (s *Session) sendTmuxInput(target string, input string) error {
+	if strings.TrimSpace(target) == "" {
+		return errors.New("tmux target is required")
+	}
+	if input == "" {
+		return nil
+	}
+
+	enterKey := tmuxKeyOrFallback(keybinding.IDEnter, "C-m")
+	newlineKey := tmuxKeyOrFallback(keybinding.IDNewline, "C-j")
+	escKey := tmuxKeyOrFallback(keybinding.IDEsc, "Escape")
+	ctrlCKey := tmuxKeyOrFallback(keybinding.IDCtrlC, "C-c")
+	ctrlDKey := tmuxKeyOrFallback(keybinding.IDCtrlD, "C-d")
+	tabKey := tmuxKeyOrFallback(keybinding.IDTab, "Tab")
+
+	var buf strings.Builder
+	flushText := func() error {
+		if buf.Len() == 0 {
+			return nil
+		}
+		text := buf.String()
+		buf.Reset()
+		return sendTmuxKeys(target, text, true)
+	}
+
+	for i := 0; i < len(input); i++ {
+		b := input[i]
+		switch b {
+		case '\r':
+			if err := flushText(); err != nil {
+				return err
+			}
+			if err := sendTmuxKeys(target, enterKey, false); err != nil {
+				return err
+			}
+		case '\n':
+			if err := flushText(); err != nil {
+				return err
+			}
+			if err := sendTmuxKeys(target, newlineKey, false); err != nil {
+				return err
+			}
+		case '\t':
+			if err := flushText(); err != nil {
+				return err
+			}
+			if err := sendTmuxKeys(target, tabKey, false); err != nil {
+				return err
+			}
+		case 0x1b:
+			if err := flushText(); err != nil {
+				return err
+			}
+			if err := sendTmuxKeys(target, escKey, false); err != nil {
+				return err
+			}
+		case 0x03:
+			if err := flushText(); err != nil {
+				return err
+			}
+			if err := sendTmuxKeys(target, ctrlCKey, false); err != nil {
+				return err
+			}
+		case 0x04:
+			if err := flushText(); err != nil {
+				return err
+			}
+			if err := sendTmuxKeys(target, ctrlDKey, false); err != nil {
+				return err
+			}
+		default:
+			if b < 0x20 {
+				return errors.New("unsupported control byte for tmux send")
+			}
+			buf.WriteByte(b)
+		}
+	}
+
+	return flushText()
+}
+
+func tmuxKeyOrFallback(bindingID string, fallback string) string {
+	item, err := keybinding.Get(bindingID)
+	if err != nil {
+		return fallback
+	}
+	key := strings.TrimSpace(item.TmuxKeys)
+	if key == "" {
+		return fallback
+	}
+	return key
 }
 
 func sendTmuxKeys(target string, keys string, literal bool) error {

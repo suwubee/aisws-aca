@@ -104,10 +104,10 @@
           <div class="quick-input-panel">
             <button
               v-for="btn in quickInputButtons"
-              :key="btn.label"
+              :key="btn.id"
               class="quick-input-btn"
               :title="btn.title"
-              @click="sendQuickInput(terminal.id, btn.value)"
+              @click="sendQuickAction(terminal.id, btn.id)"
             >
               {{ btn.label }}
             </button>
@@ -174,10 +174,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
 import { useTaskStore } from '@/stores/task'
+import { useKeyBindingsStore } from '@/stores/keyBindings'
 import Terminal from './Terminal.vue'
 import TerminalLogs from './TerminalLogs.vue'
 import TerminalApprovals from './TerminalApprovals.vue'
@@ -186,6 +187,7 @@ import TerminalRuleConfig from './TerminalRuleConfig.vue'
 const message = useMessage()
 const terminalStore = useTerminalStore()
 const taskStore = useTaskStore()
+const keyBindingsStore = useKeyBindingsStore()
 
 const terminals = computed(() => terminalStore.terminals)
 const activeTerminalId = computed(() => terminalStore.activeTerminalId)
@@ -211,16 +213,30 @@ const createTerminalForm = reactive({
   taskId: null as string | null
 })
 
-// 快捷输入按钮配置
-const quickInputButtons = [
-  { label: 'Enter', value: '\r', title: '回车键' },
-  { label: 'y', value: 'y\r', title: '输入 y 并回车' },
-  { label: 'n', value: 'n\r', title: '输入 n 并回车' },
-  { label: 'Ctrl+C', value: '\x03', title: '中断当前操作' },
-  { label: 'Ctrl+D', value: '\x04', title: 'EOF / 退出' },
-  { label: 'Tab', value: '\t', title: '自动补全' },
-  { label: 'Esc', value: '\x1b', title: 'Escape 键' },
+onMounted(() => {
+  void keyBindingsStore.fetchAll()
+})
+
+const quickInputOrder = [
+  'enter',
+  'y',
+  'n',
+  'ctrl_c',
+  'ctrl_d',
+  'tab',
+  'esc',
 ]
+const quickInputButtons = computed(() => {
+  const map = keyBindingsStore.byId
+  return quickInputOrder
+    .map(id => map.get(id))
+    .filter(Boolean)
+    .map(item => ({
+      id: item!.id,
+      label: item!.label,
+      title: item!.description || item!.id
+    }))
+})
 
 // Terminal 组件引用
 const terminalRefs = new Map<string, any>()
@@ -249,11 +265,9 @@ function focusActiveTerminal() {
   })
 }
 
-function sendQuickInput(terminalId: string, value: string) {
+function sendQuickAction(terminalId: string, actionId: string) {
   const terminalRef = terminalRefs.get(terminalId)
-  if (terminalRef && terminalRef.sendInput) {
-    terminalRef.sendInput(value)
-  }
+  terminalRef?.sendKeyAction?.(actionId)
 }
 
 function toggleFullscreen() {

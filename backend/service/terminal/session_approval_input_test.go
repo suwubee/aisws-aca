@@ -42,13 +42,13 @@ func TestSession_sendApprovalInput_UsesTmuxForSingleEnter(t *testing.T) {
 	}
 }
 
-func TestSession_sendApprovalInput_DoesNotUseTmuxForText(t *testing.T) {
+func TestSession_sendApprovalInput_UsesTmuxForMacroWithEnter(t *testing.T) {
 	origExec := execCommand
 	defer func() { execCommand = origExec }()
 
-	called := false
+	var calls [][]string
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		called = true
+		calls = append(calls, append([]string(nil), args...))
 		cmd := exec.Command(os.Args[0], "-test.run=TestTerminalHelperProcess")
 		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
 		return cmd
@@ -63,8 +63,17 @@ func TestSession_sendApprovalInput_DoesNotUseTmuxForText(t *testing.T) {
 		t.Fatalf("sendApprovalInput returned error: %v", err)
 	}
 
-	if called {
-		t.Fatalf("expected tmux not to be called for non-single-enter input")
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 tmux calls, got %d", len(calls))
+	}
+
+	wantFirst := []string{"send-keys", "-t", "term-1:0.0", "-l", "--", "yes"}
+	if !reflect.DeepEqual(calls[0], wantFirst) {
+		t.Fatalf("unexpected tmux args (1st call).\nwant: %#v\ngot:  %#v", wantFirst, calls[0])
+	}
+	wantSecond := []string{"send-keys", "-t", "term-1:0.0", "--", "C-m"}
+	if !reflect.DeepEqual(calls[1], wantSecond) {
+		t.Fatalf("unexpected tmux args (2nd call).\nwant: %#v\ngot:  %#v", wantSecond, calls[1])
 	}
 }
 
@@ -74,4 +83,3 @@ func TestTerminalHelperProcess(t *testing.T) {
 	}
 	os.Exit(0)
 }
-

@@ -208,6 +208,17 @@
         </div>
       </n-tab-pane>
 
+      <!-- 按键绑定 -->
+      <n-tab-pane name="key-bindings" tab="按键绑定">
+        <div class="section">
+          <div class="section-header">
+            <span>按键绑定</span>
+            <n-text depth="3">全局 Enter/换行 等按键配置，终端快捷键与自动化共用</n-text>
+          </div>
+          <KeyBindings />
+        </div>
+      </n-tab-pane>
+
       <!-- 提示词模板 -->
       <n-tab-pane name="prompt-templates" tab="提示词模板">
         <div class="section">
@@ -332,6 +343,7 @@ import { useTerminalStore } from '@/stores/terminal'
 import { useServerStore } from '@/stores/server'
 import { useApprovalStore } from '@/stores/approval'
 import AgentConfig from '@/components/AgentConfig.vue'
+import KeyBindings from '@/components/KeyBindings.vue'
 import LogExport from '@/components/LogExport.vue'
 import PromptTemplates from '@/components/PromptTemplates.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
@@ -447,8 +459,11 @@ const savingSystemConfig = ref(false)
 const autoInputOptions = [
   { label: 'yes', value: 'yes' },
   { label: 'y', value: 'y' },
+  { label: 'no', value: 'no' },
+  { label: 'n', value: 'n' },
   { label: 'Enter', value: 'enter' },
-  { label: '1 (选项1)', value: 'option1' }
+  { label: '1 (选项1)', value: 'option1' },
+  { label: '2 (选项2)', value: 'option2' }
 ]
 
 const providerOptions = computed(() =>

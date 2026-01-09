@@ -193,6 +193,14 @@ export const promptTemplateApi = {
     api.delete(`/prompt-templates/${encodeURIComponent(key)}/presets/${encodeURIComponent(presetId)}`)
 }
 
+export const keyBindingApi = {
+  list: () => api.get('/key-bindings'),
+  get: (id: string) => api.get(`/key-bindings/${encodeURIComponent(id)}`),
+  update: (id: string, payload: any) =>
+    api.put(`/key-bindings/${encodeURIComponent(id)}`, payload),
+  reset: (id: string) => api.post(`/key-bindings/${encodeURIComponent(id)}/reset`)
+}
+
 export type * from './types'
 
 export default api

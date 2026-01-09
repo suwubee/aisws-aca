@@ -278,6 +278,16 @@ function sendInput(data: string) {
   }
 }
 
+function sendKeyAction(action: string) {
+  if (!action) return
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'key_action',
+      action
+    }))
+  }
+}
+
 function sendResize(cols: number, rows: number) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
@@ -336,6 +346,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 // 暴露方法给父组件
 defineExpose({
   sendInput,
+  sendKeyAction,
   focus: focusTerminal,
   fit: handleResize
 })

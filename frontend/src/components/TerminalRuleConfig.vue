@@ -177,8 +177,11 @@ const config = reactive({
 const autoInputOptions = [
   { label: 'yes', value: 'yes' },
   { label: 'y', value: 'y' },
+  { label: 'no', value: 'no' },
+  { label: 'n', value: 'n' },
   { label: 'Enter', value: 'enter' },
-  { label: '1 (选项1)', value: 'option1' }
+  { label: '1 (选项1)', value: 'option1' },
+  { label: '2 (选项2)', value: 'option2' }
 ]
 
 const providerOptions = computed(() =>

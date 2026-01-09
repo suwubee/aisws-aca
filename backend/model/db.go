@@ -32,6 +32,7 @@ func InitDB(dsn string) error {
 		&AIWorkflowSession{},
 		&PromptTemplate{},
 		&PromptTemplatePreset{},
+		&KeyBinding{},
 		&Comment{},
 		&Secret{},
 		&SSHServer{},
