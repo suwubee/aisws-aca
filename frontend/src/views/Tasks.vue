@@ -2,124 +2,151 @@
   <div class="tasks-page">
     <div class="page-header">
       <n-space justify="space-between" align="center" wrap>
-        <n-text strong style="font-size: 18px">任务管理</n-text>
-        <n-button type="primary" :size="isMobile ? 'small' : 'medium'" @click="showCreateTask = true">
+        <n-text strong style="font-size: 18px">工作清单</n-text>
+        <n-button
+          v-if="activeTab === 'tasks'"
+          type="primary"
+          :size="isMobile ? 'small' : 'medium'"
+          @click="showCreateTask = true"
+        >
           + 新建任务
         </n-button>
       </n-space>
     </div>
 
-    <div class="task-filters">
-      <n-space wrap>
-        <n-select
-          v-model:value="statusFilter"
-          :options="statusOptions"
-          placeholder="状态筛选"
-          clearable
-          style="width: 120px"
-        />
-        <n-select
-          v-model:value="projectGroupFilter"
-          :options="projectGroupOptions"
-          placeholder="项目集"
-          clearable
-          filterable
-          style="width: min(180px, 55vw)"
-        />
-        <n-select
-          v-model:value="projectFilter"
-          :options="projectOptions"
-          placeholder="项目"
-          clearable
-          filterable
-          style="width: min(220px, 70vw)"
-        />
-        <n-input
-          v-model:value="searchText"
-          placeholder="搜索任务..."
-          clearable
-          style="width: min(220px, 70vw)"
-        />
-      </n-space>
-    </div>
-
-    <div v-if="isMobile" class="mobile-task-cards">
-      <n-spin :show="loading">
-        <div class="mobile-task-cards__container">
-          <n-space v-if="filteredTasks.length > 0" vertical :size="6">
-            <n-card
-              v-for="task in filteredTasks"
-              :key="task.id"
-              size="small"
-              class="mobile-task-card"
-            >
-              <template #header>
-                <div class="mobile-task-card-header">
-                  <n-text strong class="mobile-task-title">{{ task.title }}</n-text>
-                  <n-tag :type="(statusMap[task.status]?.type || 'default')" size="small">
-                    {{ statusMap[task.status]?.label || task.status }}
-                  </n-tag>
-                </div>
-              </template>
-
-              <div v-if="task.description" class="mobile-task-desc">
-                {{ task.description }}
-              </div>
-
-              <n-space :size="4" wrap>
-                <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
-                  {{ ['低','中','高','紧急'][task.priority] }}
-                </n-tag>
-                <n-tag v-if="task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
-                <n-tag v-if="task.server?.name" size="small">{{ task.server.name }}</n-tag>
-                <n-tag v-if="task.project?.name" size="small" type="success">{{ task.project.name }}</n-tag>
-              </n-space>
-
-              <div v-if="task.work_dir" class="mobile-task-meta">
-                <n-text depth="3">目录：</n-text>
-                <n-text code>{{ task.work_dir }}</n-text>
-              </div>
-
-              <template #footer>
-                <n-space justify="end" :size="6" wrap>
-                  <n-button size="small" @click="router.push(`/task/${task.id}`)">详情</n-button>
-                  <n-button
-                    v-if="task.status === 'todo' && task.work_dir"
-                    size="small"
-                    type="primary"
-                    @click="startTask(task)"
-                  >
-                    启动
-                  </n-button>
-                  <n-popconfirm
-                    positive-text="删除"
-                    negative-text="取消"
-                    @positive-click="() => { void deleteTask(task.id) }"
-                  >
-                    <template #trigger>
-                      <n-button size="small" type="error">删除</n-button>
-                    </template>
-                    确定删除任务「{{ task.title }}」吗？
-                  </n-popconfirm>
-                </n-space>
-              </template>
-            </n-card>
+    <n-tabs
+      v-model:value="activeTab"
+      :type="isMobile ? 'segment' : 'line'"
+      animated
+      size="small"
+      style="margin-bottom: 10px"
+    >
+      <n-tab-pane name="tasks" tab="任务">
+        <div class="task-filters">
+          <n-space wrap>
+            <n-select
+              v-model:value="statusFilter"
+              :options="statusOptions"
+              placeholder="状态筛选"
+              clearable
+              style="width: 120px"
+            />
+            <n-select
+              v-model:value="projectGroupFilter"
+              :options="projectGroupOptions"
+              placeholder="项目集"
+              clearable
+              filterable
+              style="width: min(180px, 55vw)"
+            />
+            <n-select
+              v-model:value="projectFilter"
+              :options="projectOptions"
+              placeholder="项目"
+              clearable
+              filterable
+              style="width: min(220px, 70vw)"
+            />
+            <n-input
+              v-model:value="searchText"
+              placeholder="搜索任务..."
+              clearable
+              style="width: min(220px, 70vw)"
+            />
           </n-space>
-          <n-empty v-else-if="!loading" description="暂无任务" />
         </div>
-      </n-spin>
-    </div>
 
-    <n-data-table
-      v-else
-      :columns="columns"
-      :data="filteredTasks"
-      :loading="loading"
-      :row-key="(row: any) => row.id"
-      :pagination="{ pageSize: 20 }"
-      :scroll-x="900"
-      striped
-    />
+        <div v-if="isMobile" class="mobile-task-cards">
+          <n-spin :show="loading">
+            <div class="mobile-task-cards__container">
+              <n-space v-if="filteredTasks.length > 0" vertical :size="6">
+                <n-card
+                  v-for="task in filteredTasks"
+                  :key="task.id"
+                  size="small"
+                  class="mobile-task-card"
+                >
+                  <template #header>
+                    <div class="mobile-task-card-header">
+                      <n-text strong class="mobile-task-title">{{ task.title }}</n-text>
+                      <n-tag :type="(statusMap[task.status]?.type || 'default')" size="small">
+                        {{ statusMap[task.status]?.label || task.status }}
+                      </n-tag>
+                    </div>
+                  </template>
+
+                  <div v-if="task.description" class="mobile-task-desc">
+                    {{ task.description }}
+                  </div>
+
+                  <n-space :size="4" wrap>
+                    <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
+                      {{ ['低','中','高','紧急'][task.priority] }}
+                    </n-tag>
+                    <n-tag v-if="task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
+                    <n-tag v-if="task.server?.name" size="small">{{ task.server.name }}</n-tag>
+                    <n-tag v-if="task.project?.name" size="small" type="success">{{ task.project.name }}</n-tag>
+                  </n-space>
+
+                  <div v-if="task.work_dir" class="mobile-task-meta">
+                    <n-text depth="3">目录：</n-text>
+                    <n-text code>{{ task.work_dir }}</n-text>
+                  </div>
+
+                  <template #footer>
+                    <n-space justify="end" :size="6" wrap>
+                      <n-button size="small" @click="router.push(`/task/${task.id}`)">详情</n-button>
+                      <n-button
+                        v-if="task.status === 'todo' && task.work_dir"
+                        size="small"
+                        type="primary"
+                        @click="startTask(task)"
+                      >
+                        启动
+                      </n-button>
+                      <n-popconfirm
+                        positive-text="删除"
+                        negative-text="取消"
+                        @positive-click="() => { void deleteTask(task.id) }"
+                      >
+                        <template #trigger>
+                          <n-button size="small" type="error">删除</n-button>
+                        </template>
+                        确定删除任务「{{ task.title }}」吗？
+                      </n-popconfirm>
+                    </n-space>
+                  </template>
+                </n-card>
+              </n-space>
+              <n-empty v-else-if="!loading" description="暂无任务" />
+            </div>
+          </n-spin>
+        </div>
+
+        <n-data-table
+          v-else
+          :columns="columns"
+          :data="filteredTasks"
+          :loading="loading"
+          :row-key="(row: any) => row.id"
+          :pagination="{ pageSize: 20 }"
+          :scroll-x="900"
+          striped
+        />
+      </n-tab-pane>
+
+      <n-tab-pane name="projects" tab="项目">
+        <n-card size="small">
+          <ProjectPortfolioManager mode="projects" />
+        </n-card>
+      </n-tab-pane>
+
+      <n-tab-pane name="groups" tab="项目集">
+        <n-card size="small">
+          <ProjectPortfolioManager mode="groups" />
+        </n-card>
+      </n-tab-pane>
+    </n-tabs>
 
     <!-- Create Task Modal -->
     <n-modal v-model:show="showCreateTask" preset="dialog" title="新建任务" style="width: min(600px, 94vw)">
@@ -140,6 +167,7 @@ import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useProjectStore } from '@/stores/project'
 import { useIsMobile } from '@/utils/useIsMobile'
+import ProjectPortfolioManager from '@/components/ProjectPortfolioManager.vue'
 import TaskForm from '@/components/TaskForm.vue'
 import type { DataTableColumns } from 'naive-ui'
 
@@ -150,6 +178,7 @@ const serverStore = useServerStore()
 const projectStore = useProjectStore()
 
 const loading = ref(false)
+const activeTab = ref<'tasks' | 'projects' | 'groups'>('tasks')
 const showCreateTask = ref(false)
 const statusFilter = ref<string | null>(null)
 const projectGroupFilter = ref<string | null>(null)

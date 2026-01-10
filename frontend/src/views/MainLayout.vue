@@ -145,16 +145,15 @@ const { isMobile } = useIsMobile()
 const expandedKeys = ref<string[]>([])
 
 const parentKeyByMenuKey: Record<string, string> = {
-  projects: 'project',
-  tasks: 'project',
-  kanban: 'project',
-  workflows: 'project',
-  schedules: 'project',
+  'work-items': 'work',
+  kanban: 'work',
+  workflows: 'automation',
+  schedules: 'automation',
+  'ai-intelligence': 'automation',
   terminals: 'ops',
-  'ai-intelligence': 'ops',
-  messages: 'ops',
-  logs: 'ops',
-  servers: 'ops'
+  servers: 'ops',
+  messages: 'observe',
+  logs: 'observe'
 }
 
 const menuOptions: MenuOption[] = [
@@ -164,25 +163,27 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🏠')
   },
   {
-    label: '项目与任务',
-    key: 'project',
+    label: '工作',
+    key: 'work',
     icon: () => h('span', { style: 'font-size: 18px' }, '📦'),
     children: [
       {
-        label: '任务列表',
-        key: 'tasks',
+        label: '工作清单',
+        key: 'work-items',
         icon: () => h('span', { style: 'font-size: 18px' }, '📋')
       },
       {
         label: '任务看板',
         key: 'kanban',
         icon: () => h('span', { style: 'font-size: 18px' }, '📊')
-      },
-      {
-        label: '项目/项目集',
-        key: 'projects',
-        icon: () => h('span', { style: 'font-size: 18px' }, '📦')
-      },
+      }
+    ]
+  },
+  {
+    label: '智能自动化',
+    key: 'automation',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🤖'),
+    children: [
       {
         label: '工作流',
         key: 'workflows',
@@ -192,11 +193,16 @@ const menuOptions: MenuOption[] = [
         label: '计划任务',
         key: 'schedules',
         icon: () => h('span', { style: 'font-size: 18px' }, '⏱️')
+      },
+      {
+        label: 'AI 智能',
+        key: 'ai-intelligence',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
       }
     ]
   },
   {
-    label: '终端与监控',
+    label: '执行与资源',
     key: 'ops',
     icon: () => h('span', { style: 'font-size: 18px' }, '🧪'),
     children: [
@@ -206,24 +212,26 @@ const menuOptions: MenuOption[] = [
         icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
       },
       {
+        label: '服务器',
+        key: 'servers',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
+      }
+    ]
+  },
+  {
+    label: '观察与审计',
+    key: 'observe',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🧾'),
+    children: [
+      {
         label: '消息中心',
         key: 'messages',
         icon: () => h('span', { style: 'font-size: 18px' }, '🔔')
       },
       {
-        label: 'AI 智能',
-        key: 'ai-intelligence',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
-      },
-      {
         label: '日志管理',
         key: 'logs',
         icon: () => h('span', { style: 'font-size: 18px' }, '📝')
-      },
-      {
-        label: '服务器',
-        key: 'servers',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
       }
     ]
   },
@@ -236,7 +244,7 @@ const menuOptions: MenuOption[] = [
 
 const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
   { key: 'dashboard', label: '工作台', icon: '🏠' },
-  { key: 'tasks', label: '任务', icon: '📋' },
+  { key: 'work-items', label: '工作', icon: '📋' },
   { key: 'kanban', label: '看板', icon: '📊' },
   { key: 'terminals', label: '终端', icon: '🧪' },
   { key: 'settings', label: '设置', icon: '⚙️' }
@@ -254,8 +262,8 @@ const activeMenu = computed(() => {
   if (path.startsWith('/kanban')) return 'kanban'
   if (path.startsWith('/ai-intelligence')) return 'ai-intelligence'
   if (path.startsWith('/servers')) return 'servers'
-  if (path.startsWith('/projects')) return 'projects'
-  if (path.startsWith('/tasks') || path.startsWith('/task/')) return 'tasks'
+  if (path.startsWith('/projects')) return 'work-items'
+  if (path.startsWith('/tasks') || path.startsWith('/task/')) return 'work-items'
   if (path.startsWith('/workflows')) return 'workflows'
   if (path.startsWith('/schedules')) return 'schedules'
   if (path.startsWith('/messages')) return 'messages'
@@ -272,7 +280,7 @@ const currentPageName = computed(() => {
   if (path.startsWith('/ai-intelligence')) return 'AI 智能'
   if (path.startsWith('/servers')) return '服务器管理'
   if (path.startsWith('/projects')) return '项目管理'
-  if (path.startsWith('/tasks') || path.startsWith('/task/')) return '任务管理'
+  if (path.startsWith('/tasks') || path.startsWith('/task/')) return '工作清单'
   if (path.startsWith('/workflows')) return '工作流'
   if (path.startsWith('/schedules')) return '计划任务'
   if (path.startsWith('/messages')) return '消息中心'
@@ -283,10 +291,13 @@ const currentPageName = computed(() => {
 })
 
 function handleMenuChange(key: string) {
-  if (key === 'project' || key === 'ops') return
+  if (key === 'work' || key === 'automation' || key === 'ops' || key === 'observe') return
   switch (key) {
     case 'dashboard':
       router.push('/')
+      break
+    case 'work-items':
+      router.push('/tasks')
       break
     case 'kanban':
       router.push('/kanban')
@@ -299,12 +310,6 @@ function handleMenuChange(key: string) {
       break
     case 'servers':
       router.push('/servers')
-      break
-    case 'projects':
-      router.push('/projects')
-      break
-    case 'tasks':
-      router.push('/tasks')
       break
     case 'workflows':
       router.push('/workflows')
