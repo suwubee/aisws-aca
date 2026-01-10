@@ -52,76 +52,80 @@
         />
 
         <div v-else class="mobile-server-cards">
-          <n-space v-if="filteredServers.length > 0" vertical :size="12">
-            <n-card
-              v-for="server in filteredServers"
-              :key="server.id"
-              size="small"
-              class="mobile-server-card"
-            >
-              <template #header>
-                <div class="mobile-server-card-header">
-                  <n-text strong class="mobile-server-title">
-                    {{ server.name || server.host }}
-                  </n-text>
-                  <n-tag
-                    size="small"
-                    :bordered="false"
-                    :type="statusTagType(String(server.last_status))"
-                  >
-                    {{ statusLabel(String(server.last_status)) }}
-                  </n-tag>
-                </div>
-              </template>
+          <n-spin :show="loading">
+            <div class="mobile-server-cards__container">
+              <n-space v-if="filteredServers.length > 0" vertical :size="12">
+                <n-card
+                  v-for="server in filteredServers"
+                  :key="server.id"
+                  size="small"
+                  class="mobile-server-card"
+                >
+                  <template #header>
+                    <div class="mobile-server-card-header">
+                      <n-text strong class="mobile-server-title">
+                        {{ server.name || server.host }}
+                      </n-text>
+                      <n-tag
+                        size="small"
+                        :bordered="false"
+                        :type="statusTagType(String(server.last_status))"
+                      >
+                        {{ statusLabel(String(server.last_status)) }}
+                      </n-tag>
+                    </div>
+                  </template>
 
-              <div class="mobile-server-meta">
-                <n-text depth="3">主机：</n-text>
-                <n-text code>{{ server.host }}:{{ server.port }}</n-text>
-              </div>
-              <div class="mobile-server-meta">
-                <n-text depth="3">用户：</n-text>
-                <n-text>{{ server.username }}</n-text>
-              </div>
-              <div class="mobile-server-meta">
-                <n-text depth="3">分组：</n-text>
-                <n-text>{{ groupNameMap.get(server.group_id || '') || '—' }}</n-text>
-              </div>
+                  <div class="mobile-server-meta">
+                    <n-text depth="3">主机：</n-text>
+                    <n-text code>{{ server.host }}:{{ server.port }}</n-text>
+                  </div>
+                  <div class="mobile-server-meta">
+                    <n-text depth="3">用户：</n-text>
+                    <n-text>{{ server.username }}</n-text>
+                  </div>
+                  <div class="mobile-server-meta">
+                    <n-text depth="3">分组：</n-text>
+                    <n-text>{{ groupNameMap.get(server.group_id || '') || '—' }}</n-text>
+                  </div>
 
-              <template #footer>
-                <n-space justify="end" size="small" wrap>
-                  <n-button size="small" type="primary" @click="openSshTerminal(server)">
-                    连接
-                  </n-button>
-                  <n-button size="small" @click="openCreateTask(server)">
-                    任务
-                  </n-button>
-                  <n-button
-                    size="small"
-                    :loading="testingId === server.id"
-                    @click="test(server)"
-                  >
-                    测试
-                  </n-button>
-                  <n-button size="small" @click="openEdit(server)">
-                    编辑
-                  </n-button>
-                  <n-popconfirm
-                    positive-text="删除"
-                    negative-text="取消"
-                    @positive-click="() => { void remove(server) }"
-                  >
-                    <template #trigger>
-                      <n-button size="small" type="error" :loading="deletingId === server.id">
-                        删除
+                  <template #footer>
+                    <n-space justify="end" size="small" wrap>
+                      <n-button size="small" type="primary" @click="openSshTerminal(server)">
+                        连接
                       </n-button>
-                    </template>
-                    确定删除服务器「{{ server.name || server.host }}」吗？
-                  </n-popconfirm>
-                </n-space>
-              </template>
-            </n-card>
-          </n-space>
-          <n-empty v-else description="暂无服务器" />
+                      <n-button size="small" @click="openCreateTask(server)">
+                        任务
+                      </n-button>
+                      <n-button
+                        size="small"
+                        :loading="testingId === server.id"
+                        @click="test(server)"
+                      >
+                        测试
+                      </n-button>
+                      <n-button size="small" @click="openEdit(server)">
+                        编辑
+                      </n-button>
+                      <n-popconfirm
+                        positive-text="删除"
+                        negative-text="取消"
+                        @positive-click="() => { void remove(server) }"
+                      >
+                        <template #trigger>
+                          <n-button size="small" type="error" :loading="deletingId === server.id">
+                            删除
+                          </n-button>
+                        </template>
+                        确定删除服务器「{{ server.name || server.host }}」吗？
+                      </n-popconfirm>
+                    </n-space>
+                  </template>
+                </n-card>
+              </n-space>
+              <n-empty v-else-if="!loading" description="暂无服务器" />
+            </div>
+          </n-spin>
         </div>
       </n-card>
     </div>
@@ -239,7 +243,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NButton,
@@ -265,6 +269,7 @@ import TaskForm from '@/components/TaskForm.vue'
 import type { TaskFormModel } from '@/components/TaskForm.vue'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
+import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
 const router = useRouter()
@@ -278,7 +283,7 @@ const groups = ref<ServerGroup[]>([])
 const keyword = ref('')
 const statusFilter = ref<string | null>(null)
 const groupFilter = ref<string | null>(null)
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 
 const showServerForm = ref(false)
 const serverFormMode = ref<'create' | 'edit'>('create')
@@ -707,20 +712,6 @@ async function createGroup() {
 onMounted(() => {
   fetchAll()
 })
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
-
-onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
 </script>
 
 <style scoped>
@@ -756,6 +747,10 @@ onUnmounted(() => {
 
 .toolbar {
   margin-bottom: 12px;
+}
+
+.mobile-server-cards__container {
+  min-height: 140px;
 }
 
 @media (max-width: 768px) {

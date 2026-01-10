@@ -778,8 +778,14 @@ onMounted(() => {
 .settings-page {
   padding: 20px 24px;
   background: #1a1a1a;
-  min-height: calc(100vh - 56px);
+  min-height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
   color: #e0e0e0;
+}
+
+@media (max-width: 768px) {
+  .settings-page {
+    padding: 12px;
+  }
 }
 
 .page-header { margin-bottom: 24px; }

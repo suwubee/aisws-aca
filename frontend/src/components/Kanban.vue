@@ -2,80 +2,88 @@
   <div v-if="isMobile" class="kanban-mobile">
     <n-tabs v-model:value="mobileTab" type="segment" animated size="small">
       <n-tab-pane name="todo" :tab="`待办 (${getTaskCount('todo')})`">
-        <div class="mobile-task-list">
-          <TaskCard
-            v-for="task in getTasksByStatus('todo')"
-            :key="task.id"
-            :task="task"
-            draggable="false"
-            @edit="handleEditTask"
-            @delete="handleDeleteTask"
-            @open-terminal="handleOpenTerminal"
-            @start="handleStartTask"
-            @detail="handleViewDetail"
-            @move="handleMoveTask"
-          />
-          <div v-if="getTaskCount('todo') === 0" class="empty-placeholder">
-            暂无任务
+        <n-spin :show="taskStore.loading">
+          <div class="mobile-task-list">
+            <TaskCard
+              v-for="task in getTasksByStatus('todo')"
+              :key="task.id"
+              :task="task"
+              draggable="false"
+              @edit="handleEditTask"
+              @delete="handleDeleteTask"
+              @open-terminal="handleOpenTerminal"
+              @start="handleStartTask"
+              @detail="handleViewDetail"
+              @move="handleMoveTask"
+            />
+            <div v-if="!taskStore.loading && getTaskCount('todo') === 0" class="empty-placeholder">
+              暂无任务
+            </div>
           </div>
-        </div>
+        </n-spin>
       </n-tab-pane>
       <n-tab-pane name="in_progress" :tab="`进行中 (${getTaskCount('in_progress')})`">
-        <div class="mobile-task-list">
-          <TaskCard
-            v-for="task in getTasksByStatus('in_progress')"
-            :key="task.id"
-            :task="task"
-            draggable="false"
-            @edit="handleEditTask"
-            @delete="handleDeleteTask"
-            @open-terminal="handleOpenTerminal"
-            @start="handleStartTask"
-            @detail="handleViewDetail"
-            @move="handleMoveTask"
-          />
-          <div v-if="getTaskCount('in_progress') === 0" class="empty-placeholder">
-            暂无任务
+        <n-spin :show="taskStore.loading">
+          <div class="mobile-task-list">
+            <TaskCard
+              v-for="task in getTasksByStatus('in_progress')"
+              :key="task.id"
+              :task="task"
+              draggable="false"
+              @edit="handleEditTask"
+              @delete="handleDeleteTask"
+              @open-terminal="handleOpenTerminal"
+              @start="handleStartTask"
+              @detail="handleViewDetail"
+              @move="handleMoveTask"
+            />
+            <div v-if="!taskStore.loading && getTaskCount('in_progress') === 0" class="empty-placeholder">
+              暂无任务
+            </div>
           </div>
-        </div>
+        </n-spin>
       </n-tab-pane>
       <n-tab-pane name="done" :tab="`已完成 (${getTaskCount('done')})`">
-        <div class="mobile-task-list">
-          <TaskCard
-            v-for="task in getTasksByStatus('done')"
-            :key="task.id"
-            :task="task"
-            draggable="false"
-            @edit="handleEditTask"
-            @delete="handleDeleteTask"
-            @open-terminal="handleOpenTerminal"
-            @start="handleStartTask"
-            @detail="handleViewDetail"
-            @move="handleMoveTask"
-          />
-          <div v-if="getTaskCount('done') === 0" class="empty-placeholder">
-            暂无任务
+        <n-spin :show="taskStore.loading">
+          <div class="mobile-task-list">
+            <TaskCard
+              v-for="task in getTasksByStatus('done')"
+              :key="task.id"
+              :task="task"
+              draggable="false"
+              @edit="handleEditTask"
+              @delete="handleDeleteTask"
+              @open-terminal="handleOpenTerminal"
+              @start="handleStartTask"
+              @detail="handleViewDetail"
+              @move="handleMoveTask"
+            />
+            <div v-if="!taskStore.loading && getTaskCount('done') === 0" class="empty-placeholder">
+              暂无任务
+            </div>
           </div>
-        </div>
+        </n-spin>
       </n-tab-pane>
       <n-tab-pane name="archived" :tab="`归档 (${getTaskCount('archived')})`">
-        <div class="mobile-task-list">
-          <TaskCard
-            v-for="task in getTasksByStatus('archived')"
-            :key="task.id"
-            :task="task"
-            draggable="false"
-            @edit="handleEditTask"
-            @delete="handleDeleteTask"
-            @open-terminal="handleOpenTerminal"
-            @start="handleStartTask"
-            @detail="handleViewDetail"
-            @move="handleMoveTask"
-          />
-          <div v-if="getTaskCount('archived') === 0" class="empty-placeholder">
-            暂无任务
+        <n-spin :show="taskStore.loading">
+          <div class="mobile-task-list">
+            <TaskCard
+              v-for="task in getTasksByStatus('archived')"
+              :key="task.id"
+              :task="task"
+              draggable="false"
+              @edit="handleEditTask"
+              @delete="handleDeleteTask"
+              @open-terminal="handleOpenTerminal"
+              @start="handleStartTask"
+              @detail="handleViewDetail"
+              @move="handleMoveTask"
+            />
+            <div v-if="!taskStore.loading && getTaskCount('archived') === 0" class="empty-placeholder">
+              暂无任务
+            </div>
           </div>
-        </div>
+        </n-spin>
       </n-tab-pane>
     </n-tabs>
   </div>
@@ -131,11 +139,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { useTaskStore, type Task } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
+import { useIsMobile } from '@/utils/useIsMobile'
 import TaskCard from './TaskCard.vue'
 import TaskEditModal from './TaskEditModal.vue'
 
@@ -158,13 +167,8 @@ const columns = [
   { status: 'done', name: '已完成', color: '#10b981' }
 ]
 
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 const mobileTab = ref('todo')
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
 
 const draggedTask = ref<Task | null>(null)
 const showEditModal = ref(false)
@@ -217,12 +221,9 @@ function getTaskCount(status: string) {
 }
 
 onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
+  if (!taskStore.loading && taskStore.tasks.length === 0) {
+    taskStore.fetchTasks().catch(() => {})
+  }
 })
 
 function handleDragStart(event: DragEvent, task: Task) {
@@ -327,11 +328,20 @@ function handleViewDetail(task: Task) {
   padding: 8px 10px;
 }
 
+.kanban-mobile :deep(.n-tabs-nav) {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0f1419;
+  padding-top: 8px;
+}
+
 .mobile-task-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 10px 0;
+  min-height: 140px;
 }
 
 .kanban-board {

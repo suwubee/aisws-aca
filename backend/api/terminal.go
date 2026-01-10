@@ -331,6 +331,43 @@ func (ctrl *TerminalController) SendInput(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Input sent"})
 }
 
+// SendKeyAction 通过HTTP向终端发送按键动作（用于审批中心等非WS场景）
+func (ctrl *TerminalController) SendKeyAction(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+	if ctrl.manager == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
+	}
+
+	session := ctrl.manager.GetSession(id)
+	if session == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing action"})
+	}
+
+	if err := session.SendKeyAction(action); err != nil {
+		utils.Warn("Failed to send terminal key action",
+			zap.String("terminal", id),
+			zap.String("action", action),
+			zap.Error(err))
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "Key action sent"})
+}
+
 // GetTerminalStats 获取终端统计
 func (ctrl *TerminalController) GetTerminalStats(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
@@ -350,6 +387,7 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
 	terminals.Post("/:id/input", ctrl.SendInput)
+	terminals.Post("/:id/key-action", ctrl.SendKeyAction)
 	terminals.Get("/:id/logs", ctrl.GetLogs)
 	terminals.Delete("/:id/logs", ctrl.ClearLogs)
 	terminals.Delete("/:id/logs/:logId", ctrl.DeleteLog)

@@ -83,10 +83,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, onUnmounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { NButton, NCard, NDataTable, NEmpty, NPagination, NSelect, NSpace, NSpin, NTag, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { automationApi, terminalApi } from '@/api'
+import { useIsMobile } from '@/utils/useIsMobile'
 
 type TagType = 'default' | 'info' | 'success' | 'warning' | 'error'
 
@@ -134,7 +135,7 @@ const loadingRecords = ref(false)
 const page = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 
 const terminalLabelMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
@@ -424,20 +425,9 @@ function handlePageSizeChange(nextPageSize: number) {
 }
 
 onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
   fetchTerminals()
   fetchRecords()
 })
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
 </script>
 
 <style scoped>

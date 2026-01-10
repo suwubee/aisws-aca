@@ -31,7 +31,7 @@ import AIDecisionLog from '@/components/AIDecisionLog.vue'
 <style scoped>
 .ai-intelligence {
   padding: 16px;
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
   overflow: auto;
 }
 

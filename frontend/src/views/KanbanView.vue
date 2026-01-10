@@ -166,7 +166,7 @@ async function handleCreateTask() {
 
 <style scoped>
 .kanban-view {
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
   display: flex;
   flex-direction: column;
 }
@@ -183,12 +183,6 @@ async function handleCreateTask() {
 
 .kanban-container {
   flex: 1;
-  overflow: hidden;
-}
-
-@media (max-width: 768px) {
-  .kanban-container {
-    overflow: auto;
-  }
+  overflow: auto;
 }
 </style>

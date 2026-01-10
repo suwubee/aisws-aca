@@ -65,6 +65,28 @@ func isClaudeCodeSelectPrompt(output string) bool {
 	return false
 }
 
+func trimTokenKeepControl(input string) string {
+	// Keep control chars like \r/\n meaningful for terminal input;
+	// only trim spaces/tabs around tokens.
+	return strings.Trim(input, " \t")
+}
+
+func resolveKeyBindingToken(input string) (string, bool) {
+	token := trimTokenKeepControl(input)
+	if token == "" {
+		return "", false
+	}
+	id := keybinding.Alias(token)
+	if id == "" {
+		return "", false
+	}
+	out, err := keybinding.ResolvePty(id)
+	if err != nil || out == "" {
+		return "", false
+	}
+	return out, true
+}
+
 // NewEngine 创建审批引擎
 func NewEngine() *Engine {
 	return &Engine{
@@ -359,15 +381,21 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 					action = "wait"
 				}
 				// AI 返回 input 但没有输入内容，降级为等待人工
-				if action == "input" && strings.TrimSpace(decision.Input) == "" {
+				if action == "input" && trimTokenKeepControl(decision.Input) == "" {
 					action = "wait"
 					if strings.TrimSpace(decision.Reasoning) == "" {
 						decision.Reasoning = "AI返回input但未提供input内容"
 					}
 				}
 				// AI 批准但未给出输入时，若为常见 y/n 确认提示则补全默认输入
-				if action == "approve" && strings.TrimSpace(decision.Input) == "" && yesNoPromptRegex.MatchString(output) {
+				if action == "approve" && trimTokenKeepControl(decision.Input) == "" && yesNoPromptRegex.MatchString(output) {
 					decision.Input = getAutoInput(config.AutoInputType)
+				}
+				// 将标准按键名称（enter/newline/y/yes/1/2 等）解析为真实 PTY 输入，避免漏掉回车
+				if action == "approve" || action == "input" {
+					if resolved, ok := resolveKeyBindingToken(decision.Input); ok {
+						decision.Input = resolved
+					}
 				}
 
 				result := &ApprovalResult{
@@ -380,7 +408,11 @@ func (e *Engine) handleSmartMode(ctx context.Context, config *EffectiveConfig, o
 
 				// 强制转换：Claude Code 选择提示需要回车
 				if action == "approve" && isClaudeCodeSelectPrompt(output) {
-					result.Input = "\r" // 使用 \r 而不是 \n
+					if resolved, ok := resolveKeyBindingToken("enter"); ok {
+						result.Input = resolved
+					} else {
+						result.Input = "\r" // 使用 \r 而不是 \n
+					}
 				}
 
 				// 根据AI决策发送通知

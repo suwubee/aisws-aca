@@ -42,76 +42,80 @@
         />
 
         <div v-else class="mobile-terminal-cards">
-          <n-space v-if="filteredTerminals.length > 0" vertical :size="12">
-            <n-card
-              v-for="t in filteredTerminals"
-              :key="t.id"
-              size="small"
-              class="mobile-terminal-card"
-            >
-              <template #header>
-                <div class="mobile-terminal-card-header">
-                  <n-text strong class="mobile-terminal-title">{{ t.title || t.metadata?.title || 'Terminal' }}</n-text>
-                  <n-tag
-                    size="small"
-                    :bordered="false"
-                    :type="statusTagType(String(t.status))"
-                  >
-                    {{ statusLabel(String(t.status)) }}
-                  </n-tag>
-                </div>
-              </template>
+          <n-spin :show="loading">
+            <div class="mobile-terminal-cards__container">
+              <n-space v-if="filteredTerminals.length > 0" vertical :size="12">
+                <n-card
+                  v-for="t in filteredTerminals"
+                  :key="t.id"
+                  size="small"
+                  class="mobile-terminal-card"
+                >
+                  <template #header>
+                    <div class="mobile-terminal-card-header">
+                      <n-text strong class="mobile-terminal-title">{{ t.title || t.metadata?.title || 'Terminal' }}</n-text>
+                      <n-tag
+                        size="small"
+                        :bordered="false"
+                        :type="statusTagType(String(t.status))"
+                      >
+                        {{ statusLabel(String(t.status)) }}
+                      </n-tag>
+                    </div>
+                  </template>
 
-              <div class="mobile-terminal-meta">
-                <n-text depth="3">PID：</n-text>
-                <n-text>{{ t.pid || '—' }}</n-text>
-              </div>
-              <div class="mobile-terminal-meta">
-                <n-text depth="3">任务：</n-text>
-                <n-text>{{ t.task_id ? getTaskTitle(t.task_id) : '—' }}</n-text>
-              </div>
-              <div class="mobile-terminal-meta">
-                <n-text depth="3">命令：</n-text>
-                <n-text code>{{ t.metadata?.running_command || '—' }}</n-text>
-              </div>
-              <div class="mobile-terminal-meta">
-                <n-text depth="3">时间：</n-text>
-                <n-text>{{ formatUnixSeconds(t.created_at) }}</n-text>
-              </div>
+                  <div class="mobile-terminal-meta">
+                    <n-text depth="3">PID：</n-text>
+                    <n-text>{{ t.pid || '—' }}</n-text>
+                  </div>
+                  <div class="mobile-terminal-meta">
+                    <n-text depth="3">任务：</n-text>
+                    <n-text>{{ t.task_id ? getTaskTitle(t.task_id) : '—' }}</n-text>
+                  </div>
+                  <div class="mobile-terminal-meta">
+                    <n-text depth="3">命令：</n-text>
+                    <n-text code>{{ t.metadata?.running_command || '—' }}</n-text>
+                  </div>
+                  <div class="mobile-terminal-meta">
+                    <n-text depth="3">时间：</n-text>
+                    <n-text>{{ formatUnixSeconds(t.created_at) }}</n-text>
+                  </div>
 
-              <template #footer>
-                <n-space justify="end" size="small" wrap>
-                  <n-button
-                    size="small"
-                    type="primary"
-                    :disabled="t.status !== 'running'"
-                    @click="openReconnect(t)"
-                  >
-                    重连
-                  </n-button>
-                  <n-button size="small" @click="openLogs(t)">日志</n-button>
-                  <n-popconfirm
-                    positive-text="关闭"
-                    negative-text="取消"
-                    @positive-click="() => { void closeTerminal(t) }"
-                  >
-                    <template #trigger>
+                  <template #footer>
+                    <n-space justify="end" size="small" wrap>
                       <n-button
                         size="small"
-                        type="error"
+                        type="primary"
                         :disabled="t.status !== 'running'"
-                        :loading="closingId === t.id"
+                        @click="openReconnect(t)"
                       >
-                        关闭
+                        重连
                       </n-button>
-                    </template>
-                    确定关闭终端「{{ t.title || t.metadata?.title || t.id.slice(0, 8) }}」吗？
-                  </n-popconfirm>
-                </n-space>
-              </template>
-            </n-card>
-          </n-space>
-          <n-empty v-else description="暂无终端" />
+                      <n-button size="small" @click="openLogs(t)">日志</n-button>
+                      <n-popconfirm
+                        positive-text="关闭"
+                        negative-text="取消"
+                        @positive-click="() => { void closeTerminal(t) }"
+                      >
+                        <template #trigger>
+                          <n-button
+                            size="small"
+                            type="error"
+                            :disabled="t.status !== 'running'"
+                            :loading="closingId === t.id"
+                          >
+                            关闭
+                          </n-button>
+                        </template>
+                        确定关闭终端「{{ t.title || t.metadata?.title || t.id.slice(0, 8) }}」吗？
+                      </n-popconfirm>
+                    </n-space>
+                  </template>
+                </n-card>
+              </n-space>
+              <n-empty v-else-if="!loading" description="暂无终端" />
+            </div>
+          </n-spin>
         </div>
       </n-card>
     </div>
@@ -152,7 +156,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import {
   NButton,
   NPopconfirm,
@@ -165,6 +169,7 @@ import { terminalApi, type Terminal as TerminalSession } from '@/api'
 import { useTaskStore } from '@/stores/task'
 import Terminal from '@/components/Terminal.vue'
 import TerminalLogs from '@/components/TerminalLogs.vue'
+import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
 const taskStore = useTaskStore()
@@ -175,7 +180,7 @@ const closingId = ref<string | null>(null)
 
 const keyword = ref('')
 const statusFilter = ref<string | null>(null)
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 
 const statusOptions = [
   { label: '全部状态', value: null },
@@ -378,20 +383,7 @@ onMounted(() => {
   fetchTerminals()
   taskStore.fetchTasks().catch(() => {})
 })
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
-
-onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
+// isMobile handled by useIsMobile()
 </script>
 
 <style scoped>
@@ -427,6 +419,10 @@ onUnmounted(() => {
 
 .toolbar {
   margin-bottom: 12px;
+}
+
+.mobile-terminal-cards__container {
+  min-height: 140px;
 }
 
 .modal-body {

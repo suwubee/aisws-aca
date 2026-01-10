@@ -49,10 +49,23 @@ export const useApprovalStore = defineStore('approval', () => {
     }
   }
 
+  async function sendKeyAction(terminalId: string, action: string) {
+    try {
+      await api.post(`/terminals/${encodeURIComponent(terminalId)}/key-action`, {
+        action
+      })
+      removePendingApproval(terminalId)
+    } catch (error: any) {
+      console.error('Failed to send key action:', error)
+      throw new Error(error?.response?.data?.error || '发送按键失败')
+    }
+  }
+
   return {
     pendingApprovals,
     addPendingApproval,
     removePendingApproval,
-    respondToApproval
+    respondToApproval,
+    sendKeyAction
   }
 })

@@ -158,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, h, reactive, onMounted } from 'vue'
 import {
   NButton,
   NCard,
@@ -174,6 +174,7 @@ import {
   DataTableColumns
 } from 'naive-ui'
 import { logApi, terminalApi } from '@/api'
+import { useIsMobile } from '@/utils/useIsMobile'
 
 interface LogSession {
   terminal_id: string
@@ -200,7 +201,7 @@ const logs = ref<LogEntry[]>([])
 const logsTotal = ref(0)
 const loadingSessions = ref(false)
 const loadingLogs = ref(false)
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 const searchKeyword = ref('')
 const filterType = ref<string | null>(null)
 
@@ -393,19 +394,8 @@ function formatTime(dateStr: string) {
 }
 
 onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
   fetchSessions()
 })
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
 </script>
 
 <style scoped>

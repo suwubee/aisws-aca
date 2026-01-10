@@ -51,63 +51,67 @@
         />
 
         <div v-else class="mobile-workflow-cards">
-          <n-space v-if="filteredWorkflows.length > 0" vertical :size="12">
-            <n-card
-              v-for="wf in filteredWorkflows"
-              :key="wf.id"
-              size="small"
-              class="mobile-workflow-card"
-            >
-              <template #header>
-                <div class="mobile-workflow-card__header">
-                  <span class="mobile-workflow-card__title">{{ wf.name || wf.id.slice(0, 8) }}</span>
-                  <n-tag
-                    size="small"
-                    :bordered="false"
-                    :type="statusTagType(String(wf.status))"
-                  >
-                    {{ statusLabel(String(wf.status)) }}
-                  </n-tag>
-                </div>
-              </template>
+          <n-spin :show="loading">
+            <div class="mobile-workflow-cards__container">
+              <n-space v-if="filteredWorkflows.length > 0" vertical :size="12">
+                <n-card
+                  v-for="wf in filteredWorkflows"
+                  :key="wf.id"
+                  size="small"
+                  class="mobile-workflow-card"
+                >
+                  <template #header>
+                    <div class="mobile-workflow-card__header">
+                      <span class="mobile-workflow-card__title">{{ wf.name || wf.id.slice(0, 8) }}</span>
+                      <n-tag
+                        size="small"
+                        :bordered="false"
+                        :type="statusTagType(String(wf.status))"
+                      >
+                        {{ statusLabel(String(wf.status)) }}
+                      </n-tag>
+                    </div>
+                  </template>
 
-              <div class="mobile-workflow-card__meta">
-                <span class="label">节点</span>
-                <span class="value">{{ wf.node_count ?? 0 }}</span>
-              </div>
-              <div class="mobile-workflow-card__meta">
-                <span class="label">最近运行</span>
-                <span class="value">{{ formatDateTime(wf.last_run_at) }}</span>
-              </div>
+                  <div class="mobile-workflow-card__meta">
+                    <span class="label">节点</span>
+                    <span class="value">{{ wf.node_count ?? 0 }}</span>
+                  </div>
+                  <div class="mobile-workflow-card__meta">
+                    <span class="label">最近运行</span>
+                    <span class="value">{{ formatDateTime(wf.last_run_at) }}</span>
+                  </div>
 
-              <template #footer>
-                <n-space justify="end" size="small" wrap>
-                  <n-button size="small" type="primary" quaternary @click="openDesigner(wf)">设计</n-button>
-                  <n-button size="small" quaternary @click="openEdit(wf)">编辑</n-button>
-                  <n-button
-                    size="small"
-                    type="success"
-                    quaternary
-                    :loading="runningId === wf.id"
-                    @click="run(wf)"
-                  >
-                    运行
-                  </n-button>
-                  <n-popconfirm
-                    positive-text="确定"
-                    negative-text="取消"
-                    @positive-click="() => { void remove(wf) }"
-                  >
-                    <template #trigger>
-                      <n-button size="small" type="error" quaternary :loading="deletingId === wf.id">删除</n-button>
-                    </template>
-                    确定删除工作流「{{ wf.name }}」吗？
-                  </n-popconfirm>
-                </n-space>
-              </template>
-            </n-card>
-          </n-space>
-          <n-empty v-else description="暂无工作流" />
+                  <template #footer>
+                    <n-space justify="end" size="small" wrap>
+                      <n-button size="small" type="primary" quaternary @click="openDesigner(wf)">设计</n-button>
+                      <n-button size="small" quaternary @click="openEdit(wf)">编辑</n-button>
+                      <n-button
+                        size="small"
+                        type="success"
+                        quaternary
+                        :loading="runningId === wf.id"
+                        @click="run(wf)"
+                      >
+                        运行
+                      </n-button>
+                      <n-popconfirm
+                        positive-text="确定"
+                        negative-text="取消"
+                        @positive-click="() => { void remove(wf) }"
+                      >
+                        <template #trigger>
+                          <n-button size="small" type="error" quaternary :loading="deletingId === wf.id">删除</n-button>
+                        </template>
+                        确定删除工作流「{{ wf.name }}」吗？
+                      </n-popconfirm>
+                    </n-space>
+                  </template>
+                </n-card>
+              </n-space>
+              <n-empty v-else-if="!loading" description="暂无工作流" />
+            </div>
+          </n-spin>
         </div>
       </n-card>
     </div>
@@ -341,7 +345,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import {
   NButton,
   NCard,
@@ -367,11 +371,12 @@ import WorkflowEditor from '@/components/WorkflowEditor.vue'
 import AIWorkflowChat from '@/components/AIWorkflowChat.vue'
 import type { Project } from '@/api/project'
 import { getProjects } from '@/api/project'
+import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
 
 const activeTab = ref('ai')
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 const loading = ref(false)
 const workflows = ref<Workflow[]>([])
 
@@ -818,20 +823,9 @@ async function remove(workflow: Workflow) {
 }
 
 onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
   fetchAll()
   fetchProjects()
 })
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
 </script>
 
 <style scoped>
@@ -912,6 +906,10 @@ function updateIsMobile() {
 
 .mobile-workflow-cards {
   padding-top: 6px;
+}
+
+.mobile-workflow-cards__container {
+  min-height: 140px;
 }
 
 .mobile-workflow-card__header {

@@ -153,3 +153,30 @@ func TestEngine_Evaluate_CreatesNotificationWithServerIDWhenAvailable(t *testing
 		t.Fatalf("expected message task_id %q, got %q", taskID, *messages[0].TaskID)
 	}
 }
+
+func TestResolveKeyBindingToken_MapsStandardTokensToPTYInput(t *testing.T) {
+	setupTestDB(t)
+
+	cases := []struct {
+		in       string
+		want     string
+		wantOkay bool
+	}{
+		{in: "enter", want: "\r", wantOkay: true},
+		{in: " y ", want: "y\r", wantOkay: true},
+		{in: "yes", want: "yes\r", wantOkay: true},
+		{in: "newline", want: "\n", wantOkay: true},
+		{in: "1", want: "1\r", wantOkay: true},
+		{in: "unknown", want: "", wantOkay: false},
+	}
+
+	for _, tc := range cases {
+		got, ok := resolveKeyBindingToken(tc.in)
+		if ok != tc.wantOkay {
+			t.Fatalf("resolveKeyBindingToken(%q) ok expected %v, got %v", tc.in, tc.wantOkay, ok)
+		}
+		if got != tc.want {
+			t.Fatalf("resolveKeyBindingToken(%q) expected %q, got %q", tc.in, tc.want, got)
+		}
+	}
+}

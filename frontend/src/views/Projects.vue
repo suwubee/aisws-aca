@@ -239,7 +239,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import {
   NButton,
   NPopconfirm,
@@ -254,6 +254,7 @@ import type { ProjectGroup } from '@/api/project-group'
 import { createProjectGroup, deleteProjectGroup } from '@/api/project-group'
 import { useProjectStore } from '@/stores/project'
 import { useServerStore } from '@/stores/server'
+import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
 const projectStore = useProjectStore()
@@ -264,12 +265,7 @@ const groupKeyword = ref('')
 const groupFilter = ref<string | null>(null)
 const typeFilter = ref<string | null>(null)
 const loading = ref(false)
-const isMobile = ref(false)
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
+const { isMobile } = useIsMobile()
 
 const filterTypeOptions = [
   { label: '全部类型', value: null },
@@ -435,13 +431,7 @@ async function fetchAll() {
 }
 
 onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
   fetchAll()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
 })
 
 const showProjectModal = ref(false)

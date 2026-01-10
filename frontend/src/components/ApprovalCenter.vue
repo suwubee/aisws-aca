@@ -114,6 +114,50 @@
               <pre class="approval-prompt">{{ normalizePromptContent(approval.promptContent) }}</pre>
 
               <div class="approval-detail-actions">
+                <n-space align="center" wrap style="width: 100%; margin-bottom: 10px">
+                  <n-text depth="3" style="font-size: 12px">常用按键：</n-text>
+                  <n-button
+                    size="small"
+                    :loading="isResponding(approval.terminalId)"
+                    :disabled="bulkLoading"
+                    @click="handleKeyAction(approval.terminalId, 'enter', approval.id)"
+                  >
+                    Enter 确认
+                  </n-button>
+                  <n-button
+                    size="small"
+                    :loading="isResponding(approval.terminalId)"
+                    :disabled="bulkLoading"
+                    @click="handleKeyAction(approval.terminalId, 'esc', approval.id)"
+                  >
+                    Esc 取消
+                  </n-button>
+                  <n-button
+                    size="small"
+                    :loading="isResponding(approval.terminalId)"
+                    :disabled="bulkLoading"
+                    @click="handleKeyAction(approval.terminalId, 'ctrl_c', approval.id)"
+                  >
+                    Ctrl+C
+                  </n-button>
+                  <n-button
+                    size="small"
+                    :loading="isResponding(approval.terminalId)"
+                    :disabled="bulkLoading"
+                    @click="handleKeyAction(approval.terminalId, '1', approval.id)"
+                  >
+                    选 1
+                  </n-button>
+                  <n-button
+                    size="small"
+                    :loading="isResponding(approval.terminalId)"
+                    :disabled="bulkLoading"
+                    @click="handleKeyAction(approval.terminalId, '2', approval.id)"
+                  >
+                    选 2
+                  </n-button>
+                </n-space>
+
                 <n-space justify="space-between" align="center" wrap>
                   <n-space>
                     <n-button
@@ -279,6 +323,31 @@ async function respondToApproval(
 
 function handleRespond(terminalId: string, response: string) {
   respondToApproval(terminalId, response)
+}
+
+async function sendKeyActionToTerminal(
+  terminalId: string,
+  action: string,
+  options?: { silent?: boolean; approvalId?: string }
+) {
+  if (!terminalId || !action) return
+  if (respondingMap[terminalId]) return
+  respondingMap[terminalId] = true
+  try {
+    await approvalStore.sendKeyAction(terminalId, action)
+    if (options?.approvalId && expandedId.value === options.approvalId) expandedId.value = null
+    if (!options?.silent) message.success('已发送按键')
+    return true
+  } catch (error: any) {
+    if (!options?.silent) message.error(error?.message || '发送按键失败')
+    return false
+  } finally {
+    respondingMap[terminalId] = false
+  }
+}
+
+function handleKeyAction(terminalId: string, action: string, approvalId?: string) {
+  sendKeyActionToTerminal(terminalId, action, { approvalId })
 }
 
 async function handleBulkRespond(response: string) {

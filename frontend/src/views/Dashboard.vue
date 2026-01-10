@@ -195,7 +195,7 @@ async function handleCreateTask() {
 .dashboard {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
   padding: 12px;
   gap: 12px;
   overflow: hidden;
@@ -228,7 +228,7 @@ async function handleCreateTask() {
 
 @media (max-width: 768px) {
   .dashboard {
-    height: calc(100dvh - 56px);
+    height: calc(100dvh - var(--app-header-height) - var(--app-bottom-nav-height));
     padding: 8px;
     gap: 8px;
     overflow: auto;

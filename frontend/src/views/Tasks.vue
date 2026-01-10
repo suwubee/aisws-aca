@@ -44,66 +44,70 @@
     </div>
 
     <div v-if="isMobile" class="mobile-task-cards">
-      <n-space v-if="filteredTasks.length > 0" vertical :size="12">
-        <n-card
-          v-for="task in filteredTasks"
-          :key="task.id"
-          size="small"
-          class="mobile-task-card"
-        >
-          <template #header>
-            <div class="mobile-task-card-header">
-              <n-text strong class="mobile-task-title">{{ task.title }}</n-text>
-              <n-tag :type="(statusMap[task.status]?.type || 'default')" size="small">
-                {{ statusMap[task.status]?.label || task.status }}
-              </n-tag>
-            </div>
-          </template>
+      <n-spin :show="loading">
+        <div class="mobile-task-cards__container">
+          <n-space v-if="filteredTasks.length > 0" vertical :size="12">
+            <n-card
+              v-for="task in filteredTasks"
+              :key="task.id"
+              size="small"
+              class="mobile-task-card"
+            >
+              <template #header>
+                <div class="mobile-task-card-header">
+                  <n-text strong class="mobile-task-title">{{ task.title }}</n-text>
+                  <n-tag :type="(statusMap[task.status]?.type || 'default')" size="small">
+                    {{ statusMap[task.status]?.label || task.status }}
+                  </n-tag>
+                </div>
+              </template>
 
-          <div v-if="task.description" class="mobile-task-desc">
-            {{ task.description }}
-          </div>
+              <div v-if="task.description" class="mobile-task-desc">
+                {{ task.description }}
+              </div>
 
-          <n-space :size="6" wrap>
-            <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
-              {{ ['低','中','高','紧急'][task.priority] }}
-            </n-tag>
-            <n-tag v-if="task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
-            <n-tag v-if="task.server?.name" size="small">{{ task.server.name }}</n-tag>
-            <n-tag v-if="task.project?.name" size="small" type="success">{{ task.project.name }}</n-tag>
+              <n-space :size="6" wrap>
+                <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
+                  {{ ['低','中','高','紧急'][task.priority] }}
+                </n-tag>
+                <n-tag v-if="task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
+                <n-tag v-if="task.server?.name" size="small">{{ task.server.name }}</n-tag>
+                <n-tag v-if="task.project?.name" size="small" type="success">{{ task.project.name }}</n-tag>
+              </n-space>
+
+              <div v-if="task.work_dir" class="mobile-task-meta">
+                <n-text depth="3">目录：</n-text>
+                <n-text code>{{ task.work_dir }}</n-text>
+              </div>
+
+              <template #footer>
+                <n-space justify="end" size="small" wrap>
+                  <n-button size="small" @click="router.push(`/task/${task.id}`)">详情</n-button>
+                  <n-button
+                    v-if="task.status === 'todo' && task.work_dir"
+                    size="small"
+                    type="primary"
+                    @click="startTask(task)"
+                  >
+                    启动
+                  </n-button>
+                  <n-popconfirm
+                    positive-text="删除"
+                    negative-text="取消"
+                    @positive-click="() => { void deleteTask(task.id) }"
+                  >
+                    <template #trigger>
+                      <n-button size="small" type="error">删除</n-button>
+                    </template>
+                    确定删除任务「{{ task.title }}」吗？
+                  </n-popconfirm>
+                </n-space>
+              </template>
+            </n-card>
           </n-space>
-
-          <div v-if="task.work_dir" class="mobile-task-meta">
-            <n-text depth="3">目录：</n-text>
-            <n-text code>{{ task.work_dir }}</n-text>
-          </div>
-
-          <template #footer>
-            <n-space justify="end" size="small" wrap>
-              <n-button size="small" @click="router.push(`/task/${task.id}`)">详情</n-button>
-              <n-button
-                v-if="task.status === 'todo' && task.work_dir"
-                size="small"
-                type="primary"
-                @click="startTask(task)"
-              >
-                启动
-              </n-button>
-              <n-popconfirm
-                positive-text="删除"
-                negative-text="取消"
-                @positive-click="() => { void deleteTask(task.id) }"
-              >
-                <template #trigger>
-                  <n-button size="small" type="error">删除</n-button>
-                </template>
-                确定删除任务「{{ task.title }}」吗？
-              </n-popconfirm>
-            </n-space>
-          </template>
-        </n-card>
-      </n-space>
-      <n-empty v-else description="暂无任务" />
+          <n-empty v-else-if="!loading" description="暂无任务" />
+        </div>
+      </n-spin>
     </div>
 
     <n-data-table
@@ -129,12 +133,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, h, reactive } from 'vue'
+import { ref, computed, onMounted, h, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, NButton, NTag, NSpace } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useProjectStore } from '@/stores/project'
+import { useIsMobile } from '@/utils/useIsMobile'
 import TaskForm from '@/components/TaskForm.vue'
 import type { DataTableColumns } from 'naive-ui'
 
@@ -150,7 +155,7 @@ const statusFilter = ref<string | null>(null)
 const projectGroupFilter = ref<string | null>(null)
 const projectFilter = ref<string | null>(null)
 const searchText = ref('')
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 
 const newTask = reactive({
   title: '',
@@ -408,20 +413,6 @@ async function deleteTask(taskId: string) {
 }
 
 onMounted(fetchData)
-
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-}
-
-onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
 </script>
 
 <style scoped>
@@ -433,6 +424,10 @@ onUnmounted(() => {
 }
 .task-filters {
   margin-bottom: 16px;
+}
+
+.mobile-task-cards__container {
+  min-height: 140px;
 }
 
 @media (max-width: 768px) {

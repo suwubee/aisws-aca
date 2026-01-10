@@ -1,5 +1,5 @@
 <template>
-  <n-layout class="main-layout" :has-sider="!isMobile">
+  <n-layout class="main-layout" :class="{ 'main-layout--mobile': isMobile }" :has-sider="!isMobile">
     <!-- 侧边栏 -->
     <n-layout-sider
       v-if="!isMobile"
@@ -70,6 +70,20 @@
       <n-layout-content class="content">
         <router-view />
       </n-layout-content>
+
+      <div v-if="isMobile" class="mobile-bottom-nav">
+        <button
+          v-for="item in mobileNavItems"
+          :key="item.key"
+          class="mobile-bottom-nav__item"
+          :class="{ active: activeMenu === item.key }"
+          type="button"
+          @click="handleMenuChange(item.key)"
+        >
+          <span class="mobile-bottom-nav__icon">{{ item.icon }}</span>
+          <span class="mobile-bottom-nav__label">{{ item.label }}</span>
+        </button>
+      </div>
     </n-layout>
   </n-layout>
 
@@ -90,9 +104,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, h, watch } from 'vue'
+import { ref, onMounted, computed, h, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useIsMobile } from '@/utils/useIsMobile'
 import {
   NLayout,
   NLayoutSider,
@@ -120,7 +135,7 @@ const collapsed = ref(false)
 const unreadCount = ref(0)
 const user = computed(() => authStore.user)
 const showMobileMenu = ref(false)
-const isMobile = ref(false)
+const { isMobile } = useIsMobile()
 
 const menuOptions: MenuOption[] = [
   {
@@ -129,19 +144,9 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🏠')
   },
   {
-    label: '任务看板',
-    key: 'kanban',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📊')
-  },
-  {
-    label: '任务管理',
-    key: 'tasks',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📋')
-  },
-  {
-    label: 'AI 智能',
-    key: 'ai-intelligence',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
+    label: '项目管理',
+    key: 'projects',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📦')
   },
   {
     label: '服务器管理',
@@ -149,9 +154,19 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
   },
   {
-    label: '项目管理',
-    key: 'projects',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📦')
+    label: '任务管理',
+    key: 'tasks',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📋')
+  },
+  {
+    label: '任务看板',
+    key: 'kanban',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📊')
+  },
+  {
+    label: '工作流',
+    key: 'workflows',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🔁')
   },
   {
     label: '终端管理',
@@ -159,9 +174,9 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
   },
   {
-    label: '工作流',
-    key: 'workflows',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🔁')
+    label: 'AI 智能',
+    key: 'ai-intelligence',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
   },
   {
     label: '日志管理',
@@ -173,6 +188,14 @@ const menuOptions: MenuOption[] = [
     key: 'settings',
     icon: () => h('span', { style: 'font-size: 18px' }, '⚙️')
   }
+]
+
+const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
+  { key: 'dashboard', label: '工作台', icon: '🏠' },
+  { key: 'tasks', label: '任务', icon: '📋' },
+  { key: 'kanban', label: '看板', icon: '📊' },
+  { key: 'terminals', label: '终端', icon: '🧪' },
+  { key: 'settings', label: '设置', icon: '⚙️' }
 ]
 
 const userOptions = [
@@ -278,34 +301,27 @@ onMounted(() => {
   setInterval(fetchUnreadCount, 30000)
 })
 
-function updateIsMobile() {
-  const isCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  isMobile.value = window.innerWidth <= 768 || (isCoarsePointer && window.innerWidth <= 1024)
-  if (!isMobile.value) {
-    showMobileMenu.value = false
-  }
-}
-
-onMounted(() => {
-  updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateIsMobile)
-})
-
 watch(
   () => route.path,
   () => {
     showMobileMenu.value = false
   }
 )
+
+watch(isMobile, (mobile) => {
+  if (!mobile) showMobileMenu.value = false
+})
 </script>
 
 <style scoped>
 .main-layout {
+  --app-header-height: 56px;
+  --app-bottom-nav-height: 0px;
   min-height: 100vh;
+}
+
+.main-layout--mobile {
+  --app-bottom-nav-height: 56px;
 }
 
 .sider {
@@ -337,7 +353,7 @@ watch(
 }
 
 .header {
-  height: 56px;
+  height: var(--app-header-height);
   padding: 0 20px;
   display: flex;
   align-items: center;
@@ -378,7 +394,50 @@ watch(
 
 .content {
   background: #0f1419;
-  min-height: calc(100vh - 56px);
+  min-height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
+  padding-bottom: calc(var(--app-bottom-nav-height) + env(safe-area-inset-bottom));
+}
+
+.mobile-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--app-bottom-nav-height) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  display: flex;
+  align-items: stretch;
+  background: rgba(22, 33, 62, 0.96);
+  border-top: 1px solid #334155;
+  z-index: 1000;
+  backdrop-filter: blur(12px);
+}
+
+.mobile-bottom-nav__item {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.72);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 0;
+}
+
+.mobile-bottom-nav__item.active {
+  color: #e2e8f0;
+}
+
+.mobile-bottom-nav__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.mobile-bottom-nav__label {
+  font-size: 11px;
+  line-height: 1.1;
 }
 
 :deep(.n-menu) {
