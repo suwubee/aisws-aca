@@ -1,9 +1,9 @@
 <template>
   <div class="tasks-page">
     <div class="page-header">
-      <n-space justify="space-between" align="center">
+      <n-space justify="space-between" align="center" wrap>
         <n-text strong style="font-size: 18px">任务管理</n-text>
-        <n-button type="primary" @click="showCreateTask = true">
+        <n-button type="primary" :size="isMobile ? 'small' : 'medium'" @click="showCreateTask = true">
           + 新建任务
         </n-button>
       </n-space>
@@ -38,7 +38,7 @@
           v-model:value="searchText"
           placeholder="搜索任务..."
           clearable
-          style="width: 200px"
+          style="width: min(220px, 70vw)"
         />
       </n-space>
     </div>

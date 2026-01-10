@@ -15,14 +15,14 @@
 
       <n-card v-else size="small">
         <div class="toolbar">
-          <n-space justify="space-between" align="center">
-            <n-space size="small" align="center">
+          <n-space justify="space-between" align="center" wrap>
+            <n-space size="small" align="center" wrap>
               <n-input
                 v-model:value="keyword"
                 size="small"
                 clearable
                 placeholder="搜索名称..."
-                style="width: 240px"
+                style="width: min(240px, 70vw)"
               />
               <n-select
                 v-model:value="statusFilter"
@@ -32,7 +32,7 @@
               />
             </n-space>
 
-            <n-space size="small">
+            <n-space size="small" wrap>
               <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
               <n-button size="small" @click="openTemplateModal">从模板创建</n-button>
               <n-button size="small" type="primary" @click="openCreate">新建工作流</n-button>

@@ -1,11 +1,21 @@
 <template>
-  <div class="settings-page">
+  <div class="settings-page" :class="{ 'settings-page--mobile': isMobile }">
     <div class="page-header">
       <h2>系统设置</h2>
       <p class="page-desc">配置AI Provider、终端自动化和账户设置</p>
     </div>
 
-    <n-tabs type="line" animated>
+    <div v-if="isMobile" class="settings-mobile-nav">
+      <n-select
+        v-model:value="activeTab"
+        size="small"
+        :options="settingsTabOptions"
+        placeholder="选择设置项"
+        style="width: min(320px, 94vw)"
+      />
+    </div>
+
+    <n-tabs v-model:value="activeTab" type="line" animated>
       <!-- 账户设置 -->
       <n-tab-pane name="account" tab="账户设置">
         <div class="section">
@@ -340,7 +350,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, reactive, onMounted, computed } from 'vue'
+import { ref, h, reactive, onMounted, computed, watch } from 'vue'
 import {
   NTabs, NTabPane, NButton, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NSwitch, NSlider, NTag, NSpace, NPopconfirm, NCard, NText, NRadioGroup, NRadio,
@@ -353,6 +363,7 @@ import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import { useServerStore } from '@/stores/server'
 import { useApprovalStore } from '@/stores/approval'
+import { useIsMobile } from '@/utils/useIsMobile'
 import AgentConfig from '@/components/AgentConfig.vue'
 import KeyBindings from '@/components/KeyBindings.vue'
 import LogExport from '@/components/LogExport.vue'
@@ -385,6 +396,39 @@ const terminalStore = useTerminalStore()
 const serverStore = useServerStore()
 const approvalStore = useApprovalStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
+const { isMobile } = useIsMobile()
+
+const activeTab = ref('account')
+
+const settingsTabOptions = computed(() => {
+  const options: Array<{ label: string; value: string }> = [
+    { label: '账户设置', value: 'account' }
+  ]
+
+  if (isAdmin.value) {
+    options.push({ label: '用户管理', value: 'users' })
+  }
+
+  options.push(
+    { label: '系统规则', value: 'automation' },
+    { label: '规则导入/导出', value: 'rule-import-export' },
+    { label: '日志导出', value: 'log-export' },
+    { label: 'AI代理', value: 'agents' },
+    { label: 'AI Provider', value: 'ai-providers' },
+    { label: '按键绑定', value: 'key-bindings' },
+    { label: '计划任务', value: 'schedules' },
+    { label: '提示词模板', value: 'prompt-templates' },
+    { label: '消息中心', value: 'messages' }
+  )
+
+  return options
+})
+
+watch(isAdmin, (admin) => {
+  if (!admin && activeTab.value === 'users') {
+    activeTab.value = 'account'
+  }
+})
 
 // ===== Account Settings =====
 const passwordFormRef = ref<FormInst | null>(null)
@@ -791,6 +835,14 @@ onMounted(() => {
 .page-header { margin-bottom: 24px; }
 .page-header h2 { margin: 0 0 4px 0; font-size: 20px; font-weight: 600; }
 .page-desc { margin: 0; font-size: 13px; color: #888; }
+
+.settings-mobile-nav {
+  margin-bottom: 12px;
+}
+
+.settings-page--mobile :deep(.n-tabs-nav) {
+  display: none;
+}
 
 .section { margin-top: 16px; }
 .section-header {
