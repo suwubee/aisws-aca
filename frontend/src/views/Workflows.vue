@@ -53,7 +53,7 @@
         <div v-else class="mobile-workflow-cards">
           <n-spin :show="loading">
             <div class="mobile-workflow-cards__container">
-              <n-space v-if="filteredWorkflows.length > 0" vertical :size="8">
+              <n-space v-if="filteredWorkflows.length > 0" vertical :size="6">
                 <n-card
                   v-for="wf in filteredWorkflows"
                   :key="wf.id"
@@ -420,7 +420,7 @@ const projectOptions = computed(() => projects.value.map(p => ({
 })))
 
 const statusOptions = [
-  { label: '全部状态', value: null },
+  { label: '全部状态', value: '' },
   { label: '草稿', value: 'draft' },
   { label: '启用', value: 'active' },
   { label: '已禁用', value: 'disabled' },
@@ -932,20 +932,20 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  margin-top: 4px;
+  margin-top: 2px;
   line-height: 1.25;
 }
 
 .mobile-workflow-card :deep(.n-card__header) {
-  padding: 8px 10px 6px;
+  padding: 6px 8px 4px;
 }
 
 .mobile-workflow-card :deep(.n-card__content) {
-  padding: 6px 10px;
+  padding: 4px 8px;
 }
 
 .mobile-workflow-card :deep(.n-card__footer) {
-  padding: 6px 10px 8px;
+  padding: 4px 8px 6px;
 }
 
 .mobile-workflow-card__meta .label {

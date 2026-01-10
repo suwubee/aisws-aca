@@ -183,7 +183,7 @@ const statusFilter = ref<string | null>(null)
 const { isMobile } = useIsMobile()
 
 const statusOptions = [
-  { label: '全部状态', value: null },
+  { label: '全部状态', value: '' },
   { label: '运行中', value: 'running' },
   { label: '已退出', value: 'exited' }
 ]

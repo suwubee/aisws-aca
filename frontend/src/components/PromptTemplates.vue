@@ -313,7 +313,7 @@ async function fetchTemplates() {
     const { data } = await promptTemplateApi.list()
     const items = Array.isArray(data.items) ? data.items : []
     applyItems(items)
-    await Promise.allSettled(items.map(i => fetchPresetsForKey(i.key)))
+    await Promise.allSettled(items.map((item: PromptTemplateItem) => fetchPresetsForKey(item.key)))
   } catch (e: any) {
     message.error(e.response?.data?.error || '加载提示词模板失败')
   } finally {

@@ -12,7 +12,7 @@
         <AgentStats />
       </n-tab-pane>
       <n-tab-pane name="approvals" tab="审批记录">
-        <ApprovalCenter />
+        <ApprovalRecords />
       </n-tab-pane>
       <n-tab-pane name="logs" tab="思考日志">
         <AIDecisionLog />
@@ -24,7 +24,7 @@
 <script setup lang="ts">
 import AgentMonitor from '@/components/AgentMonitor.vue'
 import AgentStats from '@/components/AgentStats.vue'
-import ApprovalCenter from '@/components/ApprovalCenter.vue'
+import ApprovalRecords from '@/components/ApprovalRecords.vue'
 import AIDecisionLog from '@/components/AIDecisionLog.vue'
 </script>
 

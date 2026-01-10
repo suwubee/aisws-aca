@@ -104,12 +104,12 @@ const props = defineProps<{
 const message = useMessage()
 const rawLogs = ref<LogEntry[]>([])
 const total = ref(0)
-const logType = ref<string | null>(null)
+const logType = ref<string>('')
 const logsContainer = ref<HTMLElement | null>(null)
 const loading = ref(false)
 
 const typeOptions = [
-  { label: '全部', value: null },
+  { label: '全部', value: '' },
   { label: '输入', value: 'input' },
   { label: '输出', value: 'output' }
 ]

@@ -177,7 +177,7 @@
                 :filterable="field.filterable"
                 :clearable="field.clearable"
                 :placeholder="field.placeholder"
-                @update:value="(value) => updateSelectedConfig(field.key, value)"
+                @update:value="updateSelectedConfig(field.key, $event)"
               />
               <n-input
                 v-else-if="field.kind === 'input' && field.input === 'textarea'"
@@ -185,13 +185,13 @@
                 :autosize="field.autosize || { minRows: 3, maxRows: 8 }"
                 :value="selectedConfigValue(field.key)"
                 :placeholder="field.placeholder"
-                @update:value="(value) => updateSelectedConfig(field.key, value)"
+                @update:value="updateSelectedConfig(field.key, $event)"
               />
               <n-input
                 v-else
                 :value="selectedConfigValue(field.key)"
                 :placeholder="field.placeholder"
-                @update:value="(value) => updateSelectedConfig(field.key, value)"
+                @update:value="updateSelectedConfig(field.key, $event)"
               />
             </n-form-item>
           </template>
@@ -205,7 +205,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { Handle, Position, VueFlow, useVueFlow } from '@vue-flow/core'
-import type { Connection, Edge, Node, NodeMouseEvent, Viewport } from '@vue-flow/core'
+import type { Connection, Edge, Node, NodeMouseEvent, ViewportTransform } from '@vue-flow/core'
 import { useServerStore } from '@/stores/server'
 import { getWorkflow, updateWorkflow } from '@/api/workflow'
 
@@ -222,7 +222,7 @@ type WorkflowNodeData = {
 type WorkflowGraph = {
   nodes: Node<WorkflowNodeData>[]
   edges: Edge[]
-  viewport?: Viewport
+  viewport?: ViewportTransform
 }
 
 const props = withDefaults(defineProps<{
@@ -251,7 +251,7 @@ const selectedNodeId = ref<string | null>(null)
 const saving = ref(false)
 const loading = ref(false)
 
-const defaultViewport: Viewport = { x: 0, y: 0, zoom: 1 }
+const defaultViewport: ViewportTransform = { x: 0, y: 0, zoom: 1 }
 
 const nodeTypeItems: Array<{ type: WorkflowNodeType; label: string; color: string }> = [
   { type: 'server', label: '服务器', color: '#4f8ef7' },

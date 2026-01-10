@@ -54,7 +54,7 @@
         <div v-else class="mobile-server-cards">
           <n-spin :show="loading">
             <div class="mobile-server-cards__container">
-              <n-space v-if="filteredServers.length > 0" vertical :size="8">
+              <n-space v-if="filteredServers.length > 0" vertical :size="6">
                 <n-card
                   v-for="server in filteredServers"
                   :key="server.id"
@@ -97,28 +97,13 @@
                       <n-button size="small" @click="openCreateTask(server)">
                         任务
                       </n-button>
-                      <n-button
-                        size="small"
-                        :loading="testingId === server.id"
-                        @click="test(server)"
+                      <n-dropdown
+                        trigger="click"
+                        :options="mobileServerActionOptions(server)"
+                        @select="(key) => handleMobileServerAction(key, server)"
                       >
-                        测试
-                      </n-button>
-                      <n-button size="small" @click="openEdit(server)">
-                        编辑
-                      </n-button>
-                      <n-popconfirm
-                        positive-text="删除"
-                        negative-text="取消"
-                        @positive-click="() => { void remove(server) }"
-                      >
-                        <template #trigger>
-                          <n-button size="small" type="error" :loading="deletingId === server.id">
-                            删除
-                          </n-button>
-                        </template>
-                        确定删除服务器「{{ server.name || server.host }}」吗？
-                      </n-popconfirm>
+                        <n-button size="small" quaternary>更多</n-button>
+                      </n-dropdown>
                     </n-space>
                   </template>
                 </n-card>
@@ -248,9 +233,11 @@ import { useRouter } from 'vue-router'
 import {
   NButton,
   NDataTable,
+  NDropdown,
   NPopconfirm,
   NSpace,
   NTag,
+  useDialog,
   useMessage
 } from 'naive-ui'
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
@@ -272,6 +259,7 @@ import { useTerminalStore } from '@/stores/terminal'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
+const dialog = useDialog()
 const router = useRouter()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
@@ -334,14 +322,14 @@ const groupRules: FormRules = {
 }
 
 const statusOptions = [
-  { label: '全部状态', value: null },
+  { label: '全部状态', value: '' },
   { label: '在线', value: 'online' },
   { label: '离线', value: 'offline' },
   { label: '未知', value: 'unknown' }
 ]
 
 const groupFilterOptions = computed(() => ([
-  { label: '全部分组', value: null },
+  { label: '全部分组', value: '' },
   { label: '未分组', value: '__none__' },
   ...groups.value.map(g => ({ label: g.name, value: g.id }))
 ]))
@@ -351,6 +339,39 @@ const groupNameMap = computed(() => {
   groups.value.forEach(g => map.set(g.id, g.name))
   return map
 })
+
+function mobileServerActionOptions(server: SSHServer) {
+  return [
+    {
+      label: testingId.value === server.id ? '测试中…' : '测试连接',
+      key: 'test',
+      disabled: testingId.value !== null && testingId.value !== server.id
+    },
+    { label: '编辑', key: 'edit' },
+    { label: '删除', key: 'delete' }
+  ] as Array<{ label: string; key: string; disabled?: boolean }>
+}
+
+function handleMobileServerAction(action: string | number, server: SSHServer) {
+  const key = String(action)
+  if (key === 'test') {
+    void test(server)
+    return
+  }
+  if (key === 'edit') {
+    openEdit(server)
+    return
+  }
+  if (key === 'delete') {
+    dialog.warning({
+      title: '删除服务器',
+      content: `确定删除服务器「${server.name || server.host}」吗？`,
+      positiveText: '删除',
+      negativeText: '取消',
+      onPositiveClick: () => { void remove(server) }
+    })
+  }
+}
 
 const filteredServers = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
@@ -755,11 +776,11 @@ onMounted(() => {
 
 @media (max-width: 768px) {
   .page-header {
-    padding: 14px 14px;
+    padding: 10px 12px;
   }
 
   .content-area {
-    padding: 12px;
+    padding: 10px;
   }
 
   .mobile-server-card-header {
@@ -786,19 +807,19 @@ onMounted(() => {
   }
 
   .mobile-server-meta + .mobile-server-meta {
-    margin-top: 4px;
+    margin-top: 2px;
   }
 
   .mobile-server-card :deep(.n-card__header) {
-    padding: 8px 10px 6px;
+    padding: 6px 8px 4px;
   }
 
   .mobile-server-card :deep(.n-card__content) {
-    padding: 6px 10px;
+    padding: 4px 8px;
   }
 
   .mobile-server-card :deep(.n-card__footer) {
-    padding: 6px 10px 8px;
+    padding: 4px 8px 6px;
   }
 }
 

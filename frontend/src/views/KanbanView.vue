@@ -80,7 +80,7 @@ const newTask = reactive({
 })
 
 const projectGroupOptions = computed(() => ([
-  { label: '全部项目集', value: null },
+  { label: '全部项目集', value: '' },
   { label: '未分组', value: '__none__' },
   ...projectStore.projectGroupOptions
 ]))
@@ -95,7 +95,7 @@ const projectOptions = computed(() => {
     : base
 
   return [
-    { label: '全部项目', value: null },
+    { label: '全部项目', value: '' },
     { label: '无项目', value: '__none__' },
     ...filtered.map(p => {
       const groupName = p.group_id ? projectStore.groupNameMap.get(p.group_id) : null

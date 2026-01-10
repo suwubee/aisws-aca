@@ -15,293 +15,232 @@
       />
     </div>
 
-    <n-tabs v-model:value="activeTab" type="line" animated>
-      <!-- 账户设置 -->
-      <n-tab-pane name="account" tab="账户设置">
-        <div class="section">
-          <div class="section-header">
-            <span>修改密码</span>
-          </div>
-          <n-card size="small" style="max-width: 400px">
-            <n-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-placement="left" label-width="100">
-              <n-form-item label="当前密码" path="oldPassword">
-                <n-input v-model:value="passwordForm.oldPassword" type="password" show-password-on="click" placeholder="输入当前密码" />
-              </n-form-item>
-              <n-form-item label="新密码" path="newPassword">
-                <n-input v-model:value="passwordForm.newPassword" type="password" show-password-on="click" placeholder="输入新密码(至少6位)" />
-              </n-form-item>
-              <n-form-item label="确认密码" path="confirmPassword">
-                <n-input v-model:value="passwordForm.confirmPassword" type="password" show-password-on="click" placeholder="再次输入新密码" />
-              </n-form-item>
-              <n-form-item>
-                <n-button type="primary" @click="changePassword" :loading="changingPassword">
-                  修改密码
-                </n-button>
-              </n-form-item>
-            </n-form>
-          </n-card>
-        </div>
+    <div class="settings-layout">
+      <div v-if="!isMobile" class="settings-sider">
+        <n-menu
+          :value="activeTab"
+          :options="settingsMenuOptions"
+          @update:value="activeTab = $event"
+        />
+      </div>
 
-        <div v-if="isAdmin" class="section" style="margin-top: 32px">
-          <div class="section-header">
-            <span>数据管理</span>
-          </div>
-          <n-card size="small" style="max-width: 400px">
-            <n-space vertical>
-              <n-text depth="3">重置所有数据将删除除用户与内置模板外的所有数据：任务、终端、日志、审批、消息、服务器/项目/工作流/规则配置等</n-text>
-              <n-popconfirm @positive-click="() => { void resetAllData() }" positive-text="确定重置" negative-text="取消">
-                <template #trigger>
-                  <n-button type="error" :loading="resettingData">
-                    重置所有数据
+      <div class="settings-content">
+        <div v-show="activeTab === 'account'">
+          <div class="section">
+            <div class="section-header">
+              <span>修改密码</span>
+            </div>
+            <n-card size="small" style="max-width: 400px">
+              <n-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-placement="left" label-width="100">
+                <n-form-item label="当前密码" path="oldPassword">
+                  <n-input v-model:value="passwordForm.oldPassword" type="password" show-password-on="click" placeholder="输入当前密码" />
+                </n-form-item>
+                <n-form-item label="新密码" path="newPassword">
+                  <n-input v-model:value="passwordForm.newPassword" type="password" show-password-on="click" placeholder="输入新密码(至少6位)" />
+                </n-form-item>
+                <n-form-item label="确认密码" path="confirmPassword">
+                  <n-input v-model:value="passwordForm.confirmPassword" type="password" show-password-on="click" placeholder="再次输入新密码" />
+                </n-form-item>
+                <n-form-item>
+                  <n-button type="primary" @click="changePassword" :loading="changingPassword">
+                    修改密码
                   </n-button>
-                </template>
-                <span style="color: #e88080">此操作不可恢复，确定要重置所有数据吗？</span>
-              </n-popconfirm>
-            </n-space>
-          </n-card>
-        </div>
-      </n-tab-pane>
-
-      <!-- 用户管理（仅管理员） -->
-      <n-tab-pane v-if="isAdmin" name="users" tab="用户管理">
-        <div class="section">
-          <div class="section-header">
-            <span>用户管理</span>
-          </div>
-          <UserManagement />
-        </div>
-      </n-tab-pane>
-
-      <!-- 默认审批规则 -->
-      <n-tab-pane name="automation" tab="系统规则">
-        <div class="section">
-          <div class="section-header">
-            <span>系统审批规则配置</span>
-            <n-text depth="3">终端可选择使用此系统规则或自定义规则</n-text>
+                </n-form-item>
+              </n-form>
+            </n-card>
           </div>
 
-          <n-card size="small" style="max-width: 600px">
-            <n-form label-placement="left" label-width="120">
-              <n-form-item label="审批模式">
-                <n-radio-group v-model:value="defaultAutomation.approvalMode">
-                  <n-space vertical>
-                    <n-radio value="manual">
-                      <n-space align="center">
-                        <span>手动审批</span>
-                        <n-text depth="3">所有提示都需要手动确认</n-text>
-                      </n-space>
-                    </n-radio>
-                    <n-radio value="auto_yes">
-                      <n-space align="center">
-                        <span>自动通过</span>
-                        <n-text depth="3">自动输入yes/y确认（类似--permission-mode=dontAsk）</n-text>
-                      </n-space>
-                    </n-radio>
-                    <n-radio value="smart">
-                      <n-space align="center">
-                        <span>智能审批</span>
-                        <n-text depth="3">根据规则和AI辅助判断</n-text>
-                      </n-space>
-                    </n-radio>
+          <div v-if="isAdmin" class="section" style="margin-top: 32px">
+            <div class="section-header">
+              <span>数据管理</span>
+            </div>
+            <n-card size="small" style="max-width: 400px">
+              <n-space vertical>
+                <n-text depth="3">重置所有数据将删除除用户与内置模板外的所有数据：任务、终端、日志、审批、消息、服务器/项目/工作流/规则配置等</n-text>
+                <n-popconfirm @positive-click="() => { void resetAllData() }" positive-text="确定重置" negative-text="取消">
+                  <template #trigger>
+                    <n-button type="error" :loading="resettingData">
+                      重置所有数据
+                    </n-button>
+                  </template>
+                  <span style="color: #e88080">此操作不可恢复，确定要重置所有数据吗？</span>
+                </n-popconfirm>
+              </n-space>
+            </n-card>
+          </div>
+        </div>
+
+        <div v-if="isAdmin" v-show="activeTab === 'users'">
+          <div class="section">
+            <div class="section-header">
+              <span>用户管理</span>
+            </div>
+            <UserManagement />
+          </div>
+        </div>
+
+        <div v-show="activeTab === 'automation'">
+          <div class="section">
+            <div class="section-header">
+              <span>系统审批规则配置</span>
+              <n-text depth="3">终端可选择使用此系统规则或自定义规则</n-text>
+            </div>
+
+            <n-card size="small" style="max-width: 600px">
+              <n-form label-placement="left" label-width="120">
+                <n-form-item label="审批模式">
+                  <n-radio-group v-model:value="defaultAutomation.approvalMode">
+                    <n-space vertical>
+                      <n-radio value="manual">
+                        <n-space align="center">
+                          <span>手动审批</span>
+                          <n-text depth="3">所有提示都需要手动确认</n-text>
+                        </n-space>
+                      </n-radio>
+                      <n-radio value="auto_yes">
+                        <n-space align="center">
+                          <span>自动通过</span>
+                          <n-text depth="3">自动输入yes/y确认（类似--permission-mode=dontAsk）</n-text>
+                        </n-space>
+                      </n-radio>
+                      <n-radio value="smart">
+                        <n-space align="center">
+                          <span>智能审批</span>
+                          <n-text depth="3">根据规则和AI辅助判断</n-text>
+                        </n-space>
+                      </n-radio>
+                    </n-space>
+                  </n-radio-group>
+                </n-form-item>
+
+                <n-form-item label="自动输入类型" v-if="defaultAutomation.approvalMode === 'auto_yes'">
+                  <n-select v-model:value="defaultAutomation.autoInputType" :options="autoInputOptions" style="width: 200px" />
+                </n-form-item>
+
+                <n-divider />
+
+                <n-form-item label="白名单规则">
+                  <n-dynamic-tags v-model:value="defaultAutomation.whitelistPatterns" />
+                  <n-text depth="3" style="display: block; margin-top: 8px">匹配这些模式的提示将自动通过</n-text>
+                </n-form-item>
+
+                <n-form-item label="黑名单规则">
+                  <n-dynamic-tags v-model:value="defaultAutomation.blacklistPatterns" />
+                  <n-text depth="3" style="display: block; margin-top: 8px">匹配这些模式的提示将被阻止</n-text>
+                </n-form-item>
+
+                <n-divider />
+
+                <n-form-item label="AI辅助" v-if="defaultAutomation.approvalMode === 'smart'">
+                  <n-space vertical style="width: 100%">
+                    <n-select v-model:value="defaultAutomation.aiProviderId" :options="providerOptions" placeholder="选择AI Provider（可选）" clearable />
+                    <n-input v-model:value="defaultAutomation.aiPrompt" type="textarea" :rows="3" placeholder="AI判断提示词（可选）" />
+                    <n-text depth="3" style="font-size: 12px">
+                      提示：此处为规则集的 AI 规则补充（会注入到全局审批系统提示词的变量 <n-text code>extra_rules</n-text>）。
+                      全局系统提示词请在「提示词模板」中配置。
+                    </n-text>
                   </n-space>
-                </n-radio-group>
-              </n-form-item>
+                </n-form-item>
 
-              <n-form-item label="自动输入类型" v-if="defaultAutomation.approvalMode === 'auto_yes'">
-                <n-select v-model:value="defaultAutomation.autoInputType" :options="autoInputOptions" style="width: 200px" />
-              </n-form-item>
+                <n-form-item label="AI代理检测">
+                  <n-space>
+                    <n-checkbox v-model:checked="defaultAutomation.detectClaudeCode">Claude Code</n-checkbox>
+                    <n-checkbox v-model:checked="defaultAutomation.detectCodex">Codex</n-checkbox>
+                    <n-checkbox v-model:checked="defaultAutomation.detectGemini">Gemini CLI</n-checkbox>
+                  </n-space>
+                </n-form-item>
 
-              <n-divider />
+                <n-form-item label="通知设置">
+                  <n-space>
+                    <n-checkbox v-model:checked="defaultAutomation.notifyOnBlock">阻止时通知</n-checkbox>
+                    <n-checkbox v-model:checked="defaultAutomation.notifyOnApprove">自动通过时通知</n-checkbox>
+                  </n-space>
+                </n-form-item>
 
-              <n-form-item label="白名单规则">
-                <n-dynamic-tags v-model:value="defaultAutomation.whitelistPatterns" />
-                <n-text depth="3" style="display: block; margin-top: 8px">匹配这些模式的提示将自动通过</n-text>
-              </n-form-item>
-
-              <n-form-item label="黑名单规则">
-                <n-dynamic-tags v-model:value="defaultAutomation.blacklistPatterns" />
-                <n-text depth="3" style="display: block; margin-top: 8px">匹配这些模式的提示将被阻止</n-text>
-              </n-form-item>
-
-              <n-divider />
-
-              <n-form-item label="AI辅助" v-if="defaultAutomation.approvalMode === 'smart'">
-                <n-space vertical style="width: 100%">
-                  <n-select v-model:value="defaultAutomation.aiProviderId" :options="providerOptions" placeholder="选择AI Provider（可选）" clearable />
-                  <n-input v-model:value="defaultAutomation.aiPrompt" type="textarea" :rows="3" placeholder="AI判断提示词（可选）" />
-                  <n-text depth="3" style="font-size: 12px">
-                    提示：此处为规则集的 AI 规则补充（会注入到全局审批系统提示词的变量 <n-text code>extra_rules</n-text>）。
-                    全局系统提示词请在「提示词模板」中配置。
-                  </n-text>
-                </n-space>
-              </n-form-item>
-
-              <n-form-item label="AI代理检测">
-                <n-space>
-                  <n-checkbox v-model:checked="defaultAutomation.detectClaudeCode">Claude Code</n-checkbox>
-                  <n-checkbox v-model:checked="defaultAutomation.detectCodex">Codex</n-checkbox>
-                  <n-checkbox v-model:checked="defaultAutomation.detectGemini">Gemini CLI</n-checkbox>
-                </n-space>
-              </n-form-item>
-
-              <n-form-item label="通知设置">
-                <n-space>
-                  <n-checkbox v-model:checked="defaultAutomation.notifyOnBlock">阻止时通知</n-checkbox>
-                  <n-checkbox v-model:checked="defaultAutomation.notifyOnApprove">自动通过时通知</n-checkbox>
-                </n-space>
-              </n-form-item>
-
-              <n-form-item>
-                <n-space>
-                  <n-button type="primary" @click="saveSystemConfig" :loading="savingSystemConfig">
-                    保存系统规则
-                  </n-button>
-                  <n-button @click="loadDefaultPatterns">
-                    加载默认规则模板
-                  </n-button>
-                </n-space>
-              </n-form-item>
-            </n-form>
-          </n-card>
-        </div>
-      </n-tab-pane>
-
-      <!-- 规则集导入导出 -->
-      <n-tab-pane name="rule-import-export" tab="规则导入/导出">
-        <div class="section">
-          <div class="section-header">
-            <span>规则集导入 / 导出</span>
-            <n-text depth="3">用于备份或迁移规则集配置</n-text>
+                <n-form-item>
+                  <n-space>
+                    <n-button type="primary" @click="saveSystemConfig" :loading="savingSystemConfig">
+                      保存系统规则
+                    </n-button>
+                    <n-button @click="loadDefaultPatterns">
+                      加载默认规则模板
+                    </n-button>
+                  </n-space>
+                </n-form-item>
+              </n-form>
+            </n-card>
           </div>
-          <RuleImportExport />
         </div>
-      </n-tab-pane>
 
-      <!-- 日志导出 -->
-      <n-tab-pane name="log-export" tab="日志导出">
-        <div class="section">
-          <div class="section-header">
-            <span>日志导出</span>
-            <n-text depth="3">按时间范围导出日志（JSON / CSV），可选按终端ID筛选</n-text>
+        <div v-show="activeTab === 'rule-import-export'">
+          <div class="section">
+            <div class="section-header">
+              <span>规则集导入 / 导出</span>
+              <n-text depth="3">用于备份或迁移规则集配置</n-text>
+            </div>
+            <RuleImportExport />
           </div>
-          <LogExport />
         </div>
-      </n-tab-pane>
 
-      <!-- AI 代理配置 -->
-      <n-tab-pane name="agents" tab="AI代理">
-        <div class="section">
-          <div class="section-header">
-            <span>AI代理配置</span>
-            <n-text depth="3">配置各AI代理的检测模式、优先级与启用状态</n-text>
+        <div v-show="activeTab === 'log-export'">
+          <div class="section">
+            <div class="section-header">
+              <span>日志导出</span>
+              <n-text depth="3">按时间范围导出日志（JSON / CSV），可选按终端ID筛选</n-text>
+            </div>
+            <LogExport />
           </div>
-          <AgentConfig />
         </div>
-      </n-tab-pane>
 
-      <!-- AI Provider 配置 -->
-      <n-tab-pane name="ai-providers" tab="AI Provider">
-        <div class="section">
-          <div class="section-header">
-            <span>AI Provider 配置</span>
-            <n-button type="primary" size="small" @click="showProviderModal = true">
-              添加 Provider
-            </n-button>
+        <div v-show="activeTab === 'agents'">
+          <div class="section">
+            <div class="section-header">
+              <span>AI代理配置</span>
+              <n-text depth="3">配置各AI代理的检测模式、优先级与启用状态</n-text>
+            </div>
+            <AgentConfig />
           </div>
-          <n-data-table
-            :columns="providerColumns"
-            :data="providers"
-            :loading="loadingProviders"
-            :row-key="(row: AIProvider) => row.id"
-            size="small"
-          />
         </div>
-      </n-tab-pane>
 
-      <!-- 按键绑定 -->
-      <n-tab-pane name="key-bindings" tab="按键绑定">
-        <div class="section">
-          <div class="section-header">
-            <span>按键绑定</span>
-            <n-text depth="3">全局 Enter/换行 等按键配置，终端快捷键与自动化共用</n-text>
-          </div>
-          <KeyBindings />
-        </div>
-      </n-tab-pane>
-
-      <!-- 计划任务 -->
-      <n-tab-pane name="schedules" tab="计划任务">
-        <div class="section">
-          <div class="section-header">
-            <span>计划任务</span>
-            <n-text depth="3">支持 cron / 单次定时，运行任务或 AI 工作流</n-text>
-          </div>
-          <ScheduledJobs />
-        </div>
-      </n-tab-pane>
-
-      <!-- 提示词模板 -->
-      <n-tab-pane name="prompt-templates" tab="提示词模板">
-        <div class="section">
-          <div class="section-header">
-            <span>提示词模板</span>
-            <n-text depth="3">全局 AI 提示词从这里读取，支持变量模板渲染</n-text>
-          </div>
-          <PromptTemplates />
-        </div>
-      </n-tab-pane>
-
-      <!-- 消息中心 -->
-      <n-tab-pane name="messages" tab="消息中心">
-        <div class="section">
-          <div class="section-header">
-            <span>消息列表</span>
-            <n-space>
-              <n-select
-                v-model:value="messageFilter.status"
-                size="small"
-                :options="statusOptions"
-                style="width: 100px"
-                @update:value="fetchMessages"
-              />
-              <n-button size="small" @click="markAllRead" :disabled="messages.length === 0">
-                全部已读
+        <div v-show="activeTab === 'ai-providers'">
+          <div class="section">
+            <div class="section-header">
+              <span>AI Provider 配置</span>
+              <n-button type="primary" size="small" @click="showProviderModal = true">
+                添加 Provider
               </n-button>
-            </n-space>
+            </div>
+            <n-data-table
+              :columns="providerColumns"
+              :data="providers"
+              :loading="loadingProviders"
+              :row-key="(row: AIProvider) => row.id"
+              size="small"
+            />
           </div>
-          <n-data-table
-            :columns="messageColumns"
-            :data="messages"
-            :loading="loadingMessages"
-            :row-key="(row: Message) => row.id"
-            :pagination="messagePagination"
-            size="small"
-            @update:page="handleMessagePageChange"
-          />
         </div>
-      </n-tab-pane>
 
-      <!-- 审批记录 -->
-      <n-tab-pane name="approvals" tab="审批记录">
-        <div class="section">
-          <div class="section-header">
-            <span>自动审批记录</span>
-            <n-button size="small" quaternary @click="fetchApprovalRecords">
-              刷新
-            </n-button>
+        <div v-show="activeTab === 'key-bindings'">
+          <div class="section">
+            <div class="section-header">
+              <span>按键绑定</span>
+              <n-text depth="3">全局 Enter/换行 等按键配置，终端快捷键与自动化共用</n-text>
+            </div>
+            <KeyBindings />
           </div>
-          <n-data-table
-            :columns="approvalColumns"
-            :data="approvalRecords"
-            :loading="loadingApprovals"
-            :row-key="(row: ApprovalRecord) => row.id"
-            :pagination="approvalPagination"
-            size="small"
-            @update:page="handleApprovalPageChange"
-          />
         </div>
-      </n-tab-pane>
-    </n-tabs>
+
+        <div v-show="activeTab === 'prompt-templates'">
+          <div class="section">
+            <div class="section-header">
+              <span>提示词模板</span>
+              <n-text depth="3">全局 AI 提示词从这里读取，支持变量模板渲染</n-text>
+            </div>
+            <PromptTemplates />
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 添加/编辑 Provider Modal -->
     <n-modal
@@ -352,11 +291,11 @@
 <script setup lang="ts">
 import { ref, h, reactive, onMounted, computed, watch } from 'vue'
 import {
-  NTabs, NTabPane, NButton, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber,
+  NButton, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NSwitch, NSlider, NTag, NSpace, NPopconfirm, NCard, NText, NRadioGroup, NRadio,
-  NDivider, NDynamicTags, NCheckbox, useMessage
+  NDivider, NDynamicTags, NCheckbox, NMenu, useMessage
 } from 'naive-ui'
-import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
+import type { DataTableColumns, FormInst, FormRules, MenuOption } from 'naive-ui'
 import { automationApi, authApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
@@ -369,24 +308,12 @@ import KeyBindings from '@/components/KeyBindings.vue'
 import LogExport from '@/components/LogExport.vue'
 import PromptTemplates from '@/components/PromptTemplates.vue'
 import RuleImportExport from '@/components/RuleImportExport.vue'
-import ScheduledJobs from '@/components/ScheduledJobs.vue'
 import UserManagement from '@/components/UserManagement.vue'
 
 // Types
 interface AIProvider {
   id: string; name: string; provider: string; base_url: string; model: string
   temperature: number; max_tokens: number; is_default: boolean; enabled: boolean; created_at: string
-}
-
-interface Message {
-  id: string; terminal_id: string | null; type: string; title: string
-  content: string; status: string; priority: number; created_at: string
-}
-
-interface ApprovalRecord {
-  id: string; terminal_id: string; ai_session_id: string | null; prompt_type: string
-  prompt_content: string; response: string; auto_approved?: boolean; auto_handled?: boolean
-  rule_matched: string; ai_decision: string; created_at: string
 }
 
 const message = useMessage()
@@ -411,17 +338,61 @@ const settingsTabOptions = computed(() => {
 
   options.push(
     { label: '系统规则', value: 'automation' },
+    { label: '提示词模板', value: 'prompt-templates' },
+    { label: '按键绑定', value: 'key-bindings' },
     { label: '规则导入/导出', value: 'rule-import-export' },
     { label: '日志导出', value: 'log-export' },
     { label: 'AI代理', value: 'agents' },
-    { label: 'AI Provider', value: 'ai-providers' },
-    { label: '按键绑定', value: 'key-bindings' },
-    { label: '计划任务', value: 'schedules' },
-    { label: '提示词模板', value: 'prompt-templates' },
-    { label: '消息中心', value: 'messages' }
+    { label: 'AI Provider', value: 'ai-providers' }
   )
 
   return options
+})
+
+const settingsMenuOptions = computed<MenuOption[]>(() => {
+  const accountChildren: MenuOption[] = [
+    { label: '账户设置', key: 'account', icon: () => h('span', { style: 'font-size: 18px' }, '👤') }
+  ]
+  if (isAdmin.value) {
+    accountChildren.push({ label: '用户管理', key: 'users', icon: () => h('span', { style: 'font-size: 18px' }, '👥') })
+  }
+
+  return [
+    {
+      type: 'group',
+      label: '账号',
+      key: 'g-account',
+      children: accountChildren
+    },
+    {
+      type: 'group',
+      label: '治理',
+      key: 'g-govern',
+      children: [
+        { label: '系统规则', key: 'automation', icon: () => h('span', { style: 'font-size: 18px' }, '✅') },
+        { label: '提示词模板', key: 'prompt-templates', icon: () => h('span', { style: 'font-size: 18px' }, '🧩') },
+        { label: '按键绑定', key: 'key-bindings', icon: () => h('span', { style: 'font-size: 18px' }, '⌨️') }
+      ]
+    },
+    {
+      type: 'group',
+      label: 'AI',
+      key: 'g-ai',
+      children: [
+        { label: 'AI代理', key: 'agents', icon: () => h('span', { style: 'font-size: 18px' }, '🤖') },
+        { label: 'AI Provider', key: 'ai-providers', icon: () => h('span', { style: 'font-size: 18px' }, '🧠') }
+      ]
+    },
+    {
+      type: 'group',
+      label: '备份与导出',
+      key: 'g-export',
+      children: [
+        { label: '规则导入/导出', key: 'rule-import-export', icon: () => h('span', { style: 'font-size: 18px' }, '📦') },
+        { label: '日志导出', key: 'log-export', icon: () => h('span', { style: 'font-size: 18px' }, '📤') }
+      ]
+    }
+  ]
 })
 
 watch(isAdmin, (admin) => {
@@ -681,140 +652,10 @@ function resetProviderForm() {
   })
 }
 
-// ===== Messages =====
-const messages = ref<Message[]>([])
-const loadingMessages = ref(false)
-const messageFilter = reactive({ status: null as string | null })
-const messagePagination = reactive({ page: 1, pageSize: 20, itemCount: 0 })
-
-const statusOptions = [
-  { label: '全部', value: null },
-  { label: '未读', value: 'unread' },
-  { label: '已读', value: 'read' },
-  { label: '已处理', value: 'handled' }
-]
-
-const messageColumns: DataTableColumns<Message> = [
-  { title: '时间', key: 'created_at', width: 140, render: (row) => new Date(row.created_at).toLocaleString('zh-CN') },
-  {
-    title: '类型', key: 'type', width: 100,
-    render: (row) => {
-      const typeMap: Record<string, { label: string; type: 'info' | 'warning' | 'error' }> = {
-        approval_needed: { label: '待审批', type: 'warning' },
-        blocked: { label: '已阻止', type: 'error' },
-        info: { label: '信息', type: 'info' },
-        warning: { label: '警告', type: 'warning' },
-        error: { label: '错误', type: 'error' }
-      }
-      const info = typeMap[row.type] || { label: row.type, type: 'info' }
-      return h(NTag, { size: 'small', type: info.type }, () => info.label)
-    }
-  },
-  { title: '标题', key: 'title', ellipsis: { tooltip: true } },
-  {
-    title: '状态', key: 'status', width: 80,
-    render: (row) => {
-      const statusMap: Record<string, string> = { unread: '未读', read: '已读', handled: '已处理', dismissed: '已忽略' }
-      return h(NTag, { size: 'small', bordered: false, type: row.status === 'unread' ? 'warning' : 'default' }, () => statusMap[row.status] || row.status)
-    }
-  },
-  {
-    title: '操作', key: 'actions', width: 100,
-    render: (row) => h(NSpace, { size: 'small' }, () => [
-      row.status === 'unread' && h(NButton, { size: 'tiny', quaternary: true, onClick: () => markMessageRead(row.id) }, () => '已读'),
-      h(NButton, { size: 'tiny', quaternary: true, onClick: () => dismissMessage(row.id) }, () => '忽略')
-    ].filter(Boolean))
-  }
-]
-
-async function fetchMessages() {
-  loadingMessages.value = true
-  try {
-    const { data } = await automationApi.listMessages({
-      status: messageFilter.status || undefined,
-      limit: messagePagination.pageSize,
-      offset: (messagePagination.page - 1) * messagePagination.pageSize
-    })
-    messages.value = data.items || []
-    messagePagination.itemCount = data.total || 0
-  } finally { loadingMessages.value = false }
-}
-
-async function markMessageRead(id: string) {
-  try { await automationApi.markMessageRead(id); fetchMessages() } catch { message.error('操作失败') }
-}
-
-async function dismissMessage(id: string) {
-  try { await automationApi.dismissMessage(id); message.success('已忽略'); fetchMessages() } catch { message.error('操作失败') }
-}
-
-async function markAllRead() {
-  try { await automationApi.markAllRead(); message.success('全部标记为已读'); fetchMessages() } catch { message.error('操作失败') }
-}
-
-function handleMessagePageChange(page: number) { messagePagination.page = page; fetchMessages() }
-
-// ===== Approval Records =====
-const approvalRecords = ref<ApprovalRecord[]>([])
-const loadingApprovals = ref(false)
-const approvalPagination = reactive({ page: 1, pageSize: 20, itemCount: 0 })
-
-function cleanApprovalPrompt(content: string): string {
-  if (!content) return ''
-  let cleaned = content
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[PX^_].*?\x1b\\/g, '')
-    .replace(/\[[0-9;]{1,20}[a-zA-Z]/g, '')
-    .replace(/(?:^|\s)(?:[0-9]{1,3};){1,8}[0-9]{1,3}m(?=[+\-\[]|\s)/g, ' ')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-    .trim()
-  while (cleaned.includes('\n\n\n')) cleaned = cleaned.replace(/\n\n\n/g, '\n\n')
-  return cleaned
-}
-
-function normalizeApprovalResponse(response: string) {
-  return (response || '').trim()
-}
-
-function responseTagType(response: string) {
-  const r = normalizeApprovalResponse(response).toLowerCase()
-  if (r === 'y' || r === 'yes' || r === 'approve') return 'success'
-  if (r === 'n' || r === 'no' || r === 'reject') return 'error'
-  return 'default'
-}
-
-const approvalColumns: DataTableColumns<ApprovalRecord> = [
-  { title: '时间', key: 'created_at', width: 140, render: (row) => new Date(row.created_at).toLocaleString('zh-CN') },
-  { title: '类型', key: 'prompt_type', width: 100, render: (row) => h(NTag, { size: 'small', bordered: false }, () => row.prompt_type || 'unknown') },
-  { title: '提示内容', key: 'prompt_content', ellipsis: { tooltip: true }, render: (row) => h('pre', { style: { margin: 0, fontSize: '11px', maxHeight: '40px', overflow: 'hidden' } }, cleanApprovalPrompt(row.prompt_content).substring(0, 200)) },
-  { title: '响应', key: 'response', width: 80, render: (row) => h(NTag, { size: 'small', bordered: false, type: responseTagType(row.response) }, () => normalizeApprovalResponse(row.response) || '—') },
-  { title: '自动处理', key: 'auto_approved', width: 80, render: (row) => (row.auto_approved ?? row.auto_handled) ? h(NTag, { size: 'small', bordered: false, type: 'info' }, () => '是') : '否' },
-  { title: '匹配规则', key: 'rule_matched', width: 100, ellipsis: { tooltip: true } }
-]
-
-async function fetchApprovalRecords() {
-  loadingApprovals.value = true
-  try {
-    const { data } = await automationApi.listApprovalRecords({
-      limit: approvalPagination.pageSize,
-      offset: (approvalPagination.page - 1) * approvalPagination.pageSize
-    })
-    approvalRecords.value = data.items || []
-    approvalPagination.itemCount = data.total || 0
-  } finally { loadingApprovals.value = false }
-}
-
-function handleApprovalPageChange(page: number) { approvalPagination.page = page; fetchApprovalRecords() }
-
 // Init
 onMounted(() => {
   fetchProviders()
   fetchSystemConfig()
-  fetchMessages()
-  fetchApprovalRecords()
 })
 </script>
 
@@ -840,8 +681,20 @@ onMounted(() => {
   margin-bottom: 12px;
 }
 
-.settings-page--mobile :deep(.n-tabs-nav) {
-  display: none;
+.settings-layout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.settings-sider {
+  width: 220px;
+  flex-shrink: 0;
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
 }
 
 .section { margin-top: 16px; }
@@ -853,7 +706,17 @@ onMounted(() => {
   font-weight: 600;
 }
 
-:deep(.n-tabs-nav) { background: #252525; padding: 0 16px; border-radius: 6px; }
+:deep(.n-menu) { background: #252525; border-radius: 6px; padding: 8px 6px; }
 :deep(.n-data-table) { --n-th-color: #252525; --n-td-color: #1e1e1e; --n-border-color: #333; }
 :deep(.n-card) { background: #252525; }
+
+@media (max-width: 768px) {
+  .settings-layout {
+    display: block;
+  }
+
+  .settings-sider {
+    display: none;
+  }
+}
 </style>

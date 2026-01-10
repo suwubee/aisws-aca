@@ -21,8 +21,10 @@
         :collapsed="collapsed"
         :collapsed-width="64"
         :collapsed-icon-size="20"
+        :expanded-keys="expandedKeys"
         :options="menuOptions"
         @update:value="handleMenuChange"
+        @update:expanded-keys="expandedKeys = $event"
       />
     </n-layout-sider>
 
@@ -53,9 +55,10 @@
         </div>
         <div class="header-right">
           <n-space align="center">
+            <ApprovalCenter />
             <n-badge :value="unreadCount" :max="99" :show="unreadCount > 0">
-              <n-button quaternary size="small" @click="$router.push('/logs')">
-                📋
+              <n-button quaternary size="small" @click="$router.push('/messages')">
+                🔔
               </n-button>
             </n-badge>
             <n-dropdown :options="userOptions" @select="handleUserAction">
@@ -96,8 +99,10 @@
       </div>
       <n-menu
         :value="activeMenu"
+        :expanded-keys="expandedKeys"
         :options="menuOptions"
         @update:value="handleMobileMenuChange"
+        @update:expanded-keys="expandedKeys = $event"
       />
     </n-drawer-content>
   </n-drawer>
@@ -108,6 +113,7 @@ import { ref, onMounted, computed, h, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/utils/useIsMobile'
+import ApprovalCenter from '@/components/ApprovalCenter.vue'
 import {
   NLayout,
   NLayoutSider,
@@ -136,6 +142,20 @@ const unreadCount = ref(0)
 const user = computed(() => authStore.user)
 const showMobileMenu = ref(false)
 const { isMobile } = useIsMobile()
+const expandedKeys = ref<string[]>([])
+
+const parentKeyByMenuKey: Record<string, string> = {
+  projects: 'project',
+  tasks: 'project',
+  kanban: 'project',
+  workflows: 'project',
+  schedules: 'project',
+  terminals: 'ops',
+  'ai-intelligence': 'ops',
+  messages: 'ops',
+  logs: 'ops',
+  servers: 'ops'
+}
 
 const menuOptions: MenuOption[] = [
   {
@@ -144,44 +164,68 @@ const menuOptions: MenuOption[] = [
     icon: () => h('span', { style: 'font-size: 18px' }, '🏠')
   },
   {
-    label: '项目管理',
-    key: 'projects',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📦')
+    label: '项目与任务',
+    key: 'project',
+    icon: () => h('span', { style: 'font-size: 18px' }, '📦'),
+    children: [
+      {
+        label: '任务列表',
+        key: 'tasks',
+        icon: () => h('span', { style: 'font-size: 18px' }, '📋')
+      },
+      {
+        label: '任务看板',
+        key: 'kanban',
+        icon: () => h('span', { style: 'font-size: 18px' }, '📊')
+      },
+      {
+        label: '项目/项目集',
+        key: 'projects',
+        icon: () => h('span', { style: 'font-size: 18px' }, '📦')
+      },
+      {
+        label: '工作流',
+        key: 'workflows',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🔁')
+      },
+      {
+        label: '计划任务',
+        key: 'schedules',
+        icon: () => h('span', { style: 'font-size: 18px' }, '⏱️')
+      }
+    ]
   },
   {
-    label: '服务器管理',
-    key: 'servers',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
-  },
-  {
-    label: '任务管理',
-    key: 'tasks',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📋')
-  },
-  {
-    label: '任务看板',
-    key: 'kanban',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📊')
-  },
-  {
-    label: '工作流',
-    key: 'workflows',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🔁')
-  },
-  {
-    label: '终端管理',
-    key: 'terminals',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
-  },
-  {
-    label: 'AI 智能',
-    key: 'ai-intelligence',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
-  },
-  {
-    label: '日志管理',
-    key: 'logs',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📝')
+    label: '终端与监控',
+    key: 'ops',
+    icon: () => h('span', { style: 'font-size: 18px' }, '🧪'),
+    children: [
+      {
+        label: '终端',
+        key: 'terminals',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
+      },
+      {
+        label: '消息中心',
+        key: 'messages',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🔔')
+      },
+      {
+        label: 'AI 智能',
+        key: 'ai-intelligence',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
+      },
+      {
+        label: '日志管理',
+        key: 'logs',
+        icon: () => h('span', { style: 'font-size: 18px' }, '📝')
+      },
+      {
+        label: '服务器',
+        key: 'servers',
+        icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
+      }
+    ]
   },
   {
     label: '系统设置',
@@ -213,6 +257,8 @@ const activeMenu = computed(() => {
   if (path.startsWith('/projects')) return 'projects'
   if (path.startsWith('/tasks') || path.startsWith('/task/')) return 'tasks'
   if (path.startsWith('/workflows')) return 'workflows'
+  if (path.startsWith('/schedules')) return 'schedules'
+  if (path.startsWith('/messages')) return 'messages'
   if (path.startsWith('/logs')) return 'logs'
   if (path.startsWith('/terminals')) return 'terminals'
   if (path.startsWith('/settings')) return 'settings'
@@ -228,6 +274,8 @@ const currentPageName = computed(() => {
   if (path.startsWith('/projects')) return '项目管理'
   if (path.startsWith('/tasks') || path.startsWith('/task/')) return '任务管理'
   if (path.startsWith('/workflows')) return '工作流'
+  if (path.startsWith('/schedules')) return '计划任务'
+  if (path.startsWith('/messages')) return '消息中心'
   if (path.startsWith('/logs')) return '日志管理'
   if (path.startsWith('/terminals')) return '终端管理'
   if (path.startsWith('/settings')) return '系统设置'
@@ -235,6 +283,7 @@ const currentPageName = computed(() => {
 })
 
 function handleMenuChange(key: string) {
+  if (key === 'project' || key === 'ops') return
   switch (key) {
     case 'dashboard':
       router.push('/')
@@ -244,6 +293,9 @@ function handleMenuChange(key: string) {
       break
     case 'ai-intelligence':
       router.push('/ai-intelligence')
+      break
+    case 'messages':
+      router.push('/messages')
       break
     case 'servers':
       router.push('/servers')
@@ -256,6 +308,9 @@ function handleMenuChange(key: string) {
       break
     case 'workflows':
       router.push('/workflows')
+      break
+    case 'schedules':
+      router.push('/schedules')
       break
     case 'logs':
       router.push('/logs')
@@ -307,6 +362,14 @@ watch(
     showMobileMenu.value = false
   }
 )
+
+watch(activeMenu, (key) => {
+  const parent = parentKeyByMenuKey[key]
+  if (!parent) return
+  if (!expandedKeys.value.includes(parent)) {
+    expandedKeys.value = [...expandedKeys.value, parent]
+  }
+}, { immediate: true })
 
 watch(isMobile, (mobile) => {
   if (!mobile) showMobileMenu.value = false

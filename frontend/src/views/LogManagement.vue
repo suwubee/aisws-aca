@@ -203,10 +203,10 @@ const loadingSessions = ref(false)
 const loadingLogs = ref(false)
 const { isMobile } = useIsMobile()
 const searchKeyword = ref('')
-const filterType = ref<string | null>(null)
+const filterType = ref<string>('')
 
 const typeOptions = [
-  { label: '全部', value: null },
+  { label: '全部', value: '' },
   { label: '输入', value: 'input' },
   { label: '输出', value: 'output' }
 ]

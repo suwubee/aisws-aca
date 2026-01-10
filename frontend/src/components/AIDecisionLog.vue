@@ -152,8 +152,8 @@ function getTerminalLabel(id: string) {
 }
 
 const terminalOptions = computed(() => {
-  const options: Array<{ label: string; value: string | null }> = [
-    { label: '全部终端', value: null }
+  const options: Array<{ label: string; value: string }> = [
+    { label: '全部终端', value: '' }
   ]
 
   const seen = new Set<string>()

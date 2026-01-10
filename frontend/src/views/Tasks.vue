@@ -46,7 +46,7 @@
     <div v-if="isMobile" class="mobile-task-cards">
       <n-spin :show="loading">
         <div class="mobile-task-cards__container">
-          <n-space v-if="filteredTasks.length > 0" vertical :size="8">
+          <n-space v-if="filteredTasks.length > 0" vertical :size="6">
             <n-card
               v-for="task in filteredTasks"
               :key="task.id"
@@ -196,7 +196,7 @@ const statusMap: Record<string, { type: 'default' | 'info' | 'success' | 'warnin
 }
 
 const projectGroupOptions = computed(() => ([
-  { label: '全部项目集', value: null },
+  { label: '全部项目集', value: '' },
   { label: '未分组', value: '__none__' },
   ...projectStore.projectGroupOptions
 ]))
@@ -211,7 +211,7 @@ const projectOptions = computed(() => {
     : base
 
   return [
-    { label: '全部项目', value: null },
+    { label: '全部项目', value: '' },
     { label: '无项目', value: '__none__' },
     ...filtered.map(p => {
       const groupName = p.group_id ? projectStore.groupNameMap.get(p.group_id) : null
@@ -268,7 +268,7 @@ const columns: DataTableColumns<any> = [
     key: 'actions',
     width: 200,
     render(row) {
-      const buttons = []
+      const buttons: Array<ReturnType<typeof h>> = []
       // 详情按钮
       buttons.push(h(NButton, {
         size: 'small',
@@ -450,19 +450,19 @@ onMounted(fetchData)
   }
 
   .mobile-task-desc {
-    margin: 6px 0;
+    margin: 4px 0;
     color: #94a3b8;
     font-size: 13px;
     white-space: pre-line;
     word-break: break-word;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
 
   .mobile-task-meta {
-    margin-top: 6px;
+    margin-top: 4px;
     display: flex;
     gap: 6px;
     align-items: baseline;
@@ -470,15 +470,15 @@ onMounted(fetchData)
   }
 
   .mobile-task-card :deep(.n-card__header) {
-    padding: 8px 10px 6px;
+    padding: 6px 8px 4px;
   }
 
   .mobile-task-card :deep(.n-card__content) {
-    padding: 6px 10px;
+    padding: 4px 8px;
   }
 
   .mobile-task-card :deep(.n-card__footer) {
-    padding: 6px 10px 8px;
+    padding: 4px 8px 6px;
   }
 }
 </style>

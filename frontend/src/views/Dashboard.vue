@@ -76,14 +76,12 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
-const router = useRouter()
 const message = useMessage()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
@@ -140,7 +138,6 @@ async function handleCreateTask() {
   }
 
   try {
-    const shouldReturn = newTask.return_to_workbench
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,

@@ -52,7 +52,7 @@
             />
 
             <div v-else class="mobile-project-cards">
-              <n-space v-if="filteredProjects.length > 0" vertical :size="8">
+              <n-space v-if="filteredProjects.length > 0" vertical :size="6">
                 <n-card v-for="project in filteredProjects" :key="project.id" size="small" class="mobile-project-card">
                   <template #header>
                     <div class="mobile-project-card-header">
@@ -126,7 +126,7 @@
             />
 
             <div v-else class="mobile-group-cards">
-              <n-space v-if="filteredGroups.length > 0" vertical :size="8">
+              <n-space v-if="filteredGroups.length > 0" vertical :size="6">
                 <n-card v-for="group in filteredGroups" :key="group.id" size="small" class="mobile-project-card">
                   <template #header>
                     <div class="mobile-project-card-header">
@@ -268,7 +268,7 @@ const loading = ref(false)
 const { isMobile } = useIsMobile()
 
 const filterTypeOptions = [
-  { label: '全部类型', value: null },
+  { label: '全部类型', value: '' },
   { label: 'local', value: 'local' },
   { label: 'remote', value: 'remote' },
   { label: 'git', value: 'git' }
@@ -281,7 +281,7 @@ const projectTypeOptions = [
 ]
 
 const groupFilterOptions = computed(() => ([
-  { label: '全部项目集', value: null },
+  { label: '全部项目集', value: '' },
   { label: '未分组', value: '__none__' },
   ...projectStore.projectGroupOptions
 ]))
@@ -631,31 +631,31 @@ async function removeGroup(group: ProjectGroup) {
 }
 
 .mobile-project-meta + .mobile-project-meta {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .mobile-project-desc {
-  margin: 6px 0;
+  margin: 4px 0;
   color: #94a3b8;
   font-size: 13px;
   white-space: pre-line;
   word-break: break-word;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
 .mobile-project-card :deep(.n-card__header) {
-  padding: 8px 10px 6px;
+  padding: 6px 8px 4px;
 }
 
 .mobile-project-card :deep(.n-card__content) {
-  padding: 6px 10px;
+  padding: 4px 8px;
 }
 
 .mobile-project-card :deep(.n-card__footer) {
-  padding: 6px 10px 8px;
+  padding: 4px 8px 6px;
 }
 
 @media (max-width: 768px) {

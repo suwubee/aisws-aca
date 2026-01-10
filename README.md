@@ -32,7 +32,7 @@
 ### 前置要求
 - Go 1.21+
 - Node.js 18+
-- pnpm (推荐) 或 npm
+- npm（推荐，仓库包含 `package-lock.json`）
 
 ### 安装和运行
 
@@ -46,22 +46,22 @@ cd ai-coding-assistant
 ```bash
 cd backend
 go mod tidy
-go run main.go
+go run .
 ```
-后端服务将在 http://localhost:3007 启动
+后端服务将在 http://localhost:34007 启动
 
 3. **前端开发模式**
 ```bash
 cd frontend
-pnpm install
-pnpm dev
+npm ci
+npm run dev
 ```
-前端开发服务器将在 http://localhost:3000 启动
+前端开发服务器将在 http://localhost:34001 启动（代理 /api 到后端 34007）
 
 4. **构建生产版本**
 ```bash
 cd frontend
-pnpm build
+npm run build
 ```
 前端将构建到 `backend/static` 目录
 
@@ -93,8 +93,7 @@ ai-coding-assistant/
 │   │   └── router/        # 路由
 │   └── package.json
 └── docs/                   # 文档
-    ├── PRD.md             # 产品需求文档
-    └── DEVELOPMENT_PLAN.md # 开发计划
+    └── README.md           # 文档索引（从这里开始）
 ```
 
 ## API接口
@@ -148,7 +147,7 @@ ai-coding-assistant/
 
 ## 开发计划
 
-详见 [开发计划文档](docs/DEVELOPMENT_PLAN.md)
+详见 `docs/README.md`
 
 ## 参考项目
 

@@ -39,6 +39,11 @@ const routes = [
         component: () => import('@/views/AIIntelligence.vue')
       },
       {
+        path: 'messages',
+        name: 'Messages',
+        component: () => import('@/views/Messages.vue')
+      },
+      {
         path: 'logs',
         name: 'LogManagement',
         component: () => import('@/views/LogManagement.vue')
@@ -64,6 +69,11 @@ const routes = [
         component: () => import('@/views/Workflows.vue')
       },
       {
+        path: 'schedules',
+        name: 'Schedules',
+        component: () => import('@/views/Schedules.vue')
+      },
+      {
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/Settings.vue')
@@ -79,6 +89,7 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
+  void from
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next('/login')
