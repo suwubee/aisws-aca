@@ -439,7 +439,7 @@ onMounted(fetchData)
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 10px;
+    gap: 8px;
   }
 
   .mobile-task-title {
@@ -467,10 +467,6 @@ onMounted(fetchData)
     gap: 6px;
     align-items: baseline;
     flex-wrap: wrap;
-  }
-
-  .mobile-task-card-header {
-    gap: 8px;
   }
 
   .mobile-task-card :deep(.n-card__header) {

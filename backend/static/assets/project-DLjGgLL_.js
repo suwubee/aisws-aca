@@ -1,0 +1,1 @@
+import{af as t}from"./index-D5nrAqbs.js";function n(){return t.get("/projects")}function c(e){return t.post("/projects",e)}function p(e,o){return t.put(`/projects/${encodeURIComponent(e)}`,o)}function s(e){return t.delete(`/projects/${encodeURIComponent(e)}`)}export{c,s as d,n as g,p as u};
