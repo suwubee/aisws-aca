@@ -339,8 +339,8 @@ function handleViewDetail(task: Task) {
 .mobile-task-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 0;
+  gap: 8px;
+  padding: 8px 0;
   min-height: 140px;
 }
 

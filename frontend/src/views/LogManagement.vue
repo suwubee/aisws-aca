@@ -94,7 +94,7 @@
 
             <div v-else class="mobile-log-cards">
               <n-spin :show="loadingLogs">
-                <n-space v-if="logs.length > 0" vertical :size="12">
+                <n-space v-if="logs.length > 0" vertical :size="8">
                   <n-card
                     v-for="log in logs"
                     :key="log.id"
@@ -540,6 +540,18 @@ onMounted(() => {
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   color: rgba(255, 255, 255, 0.85);
+}
+
+.mobile-log-card :deep(.n-card__header) {
+  padding: 8px 10px 6px;
+}
+
+.mobile-log-card :deep(.n-card__content) {
+  padding: 6px 10px;
+}
+
+.mobile-log-card :deep(.n-card__footer) {
+  padding: 6px 10px 8px;
 }
 
 .mobile-log-pagination {

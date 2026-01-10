@@ -54,7 +54,7 @@
         <div v-else class="mobile-server-cards">
           <n-spin :show="loading">
             <div class="mobile-server-cards__container">
-              <n-space v-if="filteredServers.length > 0" vertical :size="12">
+              <n-space v-if="filteredServers.length > 0" vertical :size="8">
                 <n-card
                   v-for="server in filteredServers"
                   :key="server.id"
@@ -90,7 +90,7 @@
                   </div>
 
                   <template #footer>
-                    <n-space justify="end" size="small" wrap>
+                    <n-space justify="end" :size="6" wrap>
                       <n-button size="small" type="primary" @click="openSshTerminal(server)">
                         连接
                       </n-button>
@@ -766,7 +766,7 @@ onMounted(() => {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 10px;
+    gap: 8px;
   }
 
   .mobile-server-title {
@@ -777,11 +777,28 @@ onMounted(() => {
   }
 
   .mobile-server-meta {
-    margin-top: 6px;
+    margin-top: 0;
     display: flex;
-    gap: 6px;
+    gap: 4px;
     align-items: baseline;
     flex-wrap: wrap;
+    line-height: 1.25;
+  }
+
+  .mobile-server-meta + .mobile-server-meta {
+    margin-top: 4px;
+  }
+
+  .mobile-server-card :deep(.n-card__header) {
+    padding: 8px 10px 6px;
+  }
+
+  .mobile-server-card :deep(.n-card__content) {
+    padding: 6px 10px;
+  }
+
+  .mobile-server-card :deep(.n-card__footer) {
+    padding: 6px 10px 8px;
   }
 }
 

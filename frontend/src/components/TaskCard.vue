@@ -273,10 +273,23 @@ function handleMenuSelect(key: string) {
 @media (max-width: 768px) {
   .task-card {
     cursor: pointer;
+    padding: 10px;
   }
 
   .task-card:hover {
     transform: none;
+  }
+
+  .task-header {
+    margin-bottom: 6px;
+  }
+
+  .task-description {
+    margin-bottom: 6px;
+  }
+
+  .task-meta {
+    row-gap: 4px;
   }
 }
 

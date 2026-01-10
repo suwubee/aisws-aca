@@ -46,7 +46,7 @@
     <div v-if="isMobile" class="mobile-task-cards">
       <n-spin :show="loading">
         <div class="mobile-task-cards__container">
-          <n-space v-if="filteredTasks.length > 0" vertical :size="12">
+          <n-space v-if="filteredTasks.length > 0" vertical :size="8">
             <n-card
               v-for="task in filteredTasks"
               :key="task.id"
@@ -66,7 +66,7 @@
                 {{ task.description }}
               </div>
 
-              <n-space :size="6" wrap>
+              <n-space :size="4" wrap>
                 <n-tag size="small" :type="(['default','info','warning','error'][task.priority] as any)">
                   {{ ['低','中','高','紧急'][task.priority] }}
                 </n-tag>
@@ -81,7 +81,7 @@
               </div>
 
               <template #footer>
-                <n-space justify="end" size="small" wrap>
+                <n-space justify="end" :size="6" wrap>
                   <n-button size="small" @click="router.push(`/task/${task.id}`)">详情</n-button>
                   <n-button
                     v-if="task.status === 'todo' && task.work_dir"
@@ -450,19 +450,39 @@ onMounted(fetchData)
   }
 
   .mobile-task-desc {
-    margin: 8px 0;
+    margin: 6px 0;
     color: #94a3b8;
     font-size: 13px;
-    white-space: pre-wrap;
+    white-space: pre-line;
     word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .mobile-task-meta {
-    margin-top: 8px;
+    margin-top: 6px;
     display: flex;
     gap: 6px;
     align-items: baseline;
     flex-wrap: wrap;
+  }
+
+  .mobile-task-card-header {
+    gap: 8px;
+  }
+
+  .mobile-task-card :deep(.n-card__header) {
+    padding: 8px 10px 6px;
+  }
+
+  .mobile-task-card :deep(.n-card__content) {
+    padding: 6px 10px;
+  }
+
+  .mobile-task-card :deep(.n-card__footer) {
+    padding: 6px 10px 8px;
   }
 }
 </style>

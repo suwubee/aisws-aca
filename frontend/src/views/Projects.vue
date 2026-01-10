@@ -52,7 +52,7 @@
             />
 
             <div v-else class="mobile-project-cards">
-              <n-space v-if="filteredProjects.length > 0" vertical :size="12">
+              <n-space v-if="filteredProjects.length > 0" vertical :size="8">
                 <n-card v-for="project in filteredProjects" :key="project.id" size="small" class="mobile-project-card">
                   <template #header>
                     <div class="mobile-project-card-header">
@@ -61,7 +61,7 @@
                     </div>
                   </template>
 
-                  <n-space :size="6" wrap>
+                  <n-space :size="4" wrap>
                     <n-tag v-if="projectGroupLabel(project)" size="small" type="success">
                       {{ projectGroupLabel(project) }}
                     </n-tag>
@@ -78,7 +78,7 @@
                   </div>
 
                   <template #footer>
-                    <n-space justify="end" size="small" wrap>
+                    <n-space justify="end" :size="6" wrap>
                       <n-button size="small" @click="openEditProject(project)">编辑</n-button>
                       <n-popconfirm
                         positive-text="删除"
@@ -126,7 +126,7 @@
             />
 
             <div v-else class="mobile-group-cards">
-              <n-space v-if="filteredGroups.length > 0" vertical :size="12">
+              <n-space v-if="filteredGroups.length > 0" vertical :size="8">
                 <n-card v-for="group in filteredGroups" :key="group.id" size="small" class="mobile-project-card">
                   <template #header>
                     <div class="mobile-project-card-header">
@@ -135,7 +135,7 @@
                   </template>
                   <div v-if="group.description" class="mobile-project-desc">{{ group.description }}</div>
                   <template #footer>
-                    <n-space justify="end" size="small" wrap>
+                    <n-space justify="end" :size="6" wrap>
                       <n-popconfirm
                         positive-text="删除"
                         negative-text="取消"
@@ -611,7 +611,7 @@ async function removeGroup(group: ProjectGroup) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .mobile-project-title {
@@ -622,19 +622,40 @@ async function removeGroup(group: ProjectGroup) {
 }
 
 .mobile-project-meta {
-  margin-top: 8px;
+  margin-top: 0;
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: baseline;
   flex-wrap: wrap;
+  line-height: 1.25;
+}
+
+.mobile-project-meta + .mobile-project-meta {
+  margin-top: 4px;
 }
 
 .mobile-project-desc {
-  margin: 8px 0;
+  margin: 6px 0;
   color: #94a3b8;
   font-size: 13px;
-  white-space: pre-wrap;
+  white-space: pre-line;
   word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mobile-project-card :deep(.n-card__header) {
+  padding: 8px 10px 6px;
+}
+
+.mobile-project-card :deep(.n-card__content) {
+  padding: 6px 10px;
+}
+
+.mobile-project-card :deep(.n-card__footer) {
+  padding: 6px 10px 8px;
 }
 
 @media (max-width: 768px) {
