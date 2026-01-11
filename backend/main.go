@@ -13,6 +13,7 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/setupwizard"
 	"github.com/ai-coding-assistant/service/schedule"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/service/task"
@@ -32,6 +33,16 @@ import (
 var staticFiles embed.FS
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "setup", "setup-wizard":
+			if err := setupwizard.Run(setupwizard.RunOptions{}); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+	}
+
 	// 加载配置
 	cfg := config.Load()
 

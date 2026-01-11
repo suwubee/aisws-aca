@@ -2,6 +2,18 @@
 
 本项目提供若干脚本用于“快速部署/本地开发/一键启动”。脚本统一位于 `scripts/`。
 
+## 0) 初始化向导（可视化）
+
+适用场景：首次部署，希望用 Web 界面引导完成 `.env`、SQLite、默认审核规则、管理员账号，并自动启动服务。
+
+```bash
+./scripts/quickstart.sh wizard
+```
+
+也可直接运行：
+- `./backend/ai-coding-assistant setup`（推荐，使用仓库内置二进制）
+- `cd backend && go run ./cmd/setup-wizard`（需要 Go）
+
 ## 1) Quickstart（推荐：生产式本地运行）
 
 适用场景：你只想在一台机器上快速跑起来（前端静态资源 + 后端二进制），并通过 `.env` 配置变量。

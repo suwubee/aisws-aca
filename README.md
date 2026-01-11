@@ -34,6 +34,16 @@
 - npm（推荐，仓库包含 `package-lock.json`）
   - 说明：仓库内包含后端预编译二进制 `backend/ai-coding-assistant`，Quickstart 不强制要求安装 Go；如需二次开发/重新编译后端，请安装 Go 1.21+。
 
+### 初始化向导（推荐首次部署）
+
+```bash
+./scripts/quickstart.sh wizard
+```
+
+说明：
+- 会启动一个随机端口的 Go Web 向导，引导你完成 `.env`、SQLite、默认审核规则、管理员账号，并自动启动后端/前端
+- 也可直接运行：`./backend/ai-coding-assistant setup`
+
 ### Quickstart（推荐）
 
 ```bash

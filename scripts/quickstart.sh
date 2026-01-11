@@ -8,6 +8,7 @@
 #   ./scripts/quickstart.sh init       # interactive .env init
 #   ./scripts/quickstart.sh build      # build frontend into backend/static
 #   ./scripts/quickstart.sh start      # run backend server (uses .env)
+#   ./scripts/quickstart.sh wizard     # run first-run web setup wizard
 #   ./scripts/quickstart.sh up         # init + build + start
 #
 set -euo pipefail
@@ -30,6 +31,7 @@ Commands:
   init        Interactive .env initialization
   build       Build frontend into backend/static
   start       Start backend server (reads .env)
+  wizard      Run first-run web setup wizard
   up          init + build + start
 
 Options:
@@ -194,11 +196,29 @@ start_backend() {
   exec "$BACKEND_BIN"
 }
 
+run_setup_wizard() {
+  cd "$ROOT"
+
+  if [[ -x "$BACKEND_BIN" ]]; then
+    exec "$BACKEND_BIN" setup
+  fi
+
+  if command -v go >/dev/null 2>&1; then
+    echo "[WARN] Backend binary not found; running setup wizard via Go (go run ./cmd/setup-wizard)..."
+    cd "$BACKEND_DIR"
+    exec go run ./cmd/setup-wizard
+  fi
+
+  echo "[ERROR] Backend binary not found: $BACKEND_BIN" >&2
+  echo "        Install Go 1.21+ to run: (cd backend && go run ./cmd/setup-wizard)" >&2
+  exit 1
+}
+
 COMMAND="${1:-up}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    init|build|start|up)
+    init|build|start|wizard|up)
       COMMAND="$1"
       shift
       ;;
@@ -231,6 +251,9 @@ case "$COMMAND" in
     ;;
   start)
     start_backend
+    ;;
+  wizard)
+    run_setup_wizard
     ;;
   up)
     init_env
