@@ -46,6 +46,7 @@ coverage/
 # Temporary
 tmp/
 temp/
+.aca/
 .cache/
 .gocache/
 backend/.gocache/

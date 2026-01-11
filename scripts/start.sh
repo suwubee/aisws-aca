@@ -7,10 +7,16 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 FRONTEND_DIR="$PROJECT_ROOT/frontend"
-BACKEND_LOG="/tmp/aca-backend.log"
-FRONTEND_LOG="/tmp/aca-frontend.log"
-BACKEND_PID_FILE="/tmp/aca-backend.pid"
-FRONTEND_PID_FILE="/tmp/aca-frontend.pid"
+
+# Runtime files are stored under project root to avoid relying on system dirs like /tmp.
+RUNTIME_DIR="$PROJECT_ROOT/.aca"
+LOG_DIR="$RUNTIME_DIR/logs"
+PID_DIR="$RUNTIME_DIR/pids"
+
+BACKEND_LOG="$LOG_DIR/backend.log"
+FRONTEND_LOG="$LOG_DIR/frontend.log"
+BACKEND_PID_FILE="$PID_DIR/backend.pid"
+FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -45,6 +51,8 @@ init_dev_env() {
     export ACA_BACKEND_HOST="${ACA_BACKEND_HOST:-localhost}"
     export ACA_BACKEND_PORT="${ACA_BACKEND_PORT:-$SERVER_PORT}"
     export ACA_FRONTEND_PORT="${ACA_FRONTEND_PORT:-34001}"
+
+    mkdir -p "$LOG_DIR" "$PID_DIR"
 }
 
 # 检查进程是否运行
@@ -173,17 +181,17 @@ show_logs() {
     local service=$1
     case $service in
         backend)
-            tail -50 "$BACKEND_LOG"
+            tail -50 "$BACKEND_LOG" 2>/dev/null || echo "No backend logs: $BACKEND_LOG"
             ;;
         frontend)
-            tail -50 "$FRONTEND_LOG"
+            tail -50 "$FRONTEND_LOG" 2>/dev/null || echo "No frontend logs: $FRONTEND_LOG"
             ;;
         *)
             echo "=== Backend Logs (last 20 lines) ==="
-            tail -20 "$BACKEND_LOG" 2>/dev/null || echo "No backend logs"
+            tail -20 "$BACKEND_LOG" 2>/dev/null || echo "No backend logs: $BACKEND_LOG"
             echo ""
             echo "=== Frontend Logs (last 20 lines) ==="
-            tail -20 "$FRONTEND_LOG" 2>/dev/null || echo "No frontend logs"
+            tail -20 "$FRONTEND_LOG" 2>/dev/null || echo "No frontend logs: $FRONTEND_LOG"
             ;;
     esac
 }

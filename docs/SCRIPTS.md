@@ -33,8 +33,8 @@
 
 说明：
 - 若项目根目录存在 `.env`，会自动加载并导出为环境变量（未找到则使用默认值）
-- 后端日志：`/tmp/aca-backend.log`；前端日志：`/tmp/aca-frontend.log`
-- PID 文件：`/tmp/aca-backend.pid`、`/tmp/aca-frontend.pid`
+- 后端日志：`.aca/logs/backend.log`；前端日志：`.aca/logs/frontend.log`
+- PID 文件：`.aca/pids/backend.pid`、`.aca/pids/frontend.pid`
 
 ## 3) keepbackend.sh（历史脚本：Go run + Vite dev）
 
@@ -55,4 +55,3 @@
 - `AUTH_USERNAME` / `AUTH_PASSWORD` / `JWT_SECRET`：认证
 - `TERMINAL_DEFAULT_LOGIN_DIR`：终端默认登入目录（新建本地终端会话默认进入，默认 `~/`）
 - `ACA_BACKEND_HOST` / `ACA_BACKEND_PORT` / `ACA_FRONTEND_PORT`：仅开发模式下用于 Vite 代理与端口覆盖（可选）
-
