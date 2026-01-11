@@ -21,7 +21,7 @@
 
             <n-space size="small" wrap>
               <n-button size="small" :loading="loading" @click="fetchMessages">刷新</n-button>
-              <n-button size="small" @click="markAllRead" :disabled="messages.length === 0">
+              <n-button size="small" @click="markAllRead" :disabled="isDemoMode || messages.length === 0">
                 全部已读
               </n-button>
             </n-space>
@@ -79,11 +79,12 @@
                         v-if="m.status === 'unread'"
                         size="small"
                         quaternary
+                        :disabled="isDemoMode"
                         @click="markRead(m.id)"
                       >
                         已读
                       </n-button>
-                      <n-button size="small" quaternary @click="dismiss(m.id)">忽略</n-button>
+                      <n-button size="small" quaternary :disabled="isDemoMode" @click="dismiss(m.id)">忽略</n-button>
                     </n-space>
                   </template>
                 </n-card>
@@ -127,6 +128,7 @@ import {
   NText
 } from 'naive-ui'
 import { automationApi } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 interface MessageItem {
@@ -141,7 +143,9 @@ interface MessageItem {
 }
 
 const uiMessage = useMessage()
+const authStore = useAuthStore()
 const { isMobile } = useIsMobile()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const messages = ref<MessageItem[]>([])
 const loading = ref(false)
@@ -233,8 +237,8 @@ const columns: DataTableColumns<MessageItem> = [
     key: 'actions',
     width: 120,
     render: (row) => h(NSpace, { size: 6 }, () => [
-      row.status === 'unread' && h(NButton, { size: 'tiny', quaternary: true, onClick: () => markRead(row.id) }, () => '已读'),
-      h(NButton, { size: 'tiny', quaternary: true, onClick: () => dismiss(row.id) }, () => '忽略')
+      row.status === 'unread' && h(NButton, { size: 'tiny', quaternary: true, disabled: isDemoMode.value, onClick: () => markRead(row.id) }, () => '已读'),
+      h(NButton, { size: 'tiny', quaternary: true, disabled: isDemoMode.value, onClick: () => dismiss(row.id) }, () => '忽略')
     ].filter(Boolean))
   }
 ]
@@ -271,6 +275,10 @@ function handlePageSizeChange(pageSize: number) {
 }
 
 async function markRead(id: string) {
+  if (isDemoMode.value) {
+    uiMessage.warning('演示模式：只读')
+    return
+  }
   try {
     await automationApi.markMessageRead(id)
     await fetchMessages()
@@ -280,6 +288,10 @@ async function markRead(id: string) {
 }
 
 async function dismiss(id: string) {
+  if (isDemoMode.value) {
+    uiMessage.warning('演示模式：只读')
+    return
+  }
   try {
     await automationApi.dismissMessage(id)
     uiMessage.success('已忽略')
@@ -290,6 +302,10 @@ async function dismiss(id: string) {
 }
 
 async function markAllRead() {
+  if (isDemoMode.value) {
+    uiMessage.warning('演示模式：只读')
+    return
+  }
   try {
     await automationApi.markAllRead()
     uiMessage.success('全部标记为已读')

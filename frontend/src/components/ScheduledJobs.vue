@@ -5,7 +5,7 @@
         <n-text depth="3">定时运行任务或 AI 工作流（支持 cron 表达式 / 单次定时）。</n-text>
         <n-space :size="8">
           <n-button size="small" quaternary @click="refresh" :loading="loading">刷新</n-button>
-          <n-button size="small" type="primary" @click="openCreate">新建</n-button>
+          <n-button size="small" type="primary" :disabled="isDemoMode" @click="openCreate">新建</n-button>
         </n-space>
       </n-space>
 
@@ -35,17 +35,17 @@
                 </n-tag>
               </n-space>
               <n-space :size="8">
-                <n-button size="tiny" @click="toggleEnabled(item)">{{ item.enabled ? '停用' : '启用' }}</n-button>
-                <n-button size="tiny" quaternary @click="runNow(item)" :loading="runningId === item.id">立即运行</n-button>
+                <n-button size="tiny" :disabled="isDemoMode" @click="toggleEnabled(item)">{{ item.enabled ? '停用' : '启用' }}</n-button>
+                <n-button size="tiny" quaternary :disabled="isDemoMode" @click="runNow(item)" :loading="runningId === item.id">立即运行</n-button>
                 <n-button size="tiny" quaternary @click="openRuns(item)">记录</n-button>
-                <n-button size="tiny" quaternary @click="openEdit(item)">编辑</n-button>
+                <n-button size="tiny" quaternary :disabled="isDemoMode" @click="openEdit(item)">编辑</n-button>
                 <n-popconfirm
                   @positive-click="() => void remove(item)"
                   positive-text="删除"
                   negative-text="取消"
                 >
                   <template #trigger>
-                    <n-button size="tiny" type="error" quaternary>删除</n-button>
+                    <n-button size="tiny" type="error" quaternary :disabled="isDemoMode">删除</n-button>
                   </template>
                   <span>确定删除该计划任务？</span>
                 </n-popconfirm>
@@ -205,6 +205,7 @@ import {
   useMessage
 } from 'naive-ui'
 import { scheduleApi } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useGlobalContextStore } from '@/stores/context'
 
@@ -226,8 +227,10 @@ interface ScheduledJob {
 }
 
 const message = useMessage()
+const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const contextStore = useGlobalContextStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const loading = ref(false)
 const items = ref<ScheduledJob[]>([])
@@ -335,12 +338,20 @@ function resetForm() {
 }
 
 function openCreate() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   editingId.value = null
   resetForm()
   showEditor.value = true
 }
 
 function openEdit(item: ScheduledJob) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   editingId.value = item.id
   form.name = item.name || ''
   form.description = item.description || ''
@@ -385,6 +396,11 @@ function buildPayload() {
 }
 
 async function save() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (saving.value) return
   saving.value = true
   try {
     const payload = buildPayload()
@@ -405,6 +421,10 @@ async function save() {
 }
 
 async function remove(item: ScheduledJob) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await scheduleApi.delete(item.id)
     message.success('已删除')
@@ -415,6 +435,10 @@ async function remove(item: ScheduledJob) {
 }
 
 async function toggleEnabled(item: ScheduledJob) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await scheduleApi.update(item.id, { enabled: !item.enabled })
     await refresh()
@@ -424,6 +448,11 @@ async function toggleEnabled(item: ScheduledJob) {
 }
 
 async function runNow(item: ScheduledJob) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (runningId.value) return
   runningId.value = item.id
   try {
     await scheduleApi.runNow(item.id)

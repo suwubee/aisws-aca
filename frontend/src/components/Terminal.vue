@@ -3,11 +3,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
 import 'xterm/css/xterm.css'
+import { useAuthStore } from '@/stores/auth'
 import { useApprovalStore } from '@/stores/approval'
 
 const props = defineProps<{
@@ -22,6 +23,8 @@ const emit = defineEmits<{
 }>()
 
 const approvalStore = useApprovalStore()
+const authStore = useAuthStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const terminalRef = ref<HTMLElement>()
 let terminal: Terminal | null = null
@@ -36,6 +39,7 @@ let destroyed = false
 let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let didReportDisconnect = false
+let didShowDemoNotice = false
 
 onMounted(() => {
   initTerminal()
@@ -102,6 +106,7 @@ function initTerminal() {
 
   // 监听用户输入
   terminal.onData((data) => {
+    if (isDemoMode.value) return
     sendInput(data)
   })
 
@@ -192,6 +197,10 @@ function handleMessage(msg: any) {
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
       }
+      if (isDemoMode.value && terminal && !didShowDemoNotice) {
+        terminal.write('\r\n\x1b[33m[演示模式] 终端只读，已禁用输入。\x1b[0m\r\n')
+        didShowDemoNotice = true
+      }
       break
 
     case 'data':
@@ -262,6 +271,7 @@ function handleMessage(msg: any) {
 }
 
 function sendInput(data: string) {
+  if (isDemoMode.value) return
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
       // 使用 TextEncoder 正确编码 UTF-8，并避免长粘贴触发展开参数上限
@@ -279,6 +289,7 @@ function sendInput(data: string) {
 }
 
 function sendKeyAction(action: string) {
+  if (isDemoMode.value) return
   if (!action) return
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({

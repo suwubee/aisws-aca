@@ -18,7 +18,7 @@
           <n-popconfirm
             positive-text="确定"
             negative-text="取消"
-            :disabled="pendingApprovals.length === 0 || bulkLoading"
+            :disabled="isDemoMode || pendingApprovals.length === 0 || bulkLoading"
             @positive-click="() => { void handleBulkRespond('y') }"
           >
             <template #trigger>
@@ -26,7 +26,7 @@
                 size="small"
                 type="success"
                 secondary
-                :disabled="pendingApprovals.length === 0"
+                :disabled="isDemoMode || pendingApprovals.length === 0"
                 :loading="bulkLoading"
               >
                 全部允许
@@ -38,7 +38,7 @@
           <n-popconfirm
             positive-text="确定"
             negative-text="取消"
-            :disabled="pendingApprovals.length === 0 || bulkLoading"
+            :disabled="isDemoMode || pendingApprovals.length === 0 || bulkLoading"
             @positive-click="() => { void handleBulkRespond('n') }"
           >
             <template #trigger>
@@ -46,7 +46,7 @@
                 size="small"
                 type="error"
                 secondary
-                :disabled="pendingApprovals.length === 0"
+                :disabled="isDemoMode || pendingApprovals.length === 0"
                 :loading="bulkLoading"
               >
                 全部拒绝
@@ -92,7 +92,7 @@
                     size="tiny"
                     type="success"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleRespond(approval.terminalId, 'y')"
                   >
                     允许
@@ -101,7 +101,7 @@
                     size="tiny"
                     type="error"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleRespond(approval.terminalId, 'n')"
                   >
                     拒绝
@@ -119,7 +119,7 @@
                   <n-button
                     size="small"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleKeyAction(approval.terminalId, 'enter', approval.id)"
                   >
                     Enter 确认
@@ -127,7 +127,7 @@
                   <n-button
                     size="small"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleKeyAction(approval.terminalId, 'esc', approval.id)"
                   >
                     Esc 取消
@@ -135,7 +135,7 @@
                   <n-button
                     size="small"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleKeyAction(approval.terminalId, 'ctrl_c', approval.id)"
                   >
                     Ctrl+C
@@ -143,7 +143,7 @@
                   <n-button
                     size="small"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleKeyAction(approval.terminalId, '1', approval.id)"
                   >
                     选 1
@@ -151,7 +151,7 @@
                   <n-button
                     size="small"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading"
+                    :disabled="isDemoMode || bulkLoading"
                     @click="handleKeyAction(approval.terminalId, '2', approval.id)"
                   >
                     选 2
@@ -164,7 +164,7 @@
                       size="small"
                       type="success"
                       :loading="isResponding(approval.terminalId)"
-                      :disabled="bulkLoading"
+                      :disabled="isDemoMode || bulkLoading"
                       @click="handleRespond(approval.terminalId, 'y')"
                     >
                       允许 (y)
@@ -174,7 +174,7 @@
                       type="success"
                       secondary
                       :loading="isResponding(approval.terminalId)"
-                      :disabled="bulkLoading"
+                      :disabled="isDemoMode || bulkLoading"
                       @click="handleRespond(approval.terminalId, 'yes')"
                     >
                       允许 (yes)
@@ -185,7 +185,7 @@
                       size="small"
                       type="error"
                       :loading="isResponding(approval.terminalId)"
-                      :disabled="bulkLoading"
+                      :disabled="isDemoMode || bulkLoading"
                       @click="handleRespond(approval.terminalId, 'n')"
                     >
                       拒绝 (n)
@@ -195,7 +195,7 @@
                       type="error"
                       secondary
                       :loading="isResponding(approval.terminalId)"
-                      :disabled="bulkLoading"
+                      :disabled="isDemoMode || bulkLoading"
                       @click="handleRespond(approval.terminalId, 'no')"
                     >
                       拒绝 (no)
@@ -208,12 +208,13 @@
                     v-model:value="manualResponses[approval.id]"
                     placeholder="输入自定义响应并回车发送…"
                     clearable
+                    :disabled="isDemoMode"
                     @keyup.enter="submitManual(approval.terminalId, approval.id)"
                   />
                   <n-button
                     type="primary"
                     :loading="isResponding(approval.terminalId)"
-                    :disabled="bulkLoading || !manualResponses[approval.id]?.trim()"
+                    :disabled="isDemoMode || bulkLoading || !manualResponses[approval.id]?.trim()"
                     @click="submitManual(approval.terminalId, approval.id)"
                   >
                     发送
@@ -231,9 +232,12 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useAuthStore } from '@/stores/auth'
 import { useApprovalStore, type PendingApproval } from '@/stores/approval'
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 const approvalStore = useApprovalStore()
 
 const showDrawer = ref(false)
@@ -303,6 +307,10 @@ async function respondToApproval(
   response: string,
   options?: { silent?: boolean; approvalId?: string }
 ) {
+  if (isDemoMode.value) {
+    if (!options?.silent) message.warning('演示模式：只读')
+    return false
+  }
   const normalized = normalizeResponseInput(response)
   if (!normalized) return
 
@@ -330,6 +338,10 @@ async function sendKeyActionToTerminal(
   action: string,
   options?: { silent?: boolean; approvalId?: string }
 ) {
+  if (isDemoMode.value) {
+    if (!options?.silent) message.warning('演示模式：只读')
+    return false
+  }
   if (!terminalId || !action) return
   if (respondingMap[terminalId]) return
   respondingMap[terminalId] = true
@@ -351,6 +363,10 @@ function handleKeyAction(terminalId: string, action: string, approvalId?: string
 }
 
 async function handleBulkRespond(response: string) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (bulkLoading.value) return
   if (pendingApprovals.value.length === 0) return
 

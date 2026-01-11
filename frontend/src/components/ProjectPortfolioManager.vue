@@ -73,7 +73,7 @@
       </n-form>
       <template #action>
         <n-button :disabled="savingProject" @click="showProjectModal = false">取消</n-button>
-        <n-button type="primary" :loading="savingProject" @click="saveProject">
+        <n-button type="primary" :loading="savingProject" :disabled="isDemoMode" @click="saveProject">
           {{ projectFormMode === 'create' ? '创建' : '保存' }}
         </n-button>
       </template>
@@ -123,6 +123,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
 import { useIsMobile } from '@/utils/useIsMobile'
+import { useAuthStore } from '@/stores/auth'
 import { useProjectStore } from '@/stores/project'
 import { useServerStore } from '@/stores/server'
 import type { Project } from '@/api/project'
@@ -139,9 +140,11 @@ const props = withDefaults(defineProps<{ mode?: Mode }>(), {
 const mode = computed<Mode>(() => props.mode || 'both')
 
 const message = useMessage()
+const authStore = useAuthStore()
 const projectStore = useProjectStore()
 const serverStore = useServerStore()
 const { isMobile } = useIsMobile()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const activeTab = ref<'projects' | 'groups'>('projects')
 
@@ -271,13 +274,13 @@ const projectColumns: DataTableColumns<any> = [
     render(row) {
       return h(NSpace, { size: 'small' }, {
         default: () => [
-          h(NButton, { size: 'small', onClick: () => openEditProject(row) }, { default: () => '编辑' }),
+          h(NButton, { size: 'small', disabled: isDemoMode.value, onClick: () => openEditProject(row) }, { default: () => '编辑' }),
           h(NPopconfirm, {
             positiveText: '删除',
             negativeText: '取消',
             onPositiveClick: () => removeProject(row)
           }, {
-            trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+            trigger: () => h(NButton, { size: 'small', type: 'error', disabled: isDemoMode.value }, { default: () => '删除' }),
             default: () => `确定删除项目「${row.name}」吗？`
           })
         ]
@@ -299,7 +302,7 @@ const groupColumns: DataTableColumns<any> = [
         negativeText: '取消',
         onPositiveClick: () => removeGroup(row)
       }, {
-        trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+        trigger: () => h(NButton, { size: 'small', type: 'error', disabled: isDemoMode.value }, { default: () => '删除' }),
         default: () => `确定删除项目集「${row.name}」吗？（会自动解绑关联项目）`
       })
     }
@@ -364,12 +367,20 @@ function resetProjectForm() {
 }
 
 function openCreateProject() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   projectFormMode.value = 'create'
   resetProjectForm()
   showProjectModal.value = true
 }
 
 function openEditProject(project: Project) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   projectFormMode.value = 'edit'
   Object.assign(projectForm, {
     id: project.id,
@@ -387,6 +398,10 @@ function openEditProject(project: Project) {
 }
 
 async function saveProject() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (savingProject.value) return
   savingProject.value = true
   try {
@@ -426,6 +441,10 @@ async function saveProject() {
 }
 
 async function removeProject(project: Project) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await deleteProject(project.id)
     message.success('项目已删除')
@@ -442,12 +461,20 @@ const groupForm = reactive({ name: '', description: '' })
 const groupRules: FormRules = { name: { required: true, message: '请输入项目集名称', trigger: ['input', 'blur'] } }
 
 function openCreateGroup() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   groupForm.name = ''
   groupForm.description = ''
   showGroupModal.value = true
 }
 
 async function createGroup() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return false
+  }
   try {
     await groupFormRef.value?.validate()
     await createProjectGroup({ name: groupForm.name, description: groupForm.description })
@@ -461,6 +488,10 @@ async function createGroup() {
 }
 
 async function removeGroup(group: ProjectGroup) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await deleteProjectGroup(group.id)
     message.success('项目集已删除')
@@ -504,7 +535,7 @@ const ProjectListPanel = () => h('div', { class: 'panel' }, [
         h(NSpace, { size: 'small' }, {
           default: () => [
             h(NButton, { size: 'small', loading: loading.value, onClick: () => fetchAll({ force: true }) }, { default: () => '刷新' }),
-            h(NButton, { size: 'small', type: 'primary', onClick: openCreateProject }, { default: () => '新建项目' })
+            h(NButton, { size: 'small', type: 'primary', disabled: isDemoMode.value, onClick: openCreateProject }, { default: () => '新建项目' })
           ]
         })
       ]
@@ -547,9 +578,9 @@ const ProjectListPanel = () => h('div', { class: 'panel' }, [
                   ],
                   footer: () => h(NSpace, { justify: 'end', size: 6, wrap: true }, {
                     default: () => [
-                      h(NButton, { size: 'small', onClick: () => openEditProject(project) }, { default: () => '编辑' }),
+                      h(NButton, { size: 'small', disabled: isDemoMode.value, onClick: () => openEditProject(project) }, { default: () => '编辑' }),
                       h(NPopconfirm, { positiveText: '删除', negativeText: '取消', onPositiveClick: () => removeProject(project) }, {
-                        trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+                        trigger: () => h(NButton, { size: 'small', type: 'error', disabled: isDemoMode.value }, { default: () => '删除' }),
                         default: () => `确定删除项目「${project.name}」吗？`
                       })
                     ]
@@ -576,7 +607,7 @@ const ProjectGroupPanel = () => h('div', { class: 'panel' }, [
         h(NSpace, { size: 'small' }, {
           default: () => [
             h(NButton, { size: 'small', loading: loading.value, onClick: () => fetchAll({ force: true }) }, { default: () => '刷新' }),
-            h(NButton, { size: 'small', type: 'primary', onClick: openCreateGroup }, { default: () => '新建项目集' })
+            h(NButton, { size: 'small', type: 'primary', disabled: isDemoMode.value, onClick: openCreateGroup }, { default: () => '新建项目集' })
           ]
         })
       ]
@@ -606,7 +637,7 @@ const ProjectGroupPanel = () => h('div', { class: 'panel' }, [
                   footer: () => h(NSpace, { justify: 'end', size: 6, wrap: true }, {
                     default: () => [
                       h(NPopconfirm, { positiveText: '删除', negativeText: '取消', onPositiveClick: () => removeGroup(group) }, {
-                        trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+                        trigger: () => h(NButton, { size: 'small', type: 'error', disabled: isDemoMode.value }, { default: () => '删除' }),
                         default: () => `确定删除项目集「${group.name}」吗？（会自动解绑关联项目）`
                       })
                     ]

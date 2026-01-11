@@ -34,8 +34,8 @@
 
             <n-space size="small" wrap>
               <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
-              <n-button size="small" @click="openTemplateModal">从模板创建</n-button>
-              <n-button size="small" type="primary" @click="openCreate">新建工作流</n-button>
+              <n-button size="small" :disabled="isDemoMode" @click="openTemplateModal">从模板创建</n-button>
+              <n-button size="small" type="primary" :disabled="isDemoMode" @click="openCreate">新建工作流</n-button>
             </n-space>
           </n-space>
         </div>
@@ -84,13 +84,14 @@
 
                   <template #footer>
                     <n-space justify="end" :size="6" wrap>
-                      <n-button size="small" type="primary" quaternary @click="openDesigner(wf)">设计</n-button>
-                      <n-button size="small" quaternary @click="openEdit(wf)">编辑</n-button>
+                      <n-button size="small" type="primary" quaternary :disabled="isDemoMode" @click="openDesigner(wf)">设计</n-button>
+                      <n-button size="small" quaternary :disabled="isDemoMode" @click="openEdit(wf)">编辑</n-button>
                       <n-button
                         size="small"
                         type="success"
                         quaternary
                         :loading="runningId === wf.id"
+                        :disabled="isDemoMode"
                         @click="run(wf)"
                       >
                         运行
@@ -101,7 +102,7 @@
                         @positive-click="() => { void remove(wf) }"
                       >
                         <template #trigger>
-                          <n-button size="small" type="error" quaternary :loading="deletingId === wf.id">删除</n-button>
+                          <n-button size="small" type="error" quaternary :disabled="isDemoMode" :loading="deletingId === wf.id">删除</n-button>
                         </template>
                         确定删除工作流「{{ wf.name }}」吗？
                       </n-popconfirm>
@@ -156,7 +157,7 @@
       <template #action>
         <n-space justify="end">
           <n-button :disabled="saving" @click="closeForm">取消</n-button>
-          <n-button type="primary" :loading="saving" @click="submitForm">
+          <n-button type="primary" :loading="saving" :disabled="isDemoMode" @click="submitForm">
             {{ formActionText }}
           </n-button>
         </n-space>
@@ -315,7 +316,7 @@
           <n-button
             type="primary"
             :loading="applyingTemplate"
-            :disabled="!selectedTemplate"
+            :disabled="isDemoMode || !selectedTemplate"
             @click="applySelectedTemplate"
           >
             创建工作流
@@ -371,10 +372,13 @@ import WorkflowEditor from '@/components/WorkflowEditor.vue'
 import AIWorkflowChat from '@/components/AIWorkflowChat.vue'
 import type { Project } from '@/api/project'
 import { getProjects } from '@/api/project'
+import { useAuthStore } from '@/stores/auth'
 import { useGlobalContextStore } from '@/stores/context'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const activeTab = ref('ai')
 const { isMobile } = useIsMobile()
@@ -562,11 +566,13 @@ const columns: DataTableColumns<Workflow> = [
         size: 'tiny',
         type: 'primary',
         quaternary: true,
+        disabled: isDemoMode.value,
         onClick: () => openDesigner(row)
       }, () => '设计'),
       h(NButton, {
         size: 'tiny',
         quaternary: true,
+        disabled: isDemoMode.value,
         onClick: () => openEdit(row)
       }, () => '编辑'),
       h(NButton, {
@@ -574,6 +580,7 @@ const columns: DataTableColumns<Workflow> = [
         type: 'success',
         quaternary: true,
         loading: runningId.value === row.id,
+        disabled: isDemoMode.value,
         onClick: () => run(row)
       }, () => '运行'),
       h(NPopconfirm, {
@@ -585,6 +592,7 @@ const columns: DataTableColumns<Workflow> = [
           size: 'tiny',
           type: 'error',
           quaternary: true,
+          disabled: isDemoMode.value,
           loading: deletingId.value === row.id
         }, () => '删除'),
         default: () => `确定删除工作流「${row.name}」吗？`
@@ -647,11 +655,19 @@ const templatePreviewSteps = computed<TemplatePreviewStep[]>(() => (
 ))
 
 function openDesigner(workflow: Workflow) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   designingWorkflow.value = workflow
   showDesigner.value = true
 }
 
 async function openTemplateModal() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   showTemplate.value = true
   templateKeyword.value = ''
   selectedTemplate.value = null
@@ -691,6 +707,10 @@ async function fetchTemplates() {
 }
 
 async function applySelectedTemplate() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!selectedTemplate.value) return
   if (applyingTemplate.value) return
 
@@ -756,6 +776,10 @@ async function fetchProjects() {
 }
 
 function openCreate() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   formMode.value = 'create'
   editingWorkflow.value = null
   formModel.name = ''
@@ -765,6 +789,10 @@ function openCreate() {
 }
 
 function openEdit(workflow: Workflow) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   formMode.value = 'edit'
   editingWorkflow.value = workflow
   formModel.name = workflow.name || ''
@@ -779,6 +807,10 @@ function closeForm() {
 }
 
 async function submitForm() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await formRef.value?.validate()
   } catch {
@@ -815,6 +847,10 @@ async function submitForm() {
 }
 
 async function run(workflow: Workflow) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (runningId.value) return
   runningId.value = workflow.id
   try {
@@ -829,6 +865,10 @@ async function run(workflow: Workflow) {
 }
 
 async function remove(workflow: Workflow) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (deletingId.value) return
   deletingId.value = workflow.id
   try {

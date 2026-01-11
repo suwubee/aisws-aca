@@ -39,7 +39,12 @@
           </div>
         </div>
       </n-card>
-      <n-card class="stat-card action-card" size="small" @click="showCreateTask = true">
+      <n-card
+        v-if="!isDemoMode"
+        class="stat-card action-card"
+        size="small"
+        @click="showCreateTask = true"
+      >
         <div class="stat-content">
           <div class="stat-icon add-icon">➕</div>
           <div class="stat-info">
@@ -67,7 +72,7 @@
       <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
-        <n-button type="primary" @click="handleCreateTask">创建</n-button>
+        <n-button type="primary" :disabled="isDemoMode" @click="handleCreateTask">创建</n-button>
       </template>
     </n-modal>
   </div>
@@ -76,6 +81,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
@@ -83,9 +89,11 @@ import TerminalPanel from '@/components/TerminalPanel.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
 const message = useMessage()
+const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const showCreateTask = ref(false)
 const newTask = reactive({
@@ -132,6 +140,10 @@ onMounted(async () => {
 })
 
 async function handleCreateTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!newTask.title.trim()) {
     message.warning('请输入任务标题')
     return

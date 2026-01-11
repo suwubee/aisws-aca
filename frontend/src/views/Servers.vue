@@ -33,9 +33,9 @@
 
             <n-space size="small">
               <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
-              <n-button size="small" @click="showBatchExecute = true">批量执行</n-button>
-              <n-button v-if="isAdmin" size="small" @click="openCreateGroup">新建分组</n-button>
-              <n-button v-if="isAdmin" size="small" type="primary" @click="openCreate">添加服务器</n-button>
+              <n-button size="small" :disabled="isDemoMode" @click="showBatchExecute = true">批量执行</n-button>
+              <n-button v-if="canManage" size="small" @click="openCreateGroup">新建分组</n-button>
+              <n-button v-if="canManage" size="small" type="primary" @click="openCreate">添加服务器</n-button>
             </n-space>
           </n-space>
         </div>
@@ -91,10 +91,10 @@
 
                   <template #footer>
                     <n-space justify="end" :size="6" wrap>
-                      <n-button size="small" type="primary" @click="openSshTerminal(server)">
+                      <n-button size="small" type="primary" :disabled="isDemoMode" @click="openSshTerminal(server)">
                         连接
                       </n-button>
-                      <n-button size="small" @click="openCreateTask(server)">
+                      <n-button size="small" :disabled="isDemoMode" @click="openCreateTask(server)">
                         任务
                       </n-button>
                       <n-dropdown
@@ -102,7 +102,7 @@
                         :options="mobileServerActionOptions(server)"
                         @select="(key) => handleMobileServerAction(key, server)"
                       >
-                        <n-button size="small" quaternary>更多</n-button>
+                        <n-button size="small" quaternary :disabled="isDemoMode">更多</n-button>
                       </n-dropdown>
                     </n-space>
                   </template>
@@ -266,6 +266,8 @@ const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
 const isAdmin = computed(() => authStore.isAdmin)
+const isDemoMode = computed(() => authStore.isDemoMode)
+const canManage = computed(() => isAdmin.value && !isDemoMode.value)
 
 const loading = ref(false)
 const servers = ref<SSHServer[]>([])
@@ -348,11 +350,11 @@ function mobileServerActionOptions(server: SSHServer) {
     {
       label: testingId.value === server.id ? '测试中…' : '测试连接',
       key: 'test',
-      disabled: testingId.value !== null && testingId.value !== server.id
+      disabled: isDemoMode.value || (testingId.value !== null && testingId.value !== server.id)
     }
   ]
 
-  if (isAdmin.value) {
+  if (canManage.value) {
     options.push(
       { label: '编辑', key: 'edit' },
       { label: '删除', key: 'delete' }
@@ -363,6 +365,10 @@ function mobileServerActionOptions(server: SSHServer) {
 }
 
 function handleMobileServerAction(action: string | number, server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   const key = String(action)
   if (key === 'test') {
     void test(server)
@@ -439,34 +445,38 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
   {
     title: '操作',
     key: 'actions',
-    width: isAdmin.value ? 360 : 260,
+    width: canManage.value ? 360 : 260,
     render: (row) => {
       const actions: any[] = [
         h(NButton, {
         size: 'tiny',
         type: 'primary',
         quaternary: true,
+        disabled: isDemoMode.value,
         onClick: () => openSshTerminal(row)
         }, () => '连接'),
         h(NButton, {
         size: 'tiny',
         type: 'primary',
         quaternary: true,
+        disabled: isDemoMode.value,
         onClick: () => openCreateTask(row)
         }, () => '创建任务'),
         h(NButton, {
         size: 'tiny',
         quaternary: true,
+        disabled: isDemoMode.value,
         loading: testingId.value === row.id,
         onClick: () => test(row)
         }, () => '测试连接')
       ]
 
-      if (isAdmin.value) {
+      if (canManage.value) {
         actions.push(
           h(NButton, {
             size: 'tiny',
             quaternary: true,
+            disabled: isDemoMode.value,
             onClick: () => openEdit(row)
           }, () => '编辑'),
           h(NPopconfirm, {
@@ -478,6 +488,7 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
               size: 'tiny',
               type: 'error',
               quaternary: true,
+              disabled: isDemoMode.value,
               loading: deletingId.value === row.id
             }, () => '删除'),
             default: () => `确定删除服务器「${row.name}」吗？`
@@ -515,6 +526,10 @@ function getSshStatusDotClass(status: ConnectionStatus) {
 }
 
 function openSshTerminal(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   const existing = sshTerminals.value.find(t => t.serverId === server.id)
   if (existing) {
     activeSshKey.value = existing.key
@@ -568,6 +583,10 @@ function closeAllSshTerminals() {
 }
 
 function openCreateTask(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   creatingForServer.value = server
   newTask.server_id = server.id
   showCreateTask.value = true
@@ -584,6 +603,10 @@ watch(showCreateTask, (show) => {
 })
 
 async function handleCreateTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (creatingTask.value) return
   if (!newTask.title.trim()) {
     message.warning('请输入任务标题')
@@ -671,6 +694,10 @@ async function fetchAll() {
 }
 
 function openCreate() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!isAdmin.value) {
     message.warning('仅管理员可操作')
     return
@@ -681,6 +708,10 @@ function openCreate() {
 }
 
 function openEdit(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!isAdmin.value) {
     message.warning('仅管理员可操作')
     return
@@ -700,6 +731,10 @@ function handleServerSaved(server: SSHServer) {
 }
 
 async function test(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (testingId.value) return
   testingId.value = server.id
   try {
@@ -717,6 +752,10 @@ async function test(server: SSHServer) {
 }
 
 async function remove(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!isAdmin.value) {
     message.warning('仅管理员可操作')
     return
@@ -735,6 +774,10 @@ async function remove(server: SSHServer) {
 }
 
 function openCreateGroup() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!isAdmin.value) {
     message.warning('仅管理员可操作')
     return
@@ -745,6 +788,10 @@ function openCreateGroup() {
 }
 
 async function createGroup() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return false
+  }
   if (!isAdmin.value) {
     message.warning('仅管理员可操作')
     return false

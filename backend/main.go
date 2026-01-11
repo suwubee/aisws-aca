@@ -117,8 +117,9 @@ func main() {
 
 	// 终端API (注册在apiGroup上，继承auth中间件)
 	terminalController := api.NewTerminalController(terminalManager)
+	terminalController.SetDemoMode(cfg.App.DemoMode)
 	terminalController.RegisterRoutes(apiGroup)
-	terminalController.RegisterWebSocket(app) // WebSocket单独注册，不需要auth
+	terminalController.RegisterWebSocket(app) // WebSocket单独注册（使用 AuthMiddleware）
 
 	// 任务API
 	taskController := api.NewTaskController(terminalManager)
@@ -189,8 +190,12 @@ func main() {
 		AIWorkflow: aiWorkflowEngine,
 	}
 	scheduleManager := schedule.NewManager(scheduleExecutor, 15*time.Second)
-	scheduleManager.Start()
-	defer scheduleManager.Stop()
+	if cfg.App.DemoMode {
+		utils.Info("Demo mode enabled: scheduler auto-run is disabled")
+	} else {
+		scheduleManager.Start()
+		defer scheduleManager.Stop()
+	}
 
 	scheduleController := api.NewScheduleController(scheduleManager)
 	scheduleController.RegisterRoutes(apiGroup)

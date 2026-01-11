@@ -101,7 +101,7 @@
                           <n-button
                             size="small"
                             type="error"
-                            :disabled="t.status !== 'running'"
+                            :disabled="isDemoMode || t.status !== 'running'"
                             :loading="closingId === t.id"
                           >
                             关闭
@@ -166,13 +166,16 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { terminalApi, type Terminal as TerminalSession } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import Terminal from '@/components/Terminal.vue'
 import TerminalLogs from '@/components/TerminalLogs.vue'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
+const authStore = useAuthStore()
 const taskStore = useTaskStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const loading = ref(false)
 const terminals = ref<TerminalSession[]>([])
@@ -280,6 +283,10 @@ function closeLogs() {
 }
 
 async function closeTerminal(row: TerminalSession) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (closingId.value) return
 
   closingId.value = row.id
@@ -358,7 +365,7 @@ const columns: DataTableColumns<TerminalSession> = [
           size: 'tiny',
           type: 'error',
           quaternary: true,
-          disabled: row.status !== 'running',
+          disabled: isDemoMode.value || row.status !== 'running',
           loading: closingId.value === row.id
         }, () => '关闭'),
         default: () => `确定关闭终端「${row.title || row.metadata?.title || row.id.slice(0, 8)}」吗？`

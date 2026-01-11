@@ -7,7 +7,7 @@
       <n-text strong style="font-size: 18px">任务详情</n-text>
       <div class="header-actions">
         <!-- 待处理状态：显示启动按钮 -->
-        <n-button v-if="taskStatus === 'todo' && task?.work_dir" type="primary" @click="handleStartTask">
+        <n-button v-if="taskStatus === 'todo' && task?.work_dir" type="primary" :disabled="isDemoMode" @click="handleStartTask">
           ▶ 启动任务
         </n-button>
         <!-- 进行中状态：显示终端和终止按钮 -->
@@ -15,18 +15,18 @@
           <n-button v-if="linkedTerminal" type="info" @click="handleOpenTerminal(linkedTerminal.id)">
             📺 打开终端
           </n-button>
-          <n-button type="warning" @click="handleStopTask">
+          <n-button type="warning" :disabled="isDemoMode" @click="handleStopTask">
             ⏹ 终止任务
           </n-button>
         </template>
         <!-- 已完成/失败状态：显示复制和删除按钮 -->
         <template v-else-if="taskStatus === 'done' || taskStatus === 'failed' || taskStatus === 'timeout'">
-          <n-button type="primary" @click="handleCopyTask">
+          <n-button type="primary" :disabled="isDemoMode" @click="handleCopyTask">
             📋 复制任务
           </n-button>
         </template>
         <!-- 通用按钮 -->
-        <n-button type="error" @click="handleDeleteTask">
+        <n-button type="error" :disabled="isDemoMode" @click="handleDeleteTask">
           🗑 删除
         </n-button>
       </div>
@@ -81,7 +81,7 @@
         <!-- 关联终端 -->
         <n-card title="关联终端" size="small">
           <template #header-extra>
-            <n-button size="small" @click="handleCreateTerminal">+ 新建终端</n-button>
+            <n-button size="small" :disabled="isDemoMode" @click="handleCreateTerminal">+ 新建终端</n-button>
           </template>
           <n-empty v-if="terminals.length === 0" description="暂无关联终端" />
           <div v-else class="terminal-list">
@@ -144,6 +144,7 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, NTag } from 'naive-ui'
 import { getServer } from '@/api/server'
+import { useAuthStore } from '@/stores/auth'
 import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
@@ -151,9 +152,11 @@ import { useTerminalStore } from '@/stores/terminal'
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
+const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const loading = ref(true)
 const task = ref<Task | null>(null)
@@ -282,6 +285,10 @@ async function ensureServerLoaded(serverId?: string | null) {
 }
 
 async function handleStartTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     const result = await taskStore.startTask(taskId.value)
     if (result?.needs_user_action) {
@@ -300,6 +307,10 @@ async function handleStartTask() {
 }
 
 async function handleCreateTerminal() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await terminalStore.createTerminal(task.value?.title || 'Terminal', taskId.value)
     message.success('终端已创建')
@@ -315,6 +326,10 @@ function handleOpenTerminal(terminalId: string) {
 }
 
 async function handleStopTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!task.value) return
   try {
     await taskStore.updateTask(task.value.id, { status: 'failed' })
@@ -326,11 +341,19 @@ async function handleStopTask() {
 }
 
 async function handleCopyTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!task.value) return
   showCreateTask.value = true
 }
 
 async function handleDeleteTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!task.value) return
   try {
     await taskStore.deleteTask(task.value.id)

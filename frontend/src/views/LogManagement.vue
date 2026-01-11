@@ -69,7 +69,7 @@
                 negative-text="取消"
               >
                 <template #trigger>
-                  <n-button size="small" type="error" quaternary :disabled="logs.length === 0">
+                  <n-button size="small" type="error" quaternary :disabled="isDemoMode || logs.length === 0">
                     清空日志
                   </n-button>
                 </template>
@@ -123,7 +123,7 @@
                         @positive-click="() => { void deleteLog(log.id) }"
                       >
                         <template #trigger>
-                          <n-button size="small" type="error" quaternary>删除</n-button>
+                          <n-button size="small" type="error" quaternary :disabled="isDemoMode">删除</n-button>
                         </template>
                         确定删除此日志?
                       </n-popconfirm>
@@ -174,6 +174,7 @@ import {
   DataTableColumns
 } from 'naive-ui'
 import { logApi, terminalApi } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const props = withDefaults(defineProps<{ embedded?: boolean }>(), {
@@ -200,6 +201,8 @@ interface LogEntry {
 }
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const sessions = ref<LogSession[]>([])
 const selectedSession = ref<LogSession | null>(null)
@@ -279,7 +282,8 @@ const columns: DataTableColumns<LogEntry> = [
         trigger: () => h(NButton, {
           size: 'tiny',
           type: 'error',
-          quaternary: true
+          quaternary: true,
+          disabled: isDemoMode.value
         }, { default: () => '删除' }),
         default: () => '确定删除此日志?'
       })
@@ -335,6 +339,10 @@ async function fetchLogs() {
 }
 
 async function deleteLog(id: string) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await logApi.delete(id)
     message.success('日志已删除')
@@ -347,6 +355,10 @@ async function deleteLog(id: string) {
 
 async function clearSessionLogs() {
   if (!selectedSession.value) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await terminalApi.clearLogs(selectedSession.value.terminal_id)
     message.success('日志已清空')

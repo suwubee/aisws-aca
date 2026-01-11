@@ -4,7 +4,7 @@
       <n-space justify="space-between" align="center" wrap>
         <n-text strong style="font-size: 18px">工作清单</n-text>
         <n-button
-          v-if="activeTab === 'tasks'"
+          v-if="activeTab === 'tasks' && !isDemoMode"
           type="primary"
           :size="isMobile ? 'small' : 'medium'"
           @click="showCreateTask = true"
@@ -100,6 +100,7 @@
                         v-if="task.status === 'todo' && task.work_dir"
                         size="small"
                         type="primary"
+                        :disabled="isDemoMode"
                         @click="startTask(task)"
                       >
                         启动
@@ -110,7 +111,7 @@
                         @positive-click="() => { void deleteTask(task.id) }"
                       >
                         <template #trigger>
-                          <n-button size="small" type="error">删除</n-button>
+                          <n-button size="small" type="error" :disabled="isDemoMode">删除</n-button>
                         </template>
                         确定删除任务「{{ task.title }}」吗？
                       </n-popconfirm>
@@ -153,7 +154,7 @@
       <TaskForm :model="newTask" />
       <template #action>
         <n-button @click="showCreateTask = false">取消</n-button>
-        <n-button type="primary" @click="handleCreateTask">创建</n-button>
+        <n-button type="primary" :disabled="isDemoMode" @click="handleCreateTask">创建</n-button>
       </template>
     </n-modal>
   </div>
@@ -163,6 +164,7 @@
 import { ref, computed, onMounted, h, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, NButton, NTag, NSpace } from 'naive-ui'
+import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useProjectStore } from '@/stores/project'
@@ -174,10 +176,12 @@ import type { DataTableColumns } from 'naive-ui'
 
 const router = useRouter()
 const message = useMessage()
+const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const projectStore = useProjectStore()
 const contextStore = useGlobalContextStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const loading = ref(false)
 const activeTab = ref<'tasks' | 'projects' | 'groups'>('tasks')
@@ -413,6 +417,10 @@ async function fetchData() {
 }
 
 async function handleCreateTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   if (!newTask.title.trim()) {
     message.warning('请输入任务标题')
     return
@@ -456,6 +464,10 @@ function openTerminal(terminalId: string) {
 }
 
 async function startTask(task: any) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     const result = await taskStore.startTask(task.id)
     if (result?.needs_user_action) {
@@ -470,6 +482,10 @@ async function startTask(task: any) {
 }
 
 async function deleteTask(taskId: string) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   try {
     await taskStore.deleteTask(taskId)
     message.success('任务已删除')

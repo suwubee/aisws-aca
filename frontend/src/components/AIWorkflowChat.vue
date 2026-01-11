@@ -41,11 +41,12 @@
             type="textarea"
             :autosize="{ minRows: 2, maxRows: 5 }"
             placeholder="输入任务目标，点击启动"
+            :disabled="isDemoMode"
             @keydown.ctrl.enter.prevent="startWorkflow"
           />
           <n-space justify="space-between" align="center">
             <n-space>
-              <n-button type="primary" size="small" :loading="starting" @click="startWorkflow">
+              <n-button type="primary" size="small" :loading="starting" :disabled="isDemoMode" @click="startWorkflow">
                 启动
               </n-button>
               <n-button size="small" secondary :disabled="starting" @click="goal = ''">
@@ -107,10 +108,11 @@
                   type="textarea"
                   :autosize="{ minRows: 2, maxRows: 4 }"
                   placeholder="补充信息/确认后继续（Ctrl+Enter 发送）"
+                  :disabled="isDemoMode"
                   @keydown.ctrl.enter.prevent="resumeWorkflow"
                 />
                 <n-space justify="end" style="margin-top: 8px">
-                  <n-button size="small" :loading="resuming" :disabled="!resumeMessage.trim()" type="primary" @click="resumeWorkflow">
+                  <n-button size="small" :loading="resuming" :disabled="isDemoMode || !resumeMessage.trim()" type="primary" @click="resumeWorkflow">
                     继续执行
                   </n-button>
                 </n-space>
@@ -160,6 +162,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getAIWorkflowSession, listAIWorkflowSessions, postAIWorkflowMessage, startAIWorkflow, type AIWorkflowSession } from '@/api/ai-workflow'
+import { useAuthStore } from '@/stores/auth'
 
 type SessionListItem = {
   id: string
@@ -169,6 +172,8 @@ type SessionListItem = {
 }
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const goal = ref('')
 const starting = ref(false)
@@ -286,6 +291,10 @@ async function selectSession(id: string) {
 }
 
 async function resumeWorkflow() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   const id = activeSessionId.value
   if (!id) return
   const text = safeText(resumeMessage.value)
@@ -309,6 +318,10 @@ async function resumeWorkflow() {
 }
 
 async function startWorkflow() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
   const text = safeText(goal.value)
   if (!text) {
     message.warning('请输入任务目标')

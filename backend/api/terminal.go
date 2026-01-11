@@ -15,11 +15,16 @@ import (
 )
 
 type TerminalController struct {
-	manager *terminal.Manager
+	manager  *terminal.Manager
+	demoMode bool
 }
 
 func NewTerminalController(manager *terminal.Manager) *TerminalController {
 	return &TerminalController{manager: manager}
+}
+
+func (ctrl *TerminalController) SetDemoMode(enabled bool) {
+	ctrl.demoMode = enabled
 }
 
 type CreateTerminalRequest struct {
@@ -248,11 +253,21 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 
 			switch msg.Type {
 			case "input":
+				if ctrl.demoMode {
+					utils.Debug("Demo mode: ignoring terminal input", zap.String("terminal", session.ID()))
+					continue
+				}
 				data, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err == nil {
 					session.Write(data)
 				}
 			case "key_action":
+				if ctrl.demoMode {
+					utils.Debug("Demo mode: ignoring terminal key action",
+						zap.String("terminal", session.ID()),
+						zap.String("action", msg.Action))
+					continue
+				}
 				if err := session.SendKeyAction(msg.Action); err != nil {
 					utils.Warn("Failed to send key action",
 						zap.String("terminal", session.ID()),
