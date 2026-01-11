@@ -28,6 +28,7 @@
 - `docs/ARCHITECTURE.md`：系统架构与关键流程概览
 - `docs/DEVELOPMENT.md`：本地开发/构建/调试指南
 - `docs/DEPLOYMENT.md`：部署、升级与备份指南
+- `docs/SCRIPTS.md`：脚本使用说明（Quickstart/开发启动等）
 - `docs/DEVELOPMENT_PLAN.md`：开发计划与阶段拆分（历史与参考）
 - `docs/codex-sprint.md`：Codex/Agent 辅助开发的 Sprint 记录（如有）
 - `CHANGELOG.md`：变更记录（如已维护）

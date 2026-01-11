@@ -17,6 +17,7 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-admin}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-admin123}
       TERMINAL_SHELL: ${TERMINAL_SHELL:-/bin/bash}
+      TERMINAL_DEFAULT_LOGIN_DIR: ${TERMINAL_DEFAULT_LOGIN_DIR:-~/}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FILE: ${LOG_FILE:-}
     healthcheck:

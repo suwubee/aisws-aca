@@ -32,6 +32,19 @@ npm run dev
 - 默认地址：`http://localhost:34001`
 - 本地代理：`/api -> http://localhost:34007`（见 `frontend/vite.config.ts`）
 
+### 2.3 脚本启动（可选）
+
+如果你更习惯“一键启停/看日志”的方式，可使用脚本：
+
+```bash
+./scripts/start.sh all
+./scripts/start.sh status
+./scripts/start.sh logs
+```
+
+- 若项目根目录存在 `.env` 会自动加载（参考 `.env.example`）
+- 可选覆盖 Vite 代理/端口：`ACA_BACKEND_HOST`、`ACA_BACKEND_PORT`、`ACA_FRONTEND_PORT`
+
 ### 默认账号
 - 用户名：`admin`
 - 密码：`admin123`
@@ -79,4 +92,3 @@ go test ./...
 
 - 终端交互/审批确认异常：优先检查 Key Bindings 的 `enter/newline` 配置与实际发送链路。
 - 移动端显示错位：优先检查是否存在固定高度/overflow 叠加（如底部导航占位、`100vh` 在移动端的差异）。
-

@@ -1,8 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # AI Coding Assistant - 启动脚本
 # 用法: ./scripts/start.sh [backend|frontend|all|restart|stop|status]
 
-set -e
+set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$PROJECT_ROOT/backend"
@@ -22,6 +22,31 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+load_env() {
+    local env_file="$PROJECT_ROOT/.env"
+    if [[ -f "$env_file" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$env_file"
+        set +a
+        log_info "Loaded .env"
+        return 0
+    fi
+    log_warn "No .env found at $env_file, using defaults"
+}
+
+init_dev_env() {
+    load_env
+
+    export SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
+    export SERVER_PORT="${SERVER_PORT:-34007}"
+
+    # Vite dev server proxy variables (see frontend/vite.config.ts)
+    export ACA_BACKEND_HOST="${ACA_BACKEND_HOST:-localhost}"
+    export ACA_BACKEND_PORT="${ACA_BACKEND_PORT:-$SERVER_PORT}"
+    export ACA_FRONTEND_PORT="${ACA_FRONTEND_PORT:-34001}"
+}
+
 # 检查进程是否运行
 is_running() {
     local pid_file=$1
@@ -39,6 +64,12 @@ start_backend() {
     if is_running "$BACKEND_PID_FILE"; then
         log_warn "Backend already running (PID: $(cat $BACKEND_PID_FILE))"
         return 0
+    fi
+
+    if [[ ! -x "$BACKEND_DIR/ai-coding-assistant" ]]; then
+        log_error "Backend binary not found: $BACKEND_DIR/ai-coding-assistant"
+        log_error "Try: (cd backend && go build -o ai-coding-assistant .)"
+        return 1
     fi
 
     log_info "Starting backend..."
@@ -64,13 +95,13 @@ start_frontend() {
 
     log_info "Starting frontend..."
     cd "$FRONTEND_DIR"
-    nohup npm run dev -- --host 0.0.0.0 > "$FRONTEND_LOG" 2>&1 &
+    nohup npm run dev -- --host 0.0.0.0 --port "$ACA_FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
     echo $! > "$FRONTEND_PID_FILE"
     sleep 3
 
     if is_running "$FRONTEND_PID_FILE"; then
         log_info "Frontend started (PID: $(cat $FRONTEND_PID_FILE))"
-        log_info "Frontend URL: http://localhost:34001/"
+        log_info "Frontend URL: http://localhost:${ACA_FRONTEND_PORT}/"
     else
         log_error "Failed to start frontend. Check $FRONTEND_LOG"
         return 1
@@ -90,7 +121,7 @@ stop_backend() {
     else
         log_warn "Backend not running"
         # 清理可能残留的进程
-        pkill -f "ai-coding-assistant" 2>/dev/null || true
+        pkill -f "$BACKEND_DIR/ai-coding-assistant" 2>/dev/null || true
     fi
 }
 
@@ -107,7 +138,7 @@ stop_frontend() {
     else
         log_warn "Frontend not running"
         # 清理可能残留的进程
-        pkill -f "vite" 2>/dev/null || true
+        pkill -f "npm run dev" 2>/dev/null || true
     fi
 }
 
@@ -130,7 +161,11 @@ show_status() {
     # 检查端口
     echo ""
     echo "=== Port Status ==="
-    netstat -tlnp 2>/dev/null | grep -E "34001|3000" || echo "No services listening on expected ports"
+    if command -v ss >/dev/null 2>&1; then
+        ss -tlnp 2>/dev/null | grep -E "(:${ACA_FRONTEND_PORT}|:${SERVER_PORT})" || echo "No services listening on expected ports"
+    else
+        netstat -tlnp 2>/dev/null | grep -E "(:${ACA_FRONTEND_PORT}|:${SERVER_PORT})" || echo "No services listening on expected ports"
+    fi
 }
 
 # 显示日志
@@ -152,6 +187,9 @@ show_logs() {
             ;;
     esac
 }
+
+# 初始化开发环境变量（只加载一次，避免重复输出）
+init_dev_env
 
 # 主命令处理
 case "${1:-all}" in
