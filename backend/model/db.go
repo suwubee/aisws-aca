@@ -38,6 +38,7 @@ func InitDB(dsn string) error {
 		&ScheduledJob{},
 		&ScheduledJobRun{},
 		&Comment{},
+		&AppSetting{},
 		&Secret{},
 		&SSHServer{},
 		&ServerGroup{},

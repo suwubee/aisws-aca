@@ -205,6 +205,11 @@ export const keyBindingApi = {
   reset: (id: string) => api.post(`/key-bindings/${encodeURIComponent(id)}/reset`)
 }
 
+export const terminalDefaultsApi = {
+  get: () => api.get('/terminal-defaults'),
+  update: (payload: { default_login_dir: string }) => api.put('/terminal-defaults', payload)
+}
+
 export const scheduleApi = {
   list: () => api.get('/schedules'),
   get: (id: string) => api.get(`/schedules/${encodeURIComponent(id)}`),

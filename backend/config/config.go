@@ -34,6 +34,7 @@ type AuthConfig struct {
 
 type TerminalConfig struct {
 	DefaultShell    string
+	DefaultLoginDir string
 	ScrollbackBytes int
 	IdleTimeout     time.Duration
 	MaxSessions     int
@@ -62,6 +63,7 @@ func Load() *Config {
 		},
 		Terminal: TerminalConfig{
 			DefaultShell:    getEnv("TERMINAL_SHELL", "/bin/bash"),
+			DefaultLoginDir: getEnv("TERMINAL_DEFAULT_LOGIN_DIR", "~/"),
 			ScrollbackBytes: 256 * 1024, // 256KB
 			IdleTimeout:     10 * time.Minute,
 			MaxSessions:     100,

@@ -230,6 +230,37 @@
               <span>按键绑定</span>
               <n-text depth="3">全局 Enter/换行 等按键配置，终端快捷键与自动化共用</n-text>
             </div>
+            <n-card size="small" style="max-width: 600px; margin-bottom: 12px">
+              <n-space vertical>
+                <n-text depth="3" style="font-size: 12px">
+                  新建本地终端会话默认进入该目录（支持 <n-text code>~</n-text> / <n-text code>$HOME</n-text>）。
+                </n-text>
+                <n-text v-if="!isAdmin" depth="3" style="display: block; font-size: 12px">
+                  当前为只读模式：需要管理员权限才能修改终端默认目录。
+                </n-text>
+                <n-form label-placement="left" label-width="120" :disabled="!isAdmin">
+                  <n-form-item label="默认登入目录">
+                    <n-input v-model:value="terminalDefaults.defaultLoginDir" placeholder="~/" />
+                  </n-form-item>
+                  <n-form-item>
+                    <n-space>
+                      <n-button
+                        type="primary"
+                        size="small"
+                        :loading="savingTerminalDefaults"
+                        :disabled="!isAdmin"
+                        @click="saveTerminalDefaults"
+                      >
+                        保存
+                      </n-button>
+                      <n-button size="small" :loading="loadingTerminalDefaults" @click="fetchTerminalDefaults">
+                        刷新
+                      </n-button>
+                    </n-space>
+                  </n-form-item>
+                </n-form>
+              </n-space>
+            </n-card>
             <KeyBindings />
           </div>
         </div>
@@ -300,7 +331,7 @@ import {
   NDivider, NDynamicTags, NCheckbox, NMenu, useMessage
 } from 'naive-ui'
 import type { DataTableColumns, FormInst, FormRules, MenuOption } from 'naive-ui'
-import { automationApi, authApi } from '@/api'
+import { automationApi, authApi, terminalDefaultsApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
@@ -330,6 +361,41 @@ const isAdmin = computed(() => authStore.user?.role === 'admin')
 const { isMobile } = useIsMobile()
 
 const activeTab = ref('account')
+
+// ===== Terminal Defaults =====
+const terminalDefaults = reactive({
+  defaultLoginDir: ''
+})
+const loadingTerminalDefaults = ref(false)
+const savingTerminalDefaults = ref(false)
+
+async function fetchTerminalDefaults() {
+  loadingTerminalDefaults.value = true
+  try {
+    const { data } = await terminalDefaultsApi.get()
+    terminalDefaults.defaultLoginDir = data?.item?.default_login_dir || ''
+  } catch (e) {
+    message.error('加载终端默认配置失败')
+  } finally {
+    loadingTerminalDefaults.value = false
+  }
+}
+
+async function saveTerminalDefaults() {
+  if (!isAdmin.value) return
+  savingTerminalDefaults.value = true
+  try {
+    const { data } = await terminalDefaultsApi.update({
+      default_login_dir: terminalDefaults.defaultLoginDir
+    })
+    terminalDefaults.defaultLoginDir = data?.item?.default_login_dir || terminalDefaults.defaultLoginDir
+    message.success('已保存')
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '保存失败')
+  } finally {
+    savingTerminalDefaults.value = false
+  }
+}
 
 const readOnlyTabs = computed(() => new Set([
   'automation',
@@ -686,6 +752,7 @@ function resetProviderForm() {
 onMounted(() => {
   fetchProviders()
   fetchSystemConfig()
+  fetchTerminalDefaults()
 })
 </script>
 

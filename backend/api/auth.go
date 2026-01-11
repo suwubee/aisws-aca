@@ -7,6 +7,7 @@ import (
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/appsetting"
 	"github.com/ai-coding-assistant/service/keybinding"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
@@ -352,6 +353,7 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 		"approval_records",
 		"ai_sessions",
 		"messages",
+		"app_settings",
 		"terminal_sessions",
 		"comments",
 		"workflow_runs",
@@ -439,6 +441,9 @@ func (ctrl *AuthController) ResetData(c *fiber.Ctx) error {
 	}
 	if err := keybinding.EnsureDefaults(); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to restore builtin key bindings"})
+	}
+	if err := appsetting.EnsureDefaults(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to restore builtin settings"})
 	}
 
 	resp := fiber.Map{"message": "All data has been reset"}

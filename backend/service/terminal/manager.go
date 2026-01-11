@@ -9,6 +9,7 @@ import (
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/appsetting"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/google/uuid"
@@ -92,10 +93,39 @@ func (m *Manager) RecoverSessions() error {
 	return nil
 }
 
+func (m *Manager) resolveStartDir(taskID *string) string {
+	candidates := make([]string, 0, 4)
+
+	if taskID != nil {
+		if model.DB != nil {
+			taskIDValue := strings.TrimSpace(*taskID)
+			if taskIDValue != "" {
+				var task model.Task
+				if err := model.DB.Select("work_dir").First(&task, "id = ?", taskIDValue).Error; err == nil {
+					if strings.TrimSpace(task.WorkDir) != "" {
+						candidates = append(candidates, task.WorkDir)
+					}
+				}
+			}
+		}
+	}
+
+	if dir, err := appsetting.GetTerminalDefaultLoginDir(); err == nil && strings.TrimSpace(dir) != "" {
+		candidates = append(candidates, dir)
+	}
+	if m.config != nil && strings.TrimSpace(m.config.DefaultLoginDir) != "" {
+		candidates = append(candidates, m.config.DefaultLoginDir)
+	}
+	candidates = append(candidates, "~/")
+
+	return resolveExistingWorkDir(candidates...)
+}
+
 // CreateSession 创建会话
 func (m *Manager) CreateSession(title string, taskID *string) (*Session, error) {
 	id := uuid.New().String()
 	session := NewSession(id, m.config.DefaultShell, m.config.ScrollbackBytes)
+	session.SetStartDir(m.resolveStartDir(taskID))
 
 	if title != "" {
 		session.SetTitle(title)

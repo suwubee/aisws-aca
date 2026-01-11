@@ -166,6 +166,10 @@ func main() {
 	keyBindingController := api.NewKeyBindingController()
 	keyBindingController.RegisterRoutes(apiGroup)
 
+	// 终端默认配置（系统设置）
+	terminalDefaultsController := api.NewTerminalDefaultsController()
+	terminalDefaultsController.RegisterRoutes(apiGroup)
+
 	// AI工作流API
 	sshManager := sshservice.NewSSHManager(cfg.Auth.JWTSecret)
 	automationService := task.NewAutomationService(terminalManager)
@@ -190,10 +194,26 @@ func main() {
 	scheduleController.RegisterRoutes(apiGroup)
 
 	// 静态文件服务
-	staticFS, err := fs.Sub(staticFiles, "static")
-	if err == nil {
+	var staticRoot http.FileSystem
+
+	// Prefer disk `static/` next to the executable so frontend rebuilds don't require rebuilding the binary.
+	if exePath, err := os.Executable(); err == nil {
+		diskStaticDir := filepath.Join(filepath.Dir(exePath), "static")
+		if info, err := os.Stat(filepath.Join(diskStaticDir, "index.html")); err == nil && !info.IsDir() {
+			staticRoot = http.Dir(diskStaticDir)
+		}
+	}
+
+	// Fallback to embedded static assets.
+	if staticRoot == nil {
+		if staticFS, err := fs.Sub(staticFiles, "static"); err == nil {
+			staticRoot = http.FS(staticFS)
+		}
+	}
+
+	if staticRoot != nil {
 		app.Use("/", filesystem.New(filesystem.Config{
-			Root:         http.FS(staticFS),
+			Root:         staticRoot,
 			Index:        "index.html",
 			NotFoundFile: "index.html",
 		}))

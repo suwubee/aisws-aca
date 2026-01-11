@@ -11,6 +11,7 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/appsetting"
 	"github.com/ai-coding-assistant/service/keybinding"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/gofiber/fiber/v2"
@@ -18,6 +19,8 @@ import (
 )
 
 func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testing.T) {
+	t.Setenv("TERMINAL_DEFAULT_LOGIN_DIR", "~/")
+
 	dsn := fmt.Sprintf("file:api_test_%d?mode=memory&cache=shared", time.Now().UnixNano())
 	if err := model.InitDB(dsn); err != nil {
 		t.Fatalf("InitDB failed: %v", err)
@@ -145,6 +148,16 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	}
 	if err := model.DB.Create(&message).Error; err != nil {
 		t.Fatalf("create message failed: %v", err)
+	}
+
+	setting := model.AppSetting{
+		Key:       appsetting.KeyTerminalDefaultLoginDir,
+		Value:     "/tmp",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := model.DB.Create(&setting).Error; err != nil {
+		t.Fatalf("create app setting failed: %v", err)
 	}
 
 	project := model.Project{
@@ -347,6 +360,7 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	assertTableCount(t, &model.ApprovalRecord{}, 0)
 	assertTableCount(t, &model.Log{}, 0)
 	assertTableCount(t, &model.Message{}, 0)
+	assertTableCount(t, &model.AppSetting{}, 1)
 	assertTableCount(t, &model.Project{}, 0)
 	assertTableCount(t, &model.CLIProfile{}, 0)
 	assertTableCount(t, &model.Workflow{}, 0)
@@ -405,6 +419,14 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	expectedKeyBindingCount := int64(len(keybinding.SupportedIDs()))
 	if keyBindingCount != expectedKeyBindingCount {
 		t.Fatalf("expected %d key bindings after reset, got %d", expectedKeyBindingCount, keyBindingCount)
+	}
+
+	var terminalSetting model.AppSetting
+	if err := model.DB.First(&terminalSetting, "key = ?", appsetting.KeyTerminalDefaultLoginDir).Error; err != nil {
+		t.Fatalf("query terminal default login dir failed: %v", err)
+	}
+	if terminalSetting.Value != "~/" {
+		t.Fatalf("expected terminal default login dir %q after reset, got %q", "~/", terminalSetting.Value)
 	}
 }
 

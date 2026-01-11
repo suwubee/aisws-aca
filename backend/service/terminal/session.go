@@ -107,6 +107,7 @@ type Session struct {
 	title       string
 	taskID      *string
 	shell       string
+	startDir    string
 	backend     sessionBackend
 	pty         *os.File
 	cmd         *exec.Cmd
@@ -229,6 +230,10 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 	}
 }
 
+func (s *Session) SetStartDir(dir string) {
+	s.startDir = strings.TrimSpace(dir)
+}
+
 // Start 启动会话
 func (s *Session) Start() error {
 	return s.StartWithTmux(false)
@@ -255,7 +260,12 @@ func (s *Session) StartWithTmux(attach bool) error {
 			cmd = execCommand("tmux", "attach-session", "-t", s.id)
 		} else {
 			// 创建新会话
-			cmd = execCommand("tmux", "new-session", "-d", "-s", s.id, "-x", "120", "-y", "30")
+			args := []string{"new-session", "-d", "-s", s.id}
+			if strings.TrimSpace(s.startDir) != "" {
+				args = append(args, "-c", s.startDir)
+			}
+			args = append(args, "-x", "120", "-y", "30")
+			cmd = execCommand("tmux", args...)
 			applyTerminalEnv(cmd)
 			if err := cmd.Run(); err != nil {
 				utils.Warn("Failed to create tmux session, falling back to direct shell", zap.Error(err))
@@ -296,6 +306,9 @@ func (s *Session) StartWithTmux(attach bool) error {
 // startDirectShell 直接启动 shell（fallback）
 func (s *Session) startDirectShell() error {
 	cmd := execCommand(s.shell)
+	if strings.TrimSpace(s.startDir) != "" {
+		cmd.Dir = s.startDir
+	}
 	applyTerminalEnv(cmd)
 
 	ptmx, err := ptyStart(cmd)

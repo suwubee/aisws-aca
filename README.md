@@ -30,11 +30,20 @@
 ## 快速开始
 
 ### 前置要求
-- Go 1.21+
-- Node.js 18+
+- Node.js 18+（用于构建前端静态资源）
 - npm（推荐，仓库包含 `package-lock.json`）
+  - 说明：仓库内包含后端预编译二进制 `backend/ai-coding-assistant`，Quickstart 不强制要求安装 Go；如需二次开发/重新编译后端，请安装 Go 1.21+。
 
-### 安装和运行
+### Quickstart（推荐）
+
+```bash
+./scripts/quickstart.sh up
+```
+
+- 首次运行会交互式生成 `.env`（可用 `./scripts/quickstart.sh init --force` 覆盖）
+- 会自动构建前端到 `backend/static`，并启动后端（内置静态资源服务）
+
+### 开发模式（前后端分离）
 
 1. **克隆项目**
 ```bash
@@ -137,12 +146,13 @@ ai-coding-assistant/
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | SERVER_HOST | 0.0.0.0 | 服务器监听地址 |
-| SERVER_PORT | 3007 | 服务器端口 |
+| SERVER_PORT | 34007 | 服务器端口 |
 | DATABASE_DSN | ./data/aca.db | 数据库文件路径 |
 | JWT_SECRET | (内置默认值) | JWT密钥 |
 | AUTH_USERNAME | admin | 登录用户名 |
 | AUTH_PASSWORD | admin123 | 登录密码 |
 | TERMINAL_SHELL | /bin/bash | 默认Shell |
+| TERMINAL_DEFAULT_LOGIN_DIR | ~/ | 新建本地终端会话默认登入目录（也可在系统设置中修改） |
 | LOG_LEVEL | info | 日志级别 |
 
 ## 开发计划
