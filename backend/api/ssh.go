@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	secretservice "github.com/ai-coding-assistant/service/secret"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
@@ -658,17 +659,20 @@ func (ctrl *SSHServerController) CreateServerTerminal(c *fiber.Ctx) error {
 // RegisterRoutes 注册路由
 func (ctrl *SSHServerController) RegisterRoutes(app fiber.Router) {
 	servers := app.Group("/servers")
-	servers.Post("/", ctrl.CreateServer)
 	servers.Get("/", ctrl.ListServers)
-	servers.Post("/batch-execute", ctrl.BatchExecute)
 	servers.Get("/:id", ctrl.GetServer)
-	servers.Put("/:id", ctrl.UpdateServer)
-	servers.Delete("/:id", ctrl.DeleteServer)
 	servers.Post("/:id/terminal", ctrl.CreateServerTerminal)
 	servers.Post("/:id/test", ctrl.TestServerConnection)
-	servers.Post("/:id/upload-key", ctrl.UploadKey)
+	servers.Post("/batch-execute", ctrl.BatchExecute)
+
+	admin := servers.Group("", middleware.RequireRole("admin"))
+	admin.Post("/", ctrl.CreateServer)
+	admin.Put("/:id", ctrl.UpdateServer)
+	admin.Delete("/:id", ctrl.DeleteServer)
+	admin.Post("/:id/upload-key", ctrl.UploadKey)
 
 	groups := app.Group("/server-groups")
 	groups.Get("/", ctrl.ListServerGroups)
-	groups.Post("/", ctrl.CreateServerGroup)
+	adminGroups := groups.Group("", middleware.RequireRole("admin"))
+	adminGroups.Post("/", ctrl.CreateServerGroup)
 }

@@ -22,7 +22,11 @@ func setupRuleSetImportExportTestApp(t *testing.T) *fiber.App {
 	}
 
 	app := fiber.New()
-	apiGroup := app.Group("/api")
+	apiGroup := app.Group("/api", func(c *fiber.Ctx) error {
+		c.Locals("role", "admin")
+		c.Locals("username", "tester")
+		return c.Next()
+	})
 
 	ctrl := NewAutomationController(nil)
 	ctrl.RegisterRoutes(apiGroup)

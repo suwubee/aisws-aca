@@ -183,6 +183,13 @@ func (ctrl *AutomationController) CreateRuleSet(c *fiber.Ctx) error {
 	}
 
 	ruleType := c.Query("type", "terminal") // default to terminal
+	ruleType = strings.TrimSpace(ruleType)
+	switch ruleType {
+	case "terminal", "task":
+		// allowed
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid rule set type"})
+	}
 
 	now := time.Now()
 	ruleSet := &model.RuleSet{
@@ -218,6 +225,9 @@ func (ctrl *AutomationController) UpdateRuleSet(c *fiber.Ctx) error {
 	var ruleSet model.RuleSet
 	if err := model.DB.First(&ruleSet, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Rule set not found"})
+	}
+	if ruleSet.Type == "system" {
+		return c.Status(400).JSON(fiber.Map{"error": "Cannot update system rule set"})
 	}
 
 	var req RuleSetRequest
@@ -881,15 +891,15 @@ func toJSONArray(arr []string) string {
 
 // RegisterRoutes 注册路由
 func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
-	// 规则集导入/导出
-	app.Get("/rule-sets/export", ctrl.ExportRuleSets)
-	app.Post("/rule-sets/import", ctrl.ImportRuleSets)
+	// 规则集导入/导出（系统级配置：仅管理员）
+	app.Get("/rule-sets/export", middleware.RequireRole("admin"), ctrl.ExportRuleSets)
+	app.Post("/rule-sets/import", middleware.RequireRole("admin"), ctrl.ImportRuleSets)
 
 	automation := app.Group("/automation")
 
 	// 系统规则
 	automation.Get("/system-rule", ctrl.GetSystemRuleSet)
-	automation.Put("/system-rule", ctrl.UpdateSystemRuleSet)
+	automation.Put("/system-rule", middleware.RequireRole("admin"), ctrl.UpdateSystemRuleSet)
 
 	// 规则集 CRUD
 	automation.Get("/rulesets", ctrl.ListRuleSets)
@@ -908,14 +918,14 @@ func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
 
 	// AI代理配置
 	automation.Get("/agent-configs", ctrl.ListAgentConfigs)
-	automation.Put("/agent-configs", ctrl.UpdateAgentConfigs)
+	automation.Put("/agent-configs", middleware.RequireRole("admin"), ctrl.UpdateAgentConfigs)
 
 	// AI Provider配置
 	automation.Get("/ai-providers", ctrl.ListAIProviders)
-	automation.Post("/ai-providers", ctrl.CreateAIProvider)
+	automation.Post("/ai-providers", middleware.RequireRole("admin"), ctrl.CreateAIProvider)
 	automation.Get("/ai-providers/:id", ctrl.GetAIProvider)
-	automation.Put("/ai-providers/:id", ctrl.UpdateAIProvider)
-	automation.Delete("/ai-providers/:id", ctrl.DeleteAIProvider)
+	automation.Put("/ai-providers/:id", middleware.RequireRole("admin"), ctrl.UpdateAIProvider)
+	automation.Delete("/ai-providers/:id", middleware.RequireRole("admin"), ctrl.DeleteAIProvider)
 
 	// 消息管理
 	automation.Get("/messages", ctrl.ListMessages)
@@ -930,6 +940,5 @@ func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
 	automation.Get("/approval-records", ctrl.ListApprovalRecords)
 
 	// 登录记录（管理员）
-	admin := automation.Group("", middleware.RequireRole("admin"))
-	admin.Get("/login-records", ctrl.ListLoginRecords)
+	automation.Get("/login-records", middleware.RequireRole("admin"), ctrl.ListLoginRecords)
 }

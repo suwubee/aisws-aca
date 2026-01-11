@@ -34,8 +34,8 @@
             <n-space size="small">
               <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
               <n-button size="small" @click="showBatchExecute = true">批量执行</n-button>
-              <n-button size="small" @click="openCreateGroup">新建分组</n-button>
-              <n-button size="small" type="primary" @click="openCreate">添加服务器</n-button>
+              <n-button v-if="isAdmin" size="small" @click="openCreateGroup">新建分组</n-button>
+              <n-button v-if="isAdmin" size="small" type="primary" @click="openCreate">添加服务器</n-button>
             </n-space>
           </n-space>
         </div>
@@ -256,13 +256,16 @@ import TaskForm from '@/components/TaskForm.vue'
 import type { TaskFormModel } from '@/components/TaskForm.vue'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
+import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
 const dialog = useDialog()
 const router = useRouter()
+const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
+const isAdmin = computed(() => authStore.isAdmin)
 
 const loading = ref(false)
 const servers = ref<SSHServer[]>([])
@@ -341,15 +344,22 @@ const groupNameMap = computed(() => {
 })
 
 function mobileServerActionOptions(server: SSHServer) {
-  return [
+  const options: Array<{ label: string; key: string; disabled?: boolean }> = [
     {
       label: testingId.value === server.id ? '测试中…' : '测试连接',
       key: 'test',
       disabled: testingId.value !== null && testingId.value !== server.id
-    },
-    { label: '编辑', key: 'edit' },
-    { label: '删除', key: 'delete' }
-  ] as Array<{ label: string; key: string; disabled?: boolean }>
+    }
+  ]
+
+  if (isAdmin.value) {
+    options.push(
+      { label: '编辑', key: 'edit' },
+      { label: '删除', key: 'delete' }
+    )
+  }
+
+  return options
 }
 
 function handleMobileServerAction(action: string | number, server: SSHServer) {
@@ -405,7 +415,7 @@ function statusLabel(status: string) {
   return status || '未知'
 }
 
-const columns: DataTableColumns<SSHServer> = [
+const columns = computed<DataTableColumns<SSHServer>>(() => [
   { title: '名称', key: 'name', width: 160, ellipsis: { tooltip: true } },
   { title: '主机', key: 'host', ellipsis: { tooltip: true } },
   { title: '端口', key: 'port', width: 80 },
@@ -429,47 +439,56 @@ const columns: DataTableColumns<SSHServer> = [
   {
     title: '操作',
     key: 'actions',
-    width: 360,
-    render: (row) => h(NSpace, { size: 'small' }, () => [
-      h(NButton, {
+    width: isAdmin.value ? 360 : 260,
+    render: (row) => {
+      const actions: any[] = [
+        h(NButton, {
         size: 'tiny',
         type: 'primary',
         quaternary: true,
         onClick: () => openSshTerminal(row)
-      }, () => '连接'),
-      h(NButton, {
+        }, () => '连接'),
+        h(NButton, {
         size: 'tiny',
         type: 'primary',
         quaternary: true,
         onClick: () => openCreateTask(row)
-      }, () => '创建任务'),
-      h(NButton, {
+        }, () => '创建任务'),
+        h(NButton, {
         size: 'tiny',
         quaternary: true,
         loading: testingId.value === row.id,
         onClick: () => test(row)
-      }, () => '测试连接'),
-      h(NButton, {
-        size: 'tiny',
-        quaternary: true,
-        onClick: () => openEdit(row)
-      }, () => '编辑'),
-      h(NPopconfirm, {
-        onPositiveClick: () => { void remove(row) },
-        positiveText: '确定',
-        negativeText: '取消'
-      }, {
-        trigger: () => h(NButton, {
-          size: 'tiny',
-          type: 'error',
-          quaternary: true,
-          loading: deletingId.value === row.id
-        }, () => '删除'),
-        default: () => `确定删除服务器「${row.name}」吗？`
-      })
-    ])
+        }, () => '测试连接')
+      ]
+
+      if (isAdmin.value) {
+        actions.push(
+          h(NButton, {
+            size: 'tiny',
+            quaternary: true,
+            onClick: () => openEdit(row)
+          }, () => '编辑'),
+          h(NPopconfirm, {
+            onPositiveClick: () => { void remove(row) },
+            positiveText: '确定',
+            negativeText: '取消'
+          }, {
+            trigger: () => h(NButton, {
+              size: 'tiny',
+              type: 'error',
+              quaternary: true,
+              loading: deletingId.value === row.id
+            }, () => '删除'),
+            default: () => `确定删除服务器「${row.name}」吗？`
+          })
+        )
+      }
+
+      return h(NSpace, { size: 'small' }, () => actions)
+    }
   }
-]
+])
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -652,12 +671,20 @@ async function fetchAll() {
 }
 
 function openCreate() {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   serverFormMode.value = 'create'
   editingServer.value = null
   showServerForm.value = true
 }
 
 function openEdit(server: SSHServer) {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   serverFormMode.value = 'edit'
   editingServer.value = server
   showServerForm.value = true
@@ -690,6 +717,10 @@ async function test(server: SSHServer) {
 }
 
 async function remove(server: SSHServer) {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   if (deletingId.value) return
   deletingId.value = server.id
   try {
@@ -704,12 +735,20 @@ async function remove(server: SSHServer) {
 }
 
 function openCreateGroup() {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   groupForm.name = ''
   groupForm.description = ''
   showGroupModal.value = true
 }
 
 async function createGroup() {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return false
+  }
   try {
     await groupFormRef.value?.validate()
   } catch {

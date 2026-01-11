@@ -1,6 +1,15 @@
 <template>
   <n-card title="AI 代理配置" size="small">
     <div class="agent-config">
+      <n-alert
+        v-if="!isAdmin"
+        type="warning"
+        :bordered="false"
+        style="margin-bottom: 10px"
+      >
+        当前为只读模式：需要管理员权限才能修改 AI 代理配置。
+      </n-alert>
+
       <div v-if="loading" class="loading">
         加载中...
       </div>
@@ -17,7 +26,7 @@
               <div class="agent-controls">
                 <div class="control">
                   <span class="label">启用</span>
-                  <n-switch v-model:value="agent.enabled" />
+                  <n-switch v-model:value="agent.enabled" :disabled="!isAdmin" />
                 </div>
                 <div class="control">
                   <span class="label">优先级</span>
@@ -27,6 +36,7 @@
                     placeholder="0"
                     style="width: 96px"
                     @blur="normalizePriority(agent)"
+                    :disabled="!isAdmin"
                   />
                 </div>
               </div>
@@ -40,8 +50,9 @@
                   v-model:value="newMode[agent.agent_type]"
                   size="small"
                   placeholder="添加自定义检测模式（正则/关键词）"
+                  :disabled="!isAdmin"
                 />
-                <n-button size="small" @click="addMode(agent.agent_type)">添加</n-button>
+                <n-button size="small" @click="addMode(agent.agent_type)" :disabled="!isAdmin">添加</n-button>
               </div>
 
               <n-list size="small" bordered class="mode-list">
@@ -57,7 +68,7 @@
                   >
                     <div class="mode-item">
                       <span class="mode-text">{{ mode }}</span>
-                      <n-button size="tiny" quaternary type="error" @click="removeMode(agent.agent_type, idx)">
+                      <n-button size="tiny" quaternary type="error" @click="removeMode(agent.agent_type, idx)" :disabled="!isAdmin">
                         删除
                       </n-button>
                     </div>
@@ -70,10 +81,10 @@
       </n-list>
 
       <div class="actions">
-        <n-button type="primary" :loading="saving" @click="saveConfigs">
+        <n-button type="primary" :loading="saving" @click="saveConfigs" :disabled="!isAdmin">
           保存配置
         </n-button>
-        <n-button :disabled="saving" @click="resetDefaults">
+        <n-button :disabled="saving || !isAdmin" @click="resetDefaults">
           恢复默认
         </n-button>
       </div>
@@ -82,13 +93,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { NCard, NSwitch, NInput, NButton, NList, NListItem, useMessage } from 'naive-ui'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { NAlert, NCard, NSwitch, NInput, NButton, NList, NListItem, useMessage } from 'naive-ui'
 import { automationApi, type AgentConfig, type AIAgentType } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 
 type AgentConfigForm = AgentConfig & { priorityInput: string }
 
 const message = useMessage()
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.isAdmin)
 const loading = ref(false)
 const saving = ref(false)
 
@@ -192,6 +206,10 @@ function normalizePriority(agent: AgentConfigForm) {
 }
 
 function addMode(agentType: AIAgentType) {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可修改')
+    return
+  }
   const agent = configs.value.find(a => a.agent_type === agentType)
   if (!agent) return
 
@@ -208,6 +226,10 @@ function addMode(agentType: AIAgentType) {
 }
 
 function removeMode(agentType: AIAgentType, index: number) {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可修改')
+    return
+  }
   const agent = configs.value.find(a => a.agent_type === agentType)
   if (!agent) return
   if (index < 0 || index >= agent.detect_modes.length) return
@@ -215,6 +237,10 @@ function removeMode(agentType: AIAgentType, index: number) {
 }
 
 function resetDefaults() {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可修改')
+    return
+  }
   configs.value = toForm(DEFAULT_AGENTS)
   for (const key of Object.keys(newMode) as AIAgentType[]) {
     newMode[key] = ''
@@ -258,6 +284,10 @@ async function fetchConfigs() {
 }
 
 async function saveConfigs() {
+  if (!isAdmin.value) {
+    message.warning('仅管理员可修改')
+    return
+  }
   saving.value = true
   try {
     const payload: AgentConfig[] = configs.value.map((agent) => {

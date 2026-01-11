@@ -21,6 +21,8 @@
         :collapsed="collapsed"
         :collapsed-width="64"
         :collapsed-icon-size="20"
+        :indent="18"
+        :root-indent="20"
         :expanded-keys="expandedKeys"
         :options="menuOptions"
         @update:value="handleMenuChange"
@@ -110,6 +112,8 @@
       </div>
       <n-menu
         :value="activeMenu"
+        :indent="18"
+        :root-indent="20"
         :expanded-keys="expandedKeys"
         :options="menuOptions"
         @update:value="handleMobileMenuChange"
@@ -579,7 +583,13 @@ watch(isMobile, (mobile) => {
   background: transparent;
 }
 
-:deep(.n-menu-item-content) {
-  padding-left: 20px !important;
+:deep(.n-submenu > .n-menu-item .n-menu-item-content-header) {
+  font-weight: 600;
+  opacity: 0.95;
+}
+
+:deep(.n-submenu-children .n-menu-item-content-header) {
+  font-weight: 500;
+  opacity: 0.9;
 }
 </style>

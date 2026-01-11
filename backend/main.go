@@ -111,7 +111,7 @@ func main() {
 
 	// 用户管理API（仅管理员）
 	userController := api.NewUserController()
-	userController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+	userController.RegisterRoutes(apiGroup)
 
 	// 终端API (注册在apiGroup上，继承auth中间件)
 	terminalController := api.NewTerminalController(terminalManager)
@@ -152,11 +152,11 @@ func main() {
 
 	// 凭据管理API（仅管理员）
 	secretController := api.NewSecretController(cfg.Auth.JWTSecret)
-	secretController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+	secretController.RegisterRoutes(apiGroup)
 
 	// SSH服务器管理API（仅管理员）
 	sshServerController := api.NewSSHServerController(cfg.Auth.JWTSecret, terminalManager)
-	sshServerController.RegisterRoutes(apiGroup.Group("", middleware.RequireRole("admin")))
+	sshServerController.RegisterRoutes(apiGroup)
 
 	// 提示词模板配置（系统设置：各模块读取提示词模板，不再硬编码）
 	promptTemplateController := api.NewPromptTemplateController()

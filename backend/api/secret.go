@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	secretservice "github.com/ai-coding-assistant/service/secret"
 	"github.com/gofiber/fiber/v2"
@@ -204,7 +205,7 @@ func (ctrl *SecretController) DeleteSecret(c *fiber.Ctx) error {
 
 // RegisterRoutes 注册路由
 func (ctrl *SecretController) RegisterRoutes(app fiber.Router) {
-	secrets := app.Group("/secrets")
+	secrets := app.Group("/secrets", middleware.RequireRole("admin"))
 	secrets.Get("/", ctrl.ListSecrets)
 	secrets.Post("/", ctrl.CreateSecret)
 	secrets.Put("/:id", ctrl.UpdateSecret)

@@ -87,7 +87,11 @@
             </div>
 
             <n-card size="small" style="max-width: 600px">
-              <n-form label-placement="left" label-width="120">
+              <n-text v-if="!isAdmin" depth="3" style="display: block; margin-bottom: 10px; font-size: 12px">
+                当前为只读模式：需要管理员权限才能修改系统规则。
+              </n-text>
+
+              <n-form label-placement="left" label-width="120" :disabled="!isAdmin">
                 <n-form-item label="审批模式">
                   <n-radio-group v-model:value="defaultAutomation.approvalMode">
                     <n-space vertical>
@@ -159,10 +163,10 @@
 
                 <n-form-item>
                   <n-space>
-                    <n-button type="primary" @click="saveSystemConfig" :loading="savingSystemConfig">
+                    <n-button type="primary" @click="saveSystemConfig" :loading="savingSystemConfig" :disabled="!isAdmin">
                       保存系统规则
                     </n-button>
-                    <n-button @click="loadDefaultPatterns">
+                    <n-button @click="loadDefaultPatterns" :disabled="!isAdmin">
                       加载默认规则模板
                     </n-button>
                   </n-space>
@@ -178,7 +182,7 @@
               <span>规则集导入 / 导出</span>
               <n-text depth="3">用于备份或迁移规则集配置</n-text>
             </div>
-            <RuleImportExport />
+            <RuleImportExport :readonly="!isAdmin" />
           </div>
         </div>
 
@@ -206,7 +210,7 @@
           <div class="section">
             <div class="section-header">
               <span>AI Provider 配置</span>
-              <n-button type="primary" size="small" @click="showProviderModal = true">
+              <n-button v-if="isAdmin" type="primary" size="small" @click="showProviderModal = true">
                 添加 Provider
               </n-button>
             </div>
@@ -327,6 +331,22 @@ const { isMobile } = useIsMobile()
 
 const activeTab = ref('account')
 
+const readOnlyTabs = computed(() => new Set([
+  'automation',
+  'prompt-templates',
+  'key-bindings',
+  'rule-import-export',
+  'agents',
+  'ai-providers'
+]))
+
+function maybeReadOnlyLabel(label: string, key: string) {
+  if (!isAdmin.value) {
+    if (readOnlyTabs.value.has(key)) return `${label}（只读）`
+  }
+  return label
+}
+
 const settingsTabOptions = computed(() => {
   const options: Array<{ label: string; value: string }> = [
     { label: '账户设置', value: 'account' }
@@ -337,13 +357,13 @@ const settingsTabOptions = computed(() => {
   }
 
   options.push(
-    { label: '系统规则', value: 'automation' },
-    { label: '提示词模板', value: 'prompt-templates' },
-    { label: '按键绑定', value: 'key-bindings' },
-    { label: '规则导入/导出', value: 'rule-import-export' },
+    { label: maybeReadOnlyLabel('系统规则', 'automation'), value: 'automation' },
+    { label: maybeReadOnlyLabel('提示词模板', 'prompt-templates'), value: 'prompt-templates' },
+    { label: maybeReadOnlyLabel('按键绑定', 'key-bindings'), value: 'key-bindings' },
+    { label: maybeReadOnlyLabel('规则导入/导出', 'rule-import-export'), value: 'rule-import-export' },
     { label: '日志导出', value: 'log-export' },
-    { label: 'AI代理', value: 'agents' },
-    { label: 'AI Provider', value: 'ai-providers' }
+    { label: maybeReadOnlyLabel('AI代理', 'agents'), value: 'agents' },
+    { label: maybeReadOnlyLabel('AI Provider', 'ai-providers'), value: 'ai-providers' }
   )
 
   return options
@@ -369,9 +389,9 @@ const settingsMenuOptions = computed<MenuOption[]>(() => {
       label: '治理',
       key: 'g-govern',
       children: [
-        { label: '系统规则', key: 'automation', icon: () => h('span', { style: 'font-size: 18px' }, '✅') },
-        { label: '提示词模板', key: 'prompt-templates', icon: () => h('span', { style: 'font-size: 18px' }, '🧩') },
-        { label: '按键绑定', key: 'key-bindings', icon: () => h('span', { style: 'font-size: 18px' }, '⌨️') }
+        { label: maybeReadOnlyLabel('系统规则', 'automation'), key: 'automation', icon: () => h('span', { style: 'font-size: 18px' }, '✅') },
+        { label: maybeReadOnlyLabel('提示词模板', 'prompt-templates'), key: 'prompt-templates', icon: () => h('span', { style: 'font-size: 18px' }, '🧩') },
+        { label: maybeReadOnlyLabel('按键绑定', 'key-bindings'), key: 'key-bindings', icon: () => h('span', { style: 'font-size: 18px' }, '⌨️') }
       ]
     },
     {
@@ -379,8 +399,8 @@ const settingsMenuOptions = computed<MenuOption[]>(() => {
       label: 'AI',
       key: 'g-ai',
       children: [
-        { label: 'AI代理', key: 'agents', icon: () => h('span', { style: 'font-size: 18px' }, '🤖') },
-        { label: 'AI Provider', key: 'ai-providers', icon: () => h('span', { style: 'font-size: 18px' }, '🧠') }
+        { label: maybeReadOnlyLabel('AI代理', 'agents'), key: 'agents', icon: () => h('span', { style: 'font-size: 18px' }, '🤖') },
+        { label: maybeReadOnlyLabel('AI Provider', 'ai-providers'), key: 'ai-providers', icon: () => h('span', { style: 'font-size: 18px' }, '🧠') }
       ]
     },
     {
@@ -388,7 +408,7 @@ const settingsMenuOptions = computed<MenuOption[]>(() => {
       label: '备份与导出',
       key: 'g-export',
       children: [
-        { label: '规则导入/导出', key: 'rule-import-export', icon: () => h('span', { style: 'font-size: 18px' }, '📦') },
+        { label: maybeReadOnlyLabel('规则导入/导出', 'rule-import-export'), key: 'rule-import-export', icon: () => h('span', { style: 'font-size: 18px' }, '📦') },
         { label: '日志导出', key: 'log-export', icon: () => h('span', { style: 'font-size: 18px' }, '📤') }
       ]
     }
@@ -587,14 +607,19 @@ const providerTypeOptions = [
   { label: '其他兼容', value: 'custom' }
 ]
 
-const providerColumns: DataTableColumns<AIProvider> = [
+const providerColumns = computed<DataTableColumns<AIProvider>>(() => {
+  const cols: DataTableColumns<AIProvider> = [
   { title: '名称', key: 'name', width: 150 },
   { title: 'Provider', key: 'provider', width: 100, render: (row) => h(NTag, { size: 'small', bordered: false }, () => row.provider) },
   { title: '模型', key: 'model', width: 150 },
   { title: 'Base URL', key: 'base_url', ellipsis: { tooltip: true } },
   { title: '状态', key: 'enabled', width: 80, render: (row) => h(NTag, { size: 'small', type: row.enabled ? 'success' : 'default' }, () => row.enabled ? '启用' : '禁用') },
   { title: '默认', key: 'is_default', width: 60, render: (row) => row.is_default ? h(NTag, { size: 'small', type: 'info' }, () => '是') : '-' },
-  {
+  ]
+
+  if (!isAdmin.value) return cols
+
+  cols.push({
     title: '操作', key: 'actions', width: 120,
     render: (row) => h(NSpace, { size: 'small' }, () => [
       h(NButton, { size: 'tiny', quaternary: true, onClick: () => editProvider(row) }, () => '编辑'),
@@ -603,8 +628,10 @@ const providerColumns: DataTableColumns<AIProvider> = [
         default: () => '确定删除?'
       })
     ])
-  }
-]
+  })
+
+  return cols
+})
 
 async function fetchProviders() {
   loadingProviders.value = true
@@ -615,12 +642,14 @@ async function fetchProviders() {
 }
 
 function editProvider(provider: AIProvider) {
+  if (!isAdmin.value) return
   editingProvider.value = provider
   Object.assign(providerForm, { ...provider, api_key: '' })
   showProviderModal.value = true
 }
 
 async function saveProvider() {
+  if (!isAdmin.value) return false
   try { await providerFormRef.value?.validate() } catch { return false }
   try {
     if (editingProvider.value) {
@@ -638,6 +667,7 @@ async function saveProvider() {
 }
 
 async function deleteProvider(id: string) {
+  if (!isAdmin.value) return
   try {
     await automationApi.deleteAIProvider(id)
     message.success('删除成功')

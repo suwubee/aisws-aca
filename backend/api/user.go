@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -102,7 +103,7 @@ func (ctrl *UserController) UpdateUser(c *fiber.Ctx) error {
 
 // RegisterRoutes 注册路由
 func (ctrl *UserController) RegisterRoutes(app fiber.Router) {
-	users := app.Group("/users")
+	users := app.Group("/users", middleware.RequireRole("admin"))
 	users.Get("/", ctrl.ListUsers)
 	users.Put("/:id", ctrl.UpdateUser)
 }

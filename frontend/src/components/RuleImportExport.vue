@@ -1,11 +1,15 @@
 <template>
   <n-card size="small" title="规则集导入 / 导出" style="max-width: 700px">
     <n-space vertical>
+      <n-alert v-if="readonly" type="warning" :bordered="false">
+        当前为只读模式：需要管理员权限才能导入/导出规则集。
+      </n-alert>
+
       <n-space>
-        <n-button type="primary" @click="handleExport" :loading="exporting">
+        <n-button type="primary" @click="handleExport" :loading="exporting" :disabled="readonly">
           导出规则集
         </n-button>
-        <n-button @click="triggerFilePicker" :loading="readingFile">
+        <n-button @click="triggerFilePicker" :loading="readingFile" :disabled="readonly">
           导入规则集
         </n-button>
         <input
@@ -49,7 +53,7 @@
     <template #footer>
       <n-space justify="end">
         <n-button @click="cancelPreview" :disabled="importing">取消</n-button>
-        <n-button type="primary" @click="confirmImport" :loading="importing">
+        <n-button type="primary" @click="confirmImport" :loading="importing" :disabled="readonly">
           确认导入
         </n-button>
       </n-space>
@@ -72,6 +76,12 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { automationApi, type RuleSetImportResult } from '@/api'
+
+const props = withDefaults(defineProps<{ readonly?: boolean }>(), {
+  readonly: false
+})
+
+const readonly = computed(() => props.readonly)
 
 interface RuleSetImportItem {
   id: string
@@ -225,10 +235,18 @@ function normalizeRuleSetItem(value: unknown, index: number): RuleSetImportItem 
 }
 
 function triggerFilePicker() {
+  if (readonly.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   fileInputRef.value?.click()
 }
 
 async function handleExport() {
+  if (readonly.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   exporting.value = true
   try {
     const resp = await automationApi.exportRuleSets()
@@ -251,6 +269,7 @@ async function handleExport() {
 }
 
 async function handleFileChange(e: Event) {
+  if (readonly.value) return
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
@@ -283,6 +302,10 @@ function cancelPreview() {
 }
 
 async function confirmImport() {
+  if (readonly.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
   if (previewItems.value.length === 0) return
 
   importing.value = true

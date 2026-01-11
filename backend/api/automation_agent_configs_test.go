@@ -53,8 +53,28 @@ func TestAutomationController_AgentConfigs_GetAndUpdate(t *testing.T) {
 	}
 	defer updateResp.Body.Close()
 
-	if updateResp.StatusCode != 200 {
-		t.Fatalf("expected status 200, got %d", updateResp.StatusCode)
+	if updateResp.StatusCode != 403 {
+		t.Fatalf("expected status 403, got %d", updateResp.StatusCode)
+	}
+
+	createTestUser(t, "admin2", "admin2@example.com", "adminpass", "admin", "active")
+	adminToken := loginForToken(t, app, "admin2", "adminpass")
+
+	adminUpdateReq := httptest.NewRequest(
+		"PUT",
+		"/api/automation/agent-configs",
+		bytes.NewBufferString(`{"items":[{"agent_type":"codex","display_name":"OpenAI Codex","enabled":true,"priority":90,"detect_modes":[" (?i)codex ","","(?i)codex"]}]}`),
+	)
+	adminUpdateReq.Header.Set("Content-Type", "application/json")
+	adminUpdateReq.Header.Set("Authorization", "Bearer "+adminToken)
+	adminUpdateResp, err := app.Test(adminUpdateReq)
+	if err != nil {
+		t.Fatalf("PUT request failed: %v", err)
+	}
+	defer adminUpdateResp.Body.Close()
+
+	if adminUpdateResp.StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", adminUpdateResp.StatusCode)
 	}
 
 	getReq2 := httptest.NewRequest("GET", "/api/automation/agent-configs", nil)
@@ -97,7 +117,7 @@ func TestAutomationController_AgentConfigs_GetAndUpdate(t *testing.T) {
 
 	clearReq := httptest.NewRequest("PUT", "/api/automation/agent-configs", bytes.NewBufferString(`{"items":[]}`))
 	clearReq.Header.Set("Content-Type", "application/json")
-	clearReq.Header.Set("Authorization", "Bearer "+token)
+	clearReq.Header.Set("Authorization", "Bearer "+adminToken)
 	clearResp, err := app.Test(clearReq)
 	if err != nil {
 		t.Fatalf("PUT request failed: %v", err)
@@ -135,8 +155,8 @@ func TestAutomationController_AgentConfigs_UpdateValidation(t *testing.T) {
 	automationController := NewAutomationController(nil)
 	automationController.RegisterRoutes(apiGroup)
 
-	createTestUser(t, "alice", "alice@example.com", "password123", "user", "active")
-	token := loginForToken(t, app, "alice", "password123")
+	createTestUser(t, "admin2", "admin2@example.com", "adminpass", "admin", "active")
+	token := loginForToken(t, app, "admin2", "adminpass")
 
 	missingTypeReq := httptest.NewRequest(
 		"PUT",
