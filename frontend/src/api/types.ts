@@ -566,6 +566,28 @@ export interface ListApprovalRecordsParams {
 
 export type ListApprovalRecordsResponse = ApiPaginatedResponse<ApprovalRecord>
 
+export interface LoginRecord {
+  id: string
+  user_id: string | null
+  identifier: string
+  username: string
+  success: boolean
+  error: string
+  ip: string
+  user_agent: string
+  created_at: ISODateTimeString
+}
+
+export interface ListLoginRecordsParams {
+  keyword?: string
+  user_id?: string
+  success?: string
+  limit?: number
+  offset?: number
+}
+
+export type ListLoginRecordsResponse = ApiPaginatedResponse<LoginRecord>
+
 // ===== Secrets =====
 
 export type SecretType = 'ssh_password' | 'ssh_key' | 'api_key' | string

@@ -160,12 +160,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, h, reactive } from 'vue'
+import { ref, computed, onMounted, h, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, NButton, NTag, NSpace } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useProjectStore } from '@/stores/project'
+import { useGlobalContextStore } from '@/stores/context'
 import { useIsMobile } from '@/utils/useIsMobile'
 import ProjectPortfolioManager from '@/components/ProjectPortfolioManager.vue'
 import TaskForm from '@/components/TaskForm.vue'
@@ -176,13 +177,14 @@ const message = useMessage()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const projectStore = useProjectStore()
+const contextStore = useGlobalContextStore()
 
 const loading = ref(false)
 const activeTab = ref<'tasks' | 'projects' | 'groups'>('tasks')
 const showCreateTask = ref(false)
 const statusFilter = ref<string | null>(null)
-const projectGroupFilter = ref<string | null>(null)
-const projectFilter = ref<string | null>(null)
+const projectGroupFilter = ref<string | null>(contextStore.projectGroupId)
+const projectFilter = ref<string | null>(contextStore.projectId)
 const searchText = ref('')
 const { isMobile } = useIsMobile()
 
@@ -360,6 +362,41 @@ const filteredTasks = computed(() => {
   return tasks.slice().sort((a, b) =>
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   )
+})
+
+watch(() => contextStore.projectGroupId, (next, prev) => {
+  if (projectGroupFilter.value === prev) {
+    projectGroupFilter.value = next
+  }
+})
+
+watch(() => contextStore.projectId, (next, prev) => {
+  if (projectFilter.value === prev) {
+    projectFilter.value = next
+  }
+})
+
+watch(projectGroupFilter, (next, prev) => {
+  if (next === prev) return
+  const selectedProjectId = projectFilter.value
+  if (!selectedProjectId) return
+
+  const selectedProject = projectStore.projects.find(p => p.id === selectedProjectId)
+  if (!selectedProject) {
+    projectFilter.value = null
+    return
+  }
+  const groupId = selectedProject.group_id || null
+  if (next && groupId !== next) {
+    projectFilter.value = null
+  }
+})
+
+watch(showCreateTask, (show) => {
+  if (!show) return
+  if (!newTask.project_id && contextStore.projectId) {
+    newTask.project_id = contextStore.projectId
+  }
 })
 
 async function fetchData() {

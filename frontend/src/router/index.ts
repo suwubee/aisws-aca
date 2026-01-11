@@ -44,9 +44,13 @@ const routes = [
         component: () => import('@/views/Messages.vue')
       },
       {
+        path: 'audit',
+        name: 'Audit',
+        component: () => import('@/views/Audit.vue')
+      },
+      {
         path: 'logs',
-        name: 'LogManagement',
-        component: () => import('@/views/LogManagement.vue')
+        redirect: '/audit'
       },
       {
         path: 'terminals',

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/approval"
 	"github.com/ai-coding-assistant/service/terminal"
@@ -798,6 +799,48 @@ func (ctrl *AutomationController) ListApprovalRecords(c *fiber.Ctx) error {
 	})
 }
 
+// ===== Login Record APIs =====
+
+// ListLoginRecords 获取登录记录列表（管理员）
+func (ctrl *AutomationController) ListLoginRecords(c *fiber.Ctx) error {
+	limit := c.QueryInt("limit", 50)
+	offset := c.QueryInt("offset", 0)
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	userID := strings.TrimSpace(c.Query("user_id"))
+	successRaw := strings.TrimSpace(c.Query("success"))
+
+	query := model.DB.Model(&model.LoginRecord{}).Order("created_at desc")
+
+	if userID != "" {
+		query = query.Where("user_id = ?", userID)
+	}
+
+	if successRaw != "" {
+		v := strings.ToLower(successRaw)
+		success := v == "true" || v == "1" || v == "yes" || v == "y"
+		query = query.Where("success = ?", success)
+	}
+
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		query = query.Where(
+			"identifier LIKE ? OR username LIKE ? OR ip LIKE ?",
+			like, like, like,
+		)
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var records []model.LoginRecord
+	query.Offset(offset).Limit(limit).Find(&records)
+
+	return c.JSON(fiber.Map{
+		"items": records,
+		"total": total,
+	})
+}
+
 // ===== Helper Functions =====
 
 func maskAPIKey(key string) string {
@@ -885,4 +928,8 @@ func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
 
 	// 审批记录
 	automation.Get("/approval-records", ctrl.ListApprovalRecords)
+
+	// 登录记录（管理员）
+	admin := automation.Group("", middleware.RequireRole("admin"))
+	admin.Get("/login-records", ctrl.ListLoginRecords)
 }

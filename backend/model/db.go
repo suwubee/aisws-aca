@@ -22,6 +22,7 @@ func InitDB(dsn string) error {
 	// 自动迁移
 	if err := DB.AutoMigrate(
 		&User{},
+		&LoginRecord{},
 		&Task{},
 		&Project{},
 		&ProjectGroup{},

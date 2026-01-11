@@ -371,12 +371,14 @@ import WorkflowEditor from '@/components/WorkflowEditor.vue'
 import AIWorkflowChat from '@/components/AIWorkflowChat.vue'
 import type { Project } from '@/api/project'
 import { getProjects } from '@/api/project'
+import { useGlobalContextStore } from '@/stores/context'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
 
 const activeTab = ref('ai')
 const { isMobile } = useIsMobile()
+const contextStore = useGlobalContextStore()
 const loading = ref(false)
 const workflows = ref<Workflow[]>([])
 
@@ -419,6 +421,15 @@ const projectOptions = computed(() => projects.value.map(p => ({
   value: p.id
 })))
 
+const projectGroupByProjectId = computed(() => {
+  const map = new Map<string, string | null>()
+  for (const p of projects.value) {
+    if (!p?.id) continue
+    map.set(p.id, p.group_id ?? null)
+  }
+  return map
+})
+
 const statusOptions = [
   { label: '全部状态', value: '' },
   { label: '草稿', value: 'draft' },
@@ -443,6 +454,15 @@ const designerTitle = computed(() => {
 const filteredWorkflows = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   return workflows.value.filter((w) => {
+    const contextProjectId = contextStore.projectId
+    const contextGroupId = contextStore.projectGroupId
+    if (contextProjectId) {
+      if (!w.project_id || String(w.project_id) !== contextProjectId) return false
+    } else if (contextGroupId) {
+      if (!w.project_id) return false
+      const groupId = projectGroupByProjectId.value.get(String(w.project_id)) ?? null
+      if (groupId !== contextGroupId) return false
+    }
     if (statusFilter.value && String(w.status) !== statusFilter.value) return false
     if (!kw) return true
     return String(w.name || '').toLowerCase().includes(kw)
@@ -740,7 +760,7 @@ function openCreate() {
   editingWorkflow.value = null
   formModel.name = ''
   formModel.description = ''
-  formModel.project_id = null
+  formModel.project_id = contextStore.projectId || null
   showForm.value = true
 }
 

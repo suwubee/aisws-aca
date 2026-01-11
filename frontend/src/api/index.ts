@@ -7,6 +7,7 @@ import type {
   CreateTaskRequest,
   CreateTerminalRequest,
   ListApprovalRecordsParams,
+  ListLoginRecordsParams,
   ListMessagesParams,
   ListTasksParams,
   LogExportParams,
@@ -170,6 +171,9 @@ export const automationApi = {
 
   // 审批记录
   listApprovalRecords: (params?: ListApprovalRecordsParams) => api.get('/automation/approval-records', { params }),
+
+  // 登录记录（管理员）
+  listLoginRecords: (params?: ListLoginRecordsParams) => api.get('/automation/login-records', { params }),
 
   // AI代理配置
   getAgentConfigs: () => api.get('/automation/agent-configs'),

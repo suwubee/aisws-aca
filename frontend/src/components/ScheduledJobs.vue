@@ -206,6 +206,7 @@ import {
 } from 'naive-ui'
 import { scheduleApi } from '@/api'
 import { useTaskStore } from '@/stores/task'
+import { useGlobalContextStore } from '@/stores/context'
 
 interface ScheduledJob {
   id: string
@@ -226,6 +227,7 @@ interface ScheduledJob {
 
 const message = useMessage()
 const taskStore = useTaskStore()
+const contextStore = useGlobalContextStore()
 
 const loading = ref(false)
 const items = ref<ScheduledJob[]>([])
@@ -250,12 +252,20 @@ const targetTypeOptions: SelectOption[] = [
   { label: 'AI 工作流', value: 'ai_workflow' }
 ]
 
-const taskOptions = computed<SelectOption[]>(() =>
-  taskStore.tasks.map(t => ({
+const taskOptions = computed<SelectOption[]>(() => {
+  const contextProjectId = contextStore.projectId
+  const contextGroupId = contextStore.projectGroupId
+  let tasks = taskStore.tasks
+  if (contextProjectId) {
+    tasks = tasks.filter(t => t.project_id === contextProjectId)
+  } else if (contextGroupId) {
+    tasks = tasks.filter(t => t.project?.group?.id === contextGroupId)
+  }
+  return tasks.map(t => ({
     label: t.title,
     value: t.id
   }))
-)
+})
 
 const form = reactive({
   name: '',

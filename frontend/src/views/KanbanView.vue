@@ -48,6 +48,7 @@ import { useMessage } from 'naive-ui'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import { useProjectStore } from '@/stores/project'
+import { useGlobalContextStore } from '@/stores/context'
 import { useIsMobile } from '@/utils/useIsMobile'
 import Kanban from '@/components/Kanban.vue'
 import TaskForm from '@/components/TaskForm.vue'
@@ -56,11 +57,12 @@ const message = useMessage()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
 const projectStore = useProjectStore()
+const contextStore = useGlobalContextStore()
 const { isMobile } = useIsMobile()
 
 const showCreateTask = ref(false)
-const projectGroupFilter = ref<string | null>(null)
-const projectFilter = ref<string | null>(null)
+const projectGroupFilter = ref<string | null>(contextStore.projectGroupId)
+const projectFilter = ref<string | null>(contextStore.projectId)
 const newTask = reactive({
   title: '',
   description: '',
@@ -109,8 +111,27 @@ onMounted(() => {
   projectStore.fetchAll().catch(() => {})
 })
 
-watch(projectGroupFilter, () => {
-  projectFilter.value = null
+watch(() => contextStore.projectGroupId, (next, prev) => {
+  if (projectGroupFilter.value === prev) {
+    projectGroupFilter.value = next
+  }
+})
+
+watch(() => contextStore.projectId, (next, prev) => {
+  if (projectFilter.value === prev) {
+    projectFilter.value = next
+  }
+})
+
+watch(projectGroupFilter, (next, prev) => {
+  if (next === prev) return
+  if (projectFilter.value && next) {
+    const selectedProject = projectStore.projects.find(p => p.id === projectFilter.value)
+    const groupId = selectedProject?.group_id || null
+    if (groupId !== next) {
+      projectFilter.value = null
+    }
+  }
 })
 
 async function handleCreateTask() {
@@ -164,6 +185,13 @@ async function handleCreateTask() {
     message.error(e.message || '创建失败')
   }
 }
+
+watch(showCreateTask, (show) => {
+  if (!show) return
+  if (!newTask.project_id && contextStore.projectId) {
+    newTask.project_id = contextStore.projectId
+  }
+})
 </script>
 
 <style scoped>

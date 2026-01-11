@@ -69,6 +69,26 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Username and password are required"})
 	}
 
+	recordLogin := func(success bool, user *model.User, reason string) {
+		if identifier == "" {
+			return
+		}
+		rec := model.LoginRecord{
+			ID:         uuid.New().String(),
+			Identifier: identifier,
+			Success:    success,
+			Error:      reason,
+			IP:         c.IP(),
+			UserAgent:  c.Get("User-Agent"),
+			CreatedAt:  time.Now(),
+		}
+		if user != nil {
+			rec.UserID = &user.ID
+			rec.Username = user.Username
+		}
+		_ = model.DB.Create(&rec).Error
+	}
+
 	// 从数据库查询用户（按username或email）
 	var user model.User
 	result := model.DB.Where("username = ? OR email = ?", identifier, identifier).First(&user)
@@ -82,6 +102,7 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 			if userCount == 0 && identifier == ctrl.config.Username && password == ctrl.config.Password {
 				hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 				if err != nil {
+					recordLogin(false, nil, "internal_error")
 					return c.Status(500).JSON(fiber.Map{"error": "Failed to hash password"})
 				}
 
@@ -93,23 +114,28 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 					Status:       "active",
 				}
 				if err := model.DB.Create(&user).Error; err != nil {
+					recordLogin(false, nil, "internal_error")
 					return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
 				}
 			} else {
+				recordLogin(false, nil, "invalid_credentials")
 				return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
 			}
 		} else {
+			recordLogin(false, nil, "internal_error")
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to query user"})
 		}
 	}
 
 	// 验证密码（从数据库读取password_hash进行bcrypt校验）
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		recordLogin(false, &user, "invalid_credentials")
 		return c.Status(401).JSON(fiber.Map{"error": "Invalid username or password"})
 	}
 
 	// 检查用户状态(active/disabled)
 	if user.Status != "" && user.Status != "active" {
+		recordLogin(false, &user, "user_disabled")
 		return c.Status(403).JSON(fiber.Map{"error": "User is disabled"})
 	}
 
@@ -126,6 +152,7 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 	// 更新LastLoginAt
 	now := time.Now()
 	if err := model.DB.Model(&model.User{}).Where("id = ?", user.ID).Update("last_login_at", now).Error; err != nil {
+		recordLogin(false, &user, "internal_error")
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update last login time"})
 	}
 
@@ -141,9 +168,11 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 
 	tokenString, err := token.SignedString([]byte(ctrl.config.JWTSecret))
 	if err != nil {
+		recordLogin(false, &user, "internal_error")
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to generate token"})
 	}
 
+	recordLogin(true, &user, "")
 	return c.JSON(LoginResponse{
 		Token:     tokenString,
 		ExpiresAt: expiresAt.Unix(),

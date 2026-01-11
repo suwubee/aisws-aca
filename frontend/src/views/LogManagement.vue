@@ -1,6 +1,6 @@
 <template>
-  <div class="log-management">
-    <div class="page-header">
+  <div class="log-management" :class="{ 'log-management--embedded': embedded }">
+    <div v-if="!embedded" class="page-header">
       <h2>日志管理</h2>
       <p class="page-desc">查看和管理所有终端会话的日志记录</p>
     </div>
@@ -158,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, reactive, onMounted } from 'vue'
+import { computed, ref, h, reactive, onMounted } from 'vue'
 import {
   NButton,
   NCard,
@@ -175,6 +175,12 @@ import {
 } from 'naive-ui'
 import { logApi, terminalApi } from '@/api'
 import { useIsMobile } from '@/utils/useIsMobile'
+
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), {
+  embedded: false
+})
+
+const embedded = computed(() => props.embedded)
 
 interface LogSession {
   terminal_id: string
@@ -405,6 +411,10 @@ onMounted(() => {
   height: 100%;
   background: #1a1a1a;
   color: #e0e0e0;
+}
+
+.log-management--embedded {
+  background: transparent;
 }
 
 .page-header {

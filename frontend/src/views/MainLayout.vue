@@ -55,6 +55,17 @@
         </div>
         <div class="header-right">
           <n-space align="center">
+            <ProjectContextSelector />
+            <n-button
+              v-if="pinTargetKey"
+              quaternary
+              size="small"
+              class="pin-btn"
+              :title="isPinnedCurrent ? '取消置顶' : '置顶到常用'"
+              @click="togglePinCurrent"
+            >
+              {{ isPinnedCurrent ? '⭐' : '☆' }}
+            </n-button>
             <ApprovalCenter />
             <n-badge :value="unreadCount" :max="99" :show="unreadCount > 0">
               <n-button quaternary size="small" @click="$router.push('/messages')">
@@ -112,8 +123,10 @@
 import { ref, onMounted, computed, h, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useNavStore } from '@/stores/nav'
 import { useIsMobile } from '@/utils/useIsMobile'
 import ApprovalCenter from '@/components/ApprovalCenter.vue'
+import ProjectContextSelector from '@/components/ProjectContextSelector.vue'
 import {
   NLayout,
   NLayoutSider,
@@ -136,6 +149,7 @@ import { automationApi } from '@/api'
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const navStore = useNavStore()
 
 const collapsed = ref(false)
 const unreadCount = ref(0)
@@ -153,94 +167,157 @@ const parentKeyByMenuKey: Record<string, string> = {
   terminals: 'ops',
   servers: 'ops',
   messages: 'observe',
-  logs: 'observe'
+  audit: 'observe'
 }
 
-const menuOptions: MenuOption[] = [
+function icon(emoji: string) {
+  return () => h('span', { style: 'font-size: 18px' }, emoji)
+}
+
+const leafMenu: Record<string, { label: string; path: string; icon: string }> = {
+  dashboard: { label: '工作台', path: '/', icon: '🏠' },
+  'work-items': { label: '工作清单', path: '/tasks', icon: '📋' },
+  kanban: { label: '任务看板', path: '/kanban', icon: '📊' },
+  workflows: { label: '工作流', path: '/workflows', icon: '🔁' },
+  schedules: { label: '计划任务', path: '/schedules', icon: '⏱️' },
+  'ai-intelligence': { label: 'AI 智能', path: '/ai-intelligence', icon: '🤖' },
+  terminals: { label: '终端', path: '/terminals', icon: '🧪' },
+  servers: { label: '服务器', path: '/servers', icon: '🖥️' },
+  messages: { label: '消息中心', path: '/messages', icon: '🔔' },
+  audit: { label: '审计', path: '/audit', icon: '🧾' },
+  settings: { label: '系统设置', path: '/settings', icon: '⚙️' }
+}
+
+const baseMenuOptions: MenuOption[] = [
   {
-    label: '工作台',
+    label: leafMenu.dashboard.label,
     key: 'dashboard',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🏠')
+    icon: icon(leafMenu.dashboard.icon)
   },
   {
     label: '工作',
     key: 'work',
-    icon: () => h('span', { style: 'font-size: 18px' }, '📦'),
+    icon: icon('📦'),
     children: [
       {
-        label: '工作清单',
+        label: leafMenu['work-items'].label,
         key: 'work-items',
-        icon: () => h('span', { style: 'font-size: 18px' }, '📋')
+        icon: icon(leafMenu['work-items'].icon)
       },
       {
-        label: '任务看板',
+        label: leafMenu.kanban.label,
         key: 'kanban',
-        icon: () => h('span', { style: 'font-size: 18px' }, '📊')
+        icon: icon(leafMenu.kanban.icon)
       }
     ]
   },
   {
     label: '智能自动化',
     key: 'automation',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🤖'),
+    icon: icon('🤖'),
     children: [
       {
-        label: '工作流',
+        label: leafMenu.workflows.label,
         key: 'workflows',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🔁')
+        icon: icon(leafMenu.workflows.icon)
       },
       {
-        label: '计划任务',
+        label: leafMenu.schedules.label,
         key: 'schedules',
-        icon: () => h('span', { style: 'font-size: 18px' }, '⏱️')
+        icon: icon(leafMenu.schedules.icon)
       },
       {
-        label: 'AI 智能',
+        label: leafMenu['ai-intelligence'].label,
         key: 'ai-intelligence',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🤖')
+        icon: icon(leafMenu['ai-intelligence'].icon)
       }
     ]
   },
   {
     label: '执行与资源',
     key: 'ops',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🧪'),
+    icon: icon('🧪'),
     children: [
       {
-        label: '终端',
+        label: leafMenu.terminals.label,
         key: 'terminals',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🧪')
+        icon: icon(leafMenu.terminals.icon)
       },
       {
-        label: '服务器',
+        label: leafMenu.servers.label,
         key: 'servers',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🖥️')
+        icon: icon(leafMenu.servers.icon)
       }
     ]
   },
   {
     label: '观察与审计',
     key: 'observe',
-    icon: () => h('span', { style: 'font-size: 18px' }, '🧾'),
+    icon: icon('🧾'),
     children: [
       {
-        label: '消息中心',
+        label: leafMenu.messages.label,
         key: 'messages',
-        icon: () => h('span', { style: 'font-size: 18px' }, '🔔')
+        icon: icon(leafMenu.messages.icon)
       },
       {
-        label: '日志管理',
-        key: 'logs',
-        icon: () => h('span', { style: 'font-size: 18px' }, '📝')
+        label: leafMenu.audit.label,
+        key: 'audit',
+        icon: icon(leafMenu.audit.icon)
       }
     ]
   },
   {
-    label: '系统设置',
+    label: leafMenu.settings.label,
     key: 'settings',
-    icon: () => h('span', { style: 'font-size: 18px' }, '⚙️')
+    icon: icon(leafMenu.settings.icon)
   }
 ]
+
+const menuOptions = computed<MenuOption[]>(() => {
+  const pinned = navStore.pinnedKeys.filter(k => !!leafMenu[k])
+  const pinnedSet = new Set(pinned)
+  const recent = navStore.recentKeys.filter(k => !!leafMenu[k] && !pinnedSet.has(k))
+
+  const quickChildren: MenuOption[] = []
+  if (pinned.length > 0) {
+    quickChildren.push({
+      label: '常用',
+      key: 'quick-pinned',
+      type: 'group',
+      children: pinned.map((key) => ({
+        label: leafMenu[key].label,
+        key: `quick:${key}`,
+        icon: icon(leafMenu[key].icon)
+      }))
+    })
+  }
+
+  if (recent.length > 0) {
+    quickChildren.push({
+      label: '最近访问',
+      key: 'quick-recent',
+      type: 'group',
+      children: recent.map((key) => ({
+        label: leafMenu[key].label,
+        key: `quick:${key}`,
+        icon: icon(leafMenu[key].icon)
+      }))
+    })
+  }
+
+  if (quickChildren.length === 0) return baseMenuOptions
+
+  return [
+    {
+      label: '常用/最近',
+      key: 'quick',
+      icon: icon('⭐'),
+      children: quickChildren
+    },
+    ...baseMenuOptions
+  ]
+})
 
 const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
   { key: 'dashboard', label: '工作台', icon: '🏠' },
@@ -267,7 +344,7 @@ const activeMenu = computed(() => {
   if (path.startsWith('/workflows')) return 'workflows'
   if (path.startsWith('/schedules')) return 'schedules'
   if (path.startsWith('/messages')) return 'messages'
-  if (path.startsWith('/logs')) return 'logs'
+  if (path.startsWith('/audit') || path.startsWith('/logs')) return 'audit'
   if (path.startsWith('/terminals')) return 'terminals'
   if (path.startsWith('/settings')) return 'settings'
   return 'dashboard'
@@ -284,49 +361,17 @@ const currentPageName = computed(() => {
   if (path.startsWith('/workflows')) return '工作流'
   if (path.startsWith('/schedules')) return '计划任务'
   if (path.startsWith('/messages')) return '消息中心'
-  if (path.startsWith('/logs')) return '日志管理'
+  if (path.startsWith('/audit') || path.startsWith('/logs')) return '审计'
   if (path.startsWith('/terminals')) return '终端管理'
   if (path.startsWith('/settings')) return '系统设置'
   return null
 })
 
 function handleMenuChange(key: string) {
-  if (key === 'work' || key === 'automation' || key === 'ops' || key === 'observe') return
-  switch (key) {
-    case 'dashboard':
-      router.push('/')
-      break
-    case 'work-items':
-      router.push('/tasks')
-      break
-    case 'kanban':
-      router.push('/kanban')
-      break
-    case 'ai-intelligence':
-      router.push('/ai-intelligence')
-      break
-    case 'messages':
-      router.push('/messages')
-      break
-    case 'servers':
-      router.push('/servers')
-      break
-    case 'workflows':
-      router.push('/workflows')
-      break
-    case 'schedules':
-      router.push('/schedules')
-      break
-    case 'logs':
-      router.push('/logs')
-      break
-    case 'terminals':
-      router.push('/terminals')
-      break
-    case 'settings':
-      router.push('/settings')
-      break
-  }
+  const normalized = key.startsWith('quick:') ? key.slice('quick:'.length) : key
+  const target = leafMenu[normalized]
+  if (!target) return
+  router.push(target.path)
 }
 
 function handleMobileMenuChange(key: string) {
@@ -369,12 +414,34 @@ watch(
 )
 
 watch(activeMenu, (key) => {
+  if (leafMenu[key]) {
+    navStore.recordVisit(key)
+  }
   const parent = parentKeyByMenuKey[key]
   if (!parent) return
   if (!expandedKeys.value.includes(parent)) {
     expandedKeys.value = [...expandedKeys.value, parent]
   }
 }, { immediate: true })
+
+const pinTargetKey = computed(() => (leafMenu[activeMenu.value] ? activeMenu.value : null))
+const isPinnedCurrent = computed(() => (pinTargetKey.value ? navStore.isPinned(pinTargetKey.value) : false))
+
+function togglePinCurrent() {
+  if (!pinTargetKey.value) return
+  navStore.togglePin(pinTargetKey.value)
+}
+
+watch(
+  () => menuOptions.value.some(opt => opt.key === 'quick'),
+  (hasQuick) => {
+    if (!hasQuick) return
+    if (!expandedKeys.value.includes('quick')) {
+      expandedKeys.value = ['quick', ...expandedKeys.value]
+    }
+  },
+  { immediate: true }
+)
 
 watch(isMobile, (mobile) => {
   if (!mobile) showMobileMenu.value = false
