@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI Coding Assistant - 启动脚本
-# 用法: ./scripts/start.sh [backend|frontend|all|restart|stop|status]
+# 用法: ./scripts/start.sh {dev|backend|backend-dev|frontend|all|restart|stop|status|logs}
 
 set -euo pipefail
 
@@ -55,6 +55,10 @@ init_dev_env() {
     mkdir -p "$LOG_DIR" "$PID_DIR"
 }
 
+backend_mode() {
+    echo "${ACA_BACKEND_MODE:-binary}"
+}
+
 # 检查进程是否运行
 is_running() {
     local pid_file=$1
@@ -67,6 +71,38 @@ is_running() {
     return 1
 }
 
+# 启动后端（Go run，开发用）
+start_backend_go_run() {
+    if ! command -v go >/dev/null 2>&1; then
+        log_error "Go not found. Install Go 1.21+ or use ACA_BACKEND_MODE=binary."
+        return 1
+    fi
+
+    export GOCACHE="${GOCACHE:-$RUNTIME_DIR/go-build-cache}"
+    mkdir -p "$GOCACHE"
+
+    log_info "Starting backend (go run)..."
+    cd "$BACKEND_DIR"
+    nohup go run . > "$BACKEND_LOG" 2>&1 &
+    echo $! > "$BACKEND_PID_FILE"
+    sleep 2
+}
+
+# 启动后端（二进制）
+start_backend_binary() {
+    if [[ ! -x "$BACKEND_DIR/ai-coding-assistant" ]]; then
+        log_error "Backend binary not found: $BACKEND_DIR/ai-coding-assistant"
+        log_error "Try: (cd backend && go build -o ai-coding-assistant .)"
+        return 1
+    fi
+
+    log_info "Starting backend (binary)..."
+    cd "$BACKEND_DIR"
+    nohup ./ai-coding-assistant > "$BACKEND_LOG" 2>&1 &
+    echo $! > "$BACKEND_PID_FILE"
+    sleep 2
+}
+
 # 启动后端
 start_backend() {
     if is_running "$BACKEND_PID_FILE"; then
@@ -74,17 +110,18 @@ start_backend() {
         return 0
     fi
 
-    if [[ ! -x "$BACKEND_DIR/ai-coding-assistant" ]]; then
-        log_error "Backend binary not found: $BACKEND_DIR/ai-coding-assistant"
-        log_error "Try: (cd backend && go build -o ai-coding-assistant .)"
-        return 1
-    fi
-
-    log_info "Starting backend..."
-    cd "$BACKEND_DIR"
-    nohup ./ai-coding-assistant > "$BACKEND_LOG" 2>&1 &
-    echo $! > "$BACKEND_PID_FILE"
-    sleep 2
+    case "$(backend_mode)" in
+        go-run|gorun|go)
+            start_backend_go_run
+            ;;
+        binary|"")
+            start_backend_binary
+            ;;
+        *)
+            log_error "Unsupported ACA_BACKEND_MODE=$(backend_mode) (supported: binary, go-run)"
+            return 1
+            ;;
+    esac
 
     if is_running "$BACKEND_PID_FILE"; then
         log_info "Backend started (PID: $(cat $BACKEND_PID_FILE))"
@@ -130,6 +167,7 @@ stop_backend() {
         log_warn "Backend not running"
         # 清理可能残留的进程
         pkill -f "$BACKEND_DIR/ai-coding-assistant" 2>/dev/null || true
+        pkill -f "go run .*${BACKEND_DIR}" 2>/dev/null || true
     fi
 }
 
@@ -201,8 +239,16 @@ init_dev_env
 
 # 主命令处理
 case "${1:-all}" in
+    dev)
+        ACA_BACKEND_MODE="go-run" start_backend
+        start_frontend
+        show_status
+        ;;
     backend)
         start_backend
+        ;;
+    backend-dev)
+        ACA_BACKEND_MODE="go-run" start_backend
         ;;
     frontend)
         start_frontend
@@ -231,10 +277,12 @@ case "${1:-all}" in
         show_logs "${2:-all}"
         ;;
     *)
-        echo "Usage: $0 {backend|frontend|all|restart|stop|status|logs [backend|frontend]}"
+        echo "Usage: $0 {dev|backend|backend-dev|frontend|all|restart|stop|status|logs [backend|frontend]}"
         echo ""
         echo "Commands:"
+        echo "  dev       - Start backend(go run) + frontend(dev)"
         echo "  backend   - Start backend only"
+        echo "  backend-dev - Start backend with go run (dev)"
         echo "  frontend  - Start frontend only"
         echo "  all       - Start both (default)"
         echo "  restart   - Restart both services"

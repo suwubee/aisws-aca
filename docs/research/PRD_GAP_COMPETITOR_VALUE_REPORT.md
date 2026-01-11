@@ -1,6 +1,6 @@
 # AI Coding Assistant：功能全貌 / PRD 对照 / 竞品与商业价值分析报告
 
-> 版本：基于当前仓库代码（`backend/main.go` 注册的功能集合）与 `docs/PRD.md` 对照整理。  
+> 版本：基于当前仓库代码（`backend/main.go` 注册的功能集合）与 `docs/product/PRD.md` 对照整理。  
 > 说明：由于运行环境 `network_access=restricted`，本报告的“竞品搜索”以本地已存在的开源参考项目为主要证据来源，并结合产品常识推导；如需更完整市场信息建议补充在线调研。
 
 ## 1. 摘要（Executive Summary）
@@ -24,7 +24,7 @@ AI Coding Assistant（ACA）已经从 PRD 所定义的 “单用户 + 终端托�
 ## 2. 证据来源与范围
 
 ### 2.1 PRD
-- `docs/PRD.md`
+- `docs/product/PRD.md`
 
 ### 2.2 当前程序能力（入口与模块）
 - 后端路由注册：`backend/main.go`
@@ -110,7 +110,7 @@ AI Coding Assistant（ACA）已经从 PRD 所定义的 “单用户 + 终端托�
 
 ## 4. PRD 对照：已实现 / 超越 / 风险点
 
-> PRD 原文模块见 `docs/PRD.md`。
+> PRD 原文模块见 `docs/product/PRD.md`。
 
 ### 4.1 对照矩阵（概览）
 

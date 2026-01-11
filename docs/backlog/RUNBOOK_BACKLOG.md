@@ -9,7 +9,7 @@
 - [x] `git`/`condition` 配置字段与后端引擎对齐（server/work_dir/contains/regex 等）
 - [x] workflow 支持绑定 `project_id`，引擎执行上下文继承 project 默认 server/work_dir
 - [x] 新增 WeDo 风格组合节点 `ops_step`：一个节点内完成 server/work_dir + git 操作 + 动作（command/terminal/task）
-- [x] 文档沉淀：`docs/ops-workflow-design.md`
+- [x] 文档沉淀：`docs/ops/ops-workflow-design.md`
 
 ## Sprint 2：项目/项目集（Portfolio）与任务分类（已落地）
 
@@ -40,4 +40,3 @@
 - “git 操作”默认是对 **project 的仓库** 还是对 **work_dir 已存在的 repo**？（建议两者都支持，优先继承 project）
 - “任务/工作流”与 “项目” 的关系：是否需要项目级权限与成员管理？（后续可加 RBAC）
 - 看板列是否允许项目级自定义（todo/in_progress/done 之外的 blocked/monitoring 等）？
-

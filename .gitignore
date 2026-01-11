@@ -4,6 +4,7 @@ vendor/
 
 # Build output
 dist/
+dist-local/
 build/
 *.exe
 *.dll

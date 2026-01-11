@@ -3,7 +3,7 @@
 日期：2026-01-10  
 范围：`ai-coding-assistant`（前端 Vue3 + 后端 Go）
 
-> 说明：本报告基于当前代码与 `docs/PRD.md` 进行对照整理，并给出“智能运维/Runbook”视角的节点设计建议与 Sprint 落地清单。
+> 说明：本报告基于当前代码与 `docs/product/PRD.md` 进行对照整理，并给出“智能运维/Runbook”视角的节点设计建议与 Sprint 落地清单。
 
 ---
 
@@ -229,4 +229,3 @@
 ## 9. 结论
 - 现有实现已覆盖 PRD 核心，并在 Prompt/KeyBinding/计划任务/项目化/工作流模板等方面明显“超越 PRD”，具备走向 Runbook/智能运维的基础。  
 - 下一阶段的关键不是继续堆节点类型，而是把“执行上下文（server/project/git）”收敛为可复用的 ops_step，并完善多服务器协同与审计闭环。  
-

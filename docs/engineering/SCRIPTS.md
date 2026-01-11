@@ -1,6 +1,6 @@
 # Scripts 使用说明
 
-本项目提供若干脚本用于“快速部署/本地开发/一键启动”。脚本都位于 `scripts/`（少量历史脚本位于项目根目录）。
+本项目提供若干脚本用于“快速部署/本地开发/一键启动”。脚本统一位于 `scripts/`。
 
 ## 1) Quickstart（推荐：生产式本地运行）
 
@@ -26,6 +26,7 @@
 
 ```bash
 ./scripts/start.sh all
+./scripts/start.sh dev
 ./scripts/start.sh status
 ./scripts/start.sh logs
 ./scripts/start.sh stop
@@ -35,23 +36,17 @@
 - 若项目根目录存在 `.env`，会自动加载并导出为环境变量（未找到则使用默认值）
 - 后端日志：`.aca/logs/backend.log`；前端日志：`.aca/logs/frontend.log`
 - PID 文件：`.aca/pids/backend.pid`、`.aca/pids/frontend.pid`
+- `./scripts/start.sh dev` 会使用 `go run` 启动后端（用于调试源码）
+- 可通过环境变量切换后端启动方式：`ACA_BACKEND_MODE=binary|go-run`
 
-## 3) keepbackend.sh（历史脚本：Go run + Vite dev）
-
-适用场景：后端需要 `go run` 方式调试（会启用工作区内 GOCACHE）。
-
-```bash
-./keepbackend.sh
-```
-
-## 4) 环境变量与默认值
+## 3) 环境变量与默认值
 
 - 参考模板：`.env.example`
 - Quickstart 会生成 `.env` 并写入默认值
 
 与脚本相关的常见变量：
 - `SERVER_HOST` / `SERVER_PORT`：后端监听
-- `DATABASE_DSN`：SQLite 路径（容器默认 `/app/data/aca.db`；仓库内运行默认落在 `backend/data/`）
+- `DATABASE_DSN`：SQLite 路径（默认 `./data/aca.db`，通常落在 `backend/data/aca.db`）
 - `AUTH_USERNAME` / `AUTH_PASSWORD` / `JWT_SECRET`：认证
 - `TERMINAL_DEFAULT_LOGIN_DIR`：终端默认登入目录（新建本地终端会话默认进入，默认 `~/`）
 - `ACA_BACKEND_HOST` / `ACA_BACKEND_PORT` / `ACA_FRONTEND_PORT`：仅开发模式下用于 Vite 代理与端口覆盖（可选）

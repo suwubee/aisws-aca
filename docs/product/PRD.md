@@ -156,8 +156,10 @@ ai-coding-assistant/
 │   ├── package.json
 │   └── vite.config.ts
 ├── docs/                      # 文档
-│   ├── PRD.md
-│   └── DEVELOPMENT_PLAN.md
+│   ├── README.md              # 文档索引
+│   ├── product/PRD.md         # 产品需求文档（本文件）
+│   ├── engineering/           # 开发/部署/脚本说明
+│   └── archive/               # 历史与内部资料
 └── README.md
 ```
 

@@ -5,7 +5,7 @@
 ## 1) 前置要求
 
 - Go 1.21+
-- Node.js 18+（项目 Dockerfile 使用 Node 20）
+- Node.js 18+
 - npm（仓库包含 `frontend/package-lock.json`）
 
 ## 2) 本地启动

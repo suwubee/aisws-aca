@@ -3,7 +3,7 @@ package terminal
 // Terminal 统一终端接口
 type Terminal interface {
 	ID() string
-	Type() TerminalType // local, ssh, docker
+	Type() TerminalType // local, ssh
 
 	// 生命周期
 	Start() error
@@ -24,5 +24,4 @@ type TerminalType string
 const (
 	TerminalTypeLocal  TerminalType = "local"
 	TerminalTypeSSH    TerminalType = "ssh"
-	TerminalTypeDocker TerminalType = "docker"
 )
