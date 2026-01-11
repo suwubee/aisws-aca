@@ -57,6 +57,14 @@
         </div>
         <div class="header-right">
           <n-space align="center">
+            <n-tag
+              v-if="isDemoMode"
+              size="small"
+              type="warning"
+              :bordered="false"
+            >
+              演示模式
+            </n-tag>
             <ProjectContextSelector />
             <n-button
               v-if="pinTargetKey"
@@ -145,7 +153,8 @@ import {
   NDrawer,
   NDrawerContent,
   NBreadcrumb,
-  NBreadcrumbItem
+  NBreadcrumbItem,
+  NTag
 } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import { automationApi } from '@/api'
@@ -158,6 +167,7 @@ const navStore = useNavStore()
 const collapsed = ref(false)
 const unreadCount = ref(0)
 const user = computed(() => authStore.user)
+const isDemoMode = computed(() => authStore.isDemoMode)
 const showMobileMenu = ref(false)
 const { isMobile } = useIsMobile()
 const expandedKeys = ref<string[]>([])

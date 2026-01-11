@@ -6,6 +6,7 @@ interface User {
   id: string
   username: string
   role: string
+  demo_mode?: boolean
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -14,12 +15,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
+  const isDemoMode = computed(() => user.value?.demo_mode === true)
 
   async function login(username: string, password: string) {
     const { data } = await authApi.login(username, password)
     token.value = data.token
     user.value = data.user
     localStorage.setItem('token', data.token)
+    localStorage.setItem('demo_mode', String(data.user?.demo_mode === true))
     return data
   }
 
@@ -28,6 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     user.value = null
     localStorage.removeItem('token')
+    localStorage.removeItem('demo_mode')
   }
 
   async function fetchUser() {
@@ -35,9 +39,11 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const { data } = await authApi.me()
       user.value = data
+      localStorage.setItem('demo_mode', String(data?.demo_mode === true))
     } catch {
       token.value = null
       localStorage.removeItem('token')
+      localStorage.removeItem('demo_mode')
     }
   }
 
@@ -46,6 +52,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isAuthenticated,
     isAdmin,
+    isDemoMode,
     login,
     logout,
     fetchUser

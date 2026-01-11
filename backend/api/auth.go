@@ -20,6 +20,7 @@ import (
 type AuthController struct {
 	config          *config.AuthConfig
 	terminalManager terminalSessionCloser
+	demoMode        bool
 }
 
 func NewAuthController(cfg *config.AuthConfig) *AuthController {
@@ -32,6 +33,10 @@ type terminalSessionCloser interface {
 
 func (ctrl *AuthController) SetTerminalManager(manager terminalSessionCloser) {
 	ctrl.terminalManager = manager
+}
+
+func (ctrl *AuthController) SetDemoMode(enabled bool) {
+	ctrl.demoMode = enabled
 }
 
 type LoginRequest struct {
@@ -54,6 +59,7 @@ type LoginResponse struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 		Role     string `json:"role"`
+		DemoMode bool   `json:"demo_mode"`
 	} `json:"user"`
 }
 
@@ -181,10 +187,12 @@ func (ctrl *AuthController) Login(c *fiber.Ctx) error {
 			ID       string `json:"id"`
 			Username string `json:"username"`
 			Role     string `json:"role"`
+			DemoMode bool   `json:"demo_mode"`
 		}{
 			ID:       user.ID,
 			Username: user.Username,
 			Role:     user.Role,
+			DemoMode: ctrl.demoMode,
 		},
 	})
 }
@@ -278,9 +286,10 @@ func (ctrl *AuthController) Me(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"id":       userID,
-		"username": username,
-		"role":     role,
+		"id":        userID,
+		"username":  username,
+		"role":      role,
+		"demo_mode": ctrl.demoMode,
 	})
 }
 

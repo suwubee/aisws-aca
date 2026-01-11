@@ -4,8 +4,8 @@
       <n-button size="small" quaternary :loading="loading" @click="fetchTemplates">刷新</n-button>
     </template>
 
-    <n-text v-if="!isAdmin" depth="3" style="display: block; margin-bottom: 10px; font-size: 12px">
-      当前为只读模式：需要管理员权限才能编辑模板或套用/保存方案。
+    <n-text v-if="!canEdit" depth="3" style="display: block; margin-bottom: 10px; font-size: 12px">
+      当前为只读模式：演示模式或需要管理员权限才能编辑模板或套用/保存方案。
     </n-text>
 
     <n-spin :show="loading">
@@ -39,7 +39,7 @@
                   />
                   <n-button
                     size="small"
-                    :disabled="!isAdmin || !canApplyPreset(activeTemplate)"
+                    :disabled="!canEdit || !canApplyPreset(activeTemplate)"
                     :loading="applyingPresetKey === activeTemplate.key"
                     @click="applySelectedPreset(activeTemplate)"
                   >
@@ -48,13 +48,13 @@
                   <n-button
                     size="small"
                     quaternary
-                    :disabled="!isAdmin || creatingPresetKey === activeTemplate.key"
+                    :disabled="!canEdit || creatingPresetKey === activeTemplate.key"
                     @click="openCreatePreset(activeTemplate)"
                   >
                     保存为方案
                   </n-button>
                   <n-popconfirm
-                    v-if="isAdmin && canDeleteSelectedPreset(activeTemplate.key)"
+                    v-if="canEdit && canDeleteSelectedPreset(activeTemplate.key)"
                     positive-text="删除"
                     negative-text="取消"
                     @positive-click="deleteSelectedPreset(activeTemplate.key)"
@@ -102,14 +102,14 @@
                 v-model:value="drafts[activeTemplate.key]"
                 type="textarea"
                 :rows="12"
-                :readonly="!isAdmin"
+                :readonly="!canEdit"
                 placeholder="请输入提示词模板（Go template 语法）"
               />
 
               <n-space justify="end" size="small" wrap>
                 <n-button
                   size="small"
-                  :disabled="!isAdmin || savingKey === activeTemplate.key"
+                  :disabled="!canEdit || savingKey === activeTemplate.key"
                   :loading="resettingKey === activeTemplate.key"
                   @click="resetToDefault(activeTemplate.key)"
                 >
@@ -119,7 +119,7 @@
                   type="primary"
                   size="small"
                   :loading="savingKey === activeTemplate.key"
-                  :disabled="!isAdmin || !isDirty(activeTemplate.key)"
+                  :disabled="!canEdit || !isDirty(activeTemplate.key)"
                   @click="save(activeTemplate.key)"
                 >
                   保存
@@ -198,6 +198,8 @@ interface PromptTemplatePresetItem {
 const message = useMessage()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
+const isDemoMode = computed(() => authStore.isDemoMode)
+const canEdit = computed(() => isAdmin.value && !isDemoMode.value)
 
 const loading = ref(false)
 const templates = ref<PromptTemplateItem[]>([])

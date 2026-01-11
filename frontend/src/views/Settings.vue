@@ -15,6 +15,12 @@
       />
     </div>
 
+    <div v-if="isDemoMode" class="demo-banner">
+      <n-alert type="warning" :show-icon="false">
+        演示模式：所有配置为只读，无法新增/修改/删除。
+      </n-alert>
+    </div>
+
     <div class="settings-layout">
       <div v-if="!isMobile" class="settings-sider">
         <n-menu
@@ -31,7 +37,7 @@
               <span>修改密码</span>
             </div>
             <n-card size="small" style="max-width: 400px">
-              <n-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-placement="left" label-width="100">
+              <n-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-placement="left" label-width="100" :disabled="isDemoMode">
                 <n-form-item label="当前密码" path="oldPassword">
                   <n-input v-model:value="passwordForm.oldPassword" type="password" show-password-on="click" placeholder="输入当前密码" />
                 </n-form-item>
@@ -42,7 +48,7 @@
                   <n-input v-model:value="passwordForm.confirmPassword" type="password" show-password-on="click" placeholder="再次输入新密码" />
                 </n-form-item>
                 <n-form-item>
-                  <n-button type="primary" @click="changePassword" :loading="changingPassword">
+                  <n-button type="primary" @click="changePassword" :loading="changingPassword" :disabled="isDemoMode">
                     修改密码
                   </n-button>
                 </n-form-item>
@@ -50,7 +56,7 @@
             </n-card>
           </div>
 
-          <div v-if="isAdmin" class="section" style="margin-top: 32px">
+          <div v-if="isAdmin && !isDemoMode" class="section" style="margin-top: 32px">
             <div class="section-header">
               <span>数据管理</span>
             </div>
@@ -87,11 +93,11 @@
             </div>
 
             <n-card size="small" style="max-width: 600px">
-              <n-text v-if="!isAdmin" depth="3" style="display: block; margin-bottom: 10px; font-size: 12px">
-                当前为只读模式：需要管理员权限才能修改系统规则。
+              <n-text v-if="!canEditAdminConfig" depth="3" style="display: block; margin-bottom: 10px; font-size: 12px">
+                当前为只读模式：演示模式或需要管理员权限才能修改系统规则。
               </n-text>
 
-              <n-form label-placement="left" label-width="120" :disabled="!isAdmin">
+              <n-form label-placement="left" label-width="120" :disabled="!canEditAdminConfig">
                 <n-form-item label="审批模式">
                   <n-radio-group v-model:value="defaultAutomation.approvalMode">
                     <n-space vertical>
@@ -163,10 +169,10 @@
 
                 <n-form-item>
                   <n-space>
-                    <n-button type="primary" @click="saveSystemConfig" :loading="savingSystemConfig" :disabled="!isAdmin">
+                    <n-button type="primary" @click="saveSystemConfig" :loading="savingSystemConfig" :disabled="!canEditAdminConfig">
                       保存系统规则
                     </n-button>
-                    <n-button @click="loadDefaultPatterns" :disabled="!isAdmin">
+                    <n-button @click="loadDefaultPatterns" :disabled="!canEditAdminConfig">
                       加载默认规则模板
                     </n-button>
                   </n-space>
@@ -182,7 +188,7 @@
               <span>规则集导入 / 导出</span>
               <n-text depth="3">用于备份或迁移规则集配置</n-text>
             </div>
-            <RuleImportExport :readonly="!isAdmin" />
+            <RuleImportExport :readonly="!canEditAdminConfig" />
           </div>
         </div>
 
@@ -210,7 +216,7 @@
           <div class="section">
             <div class="section-header">
               <span>AI Provider 配置</span>
-              <n-button v-if="isAdmin" type="primary" size="small" @click="showProviderModal = true">
+              <n-button v-if="canEditAdminConfig" type="primary" size="small" @click="showProviderModal = true">
                 添加 Provider
               </n-button>
             </div>
@@ -235,10 +241,10 @@
                 <n-text depth="3" style="font-size: 12px">
                   新建本地终端会话默认进入该目录（支持 <n-text code>~</n-text> / <n-text code>$HOME</n-text>）。
                 </n-text>
-                <n-text v-if="!isAdmin" depth="3" style="display: block; font-size: 12px">
-                  当前为只读模式：需要管理员权限才能修改终端默认目录。
+                <n-text v-if="!canEditAdminConfig" depth="3" style="display: block; font-size: 12px">
+                  当前为只读模式：演示模式或需要管理员权限才能修改终端默认目录。
                 </n-text>
-                <n-form label-placement="left" label-width="120" :disabled="!isAdmin">
+                <n-form label-placement="left" label-width="120" :disabled="!canEditAdminConfig">
                   <n-form-item label="默认登入目录">
                     <n-input v-model:value="terminalDefaults.defaultLoginDir" placeholder="~/" />
                   </n-form-item>
@@ -248,7 +254,7 @@
                         type="primary"
                         size="small"
                         :loading="savingTerminalDefaults"
-                        :disabled="!isAdmin"
+                        :disabled="!canEditAdminConfig"
                         @click="saveTerminalDefaults"
                       >
                         保存
@@ -326,6 +332,7 @@
 <script setup lang="ts">
 import { ref, h, reactive, onMounted, computed, watch } from 'vue'
 import {
+  NAlert,
   NButton, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NSwitch, NSlider, NTag, NSpace, NPopconfirm, NCard, NText, NRadioGroup, NRadio,
   NDivider, NDynamicTags, NCheckbox, NMenu, useMessage
@@ -358,6 +365,8 @@ const terminalStore = useTerminalStore()
 const serverStore = useServerStore()
 const approvalStore = useApprovalStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
+const isDemoMode = computed(() => authStore.isDemoMode)
+const canEditAdminConfig = computed(() => isAdmin.value && !isDemoMode.value)
 const { isMobile } = useIsMobile()
 
 const activeTab = ref('account')
@@ -382,7 +391,7 @@ async function fetchTerminalDefaults() {
 }
 
 async function saveTerminalDefaults() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || isDemoMode.value) return
   savingTerminalDefaults.value = true
   try {
     const { data } = await terminalDefaultsApi.update({
@@ -407,6 +416,7 @@ const readOnlyTabs = computed(() => new Set([
 ]))
 
 function maybeReadOnlyLabel(label: string, key: string) {
+  if (isDemoMode.value) return `${label}（演示只读）`
   if (!isAdmin.value) {
     if (readOnlyTabs.value.has(key)) return `${label}（只读）`
   }
@@ -612,6 +622,7 @@ async function fetchSystemConfig() {
 }
 
 async function saveSystemConfig() {
+  if (!canEditAdminConfig.value) return
   savingSystemConfig.value = true
   try {
     await automationApi.updateSystemRule({
@@ -637,6 +648,7 @@ async function saveSystemConfig() {
 }
 
 async function loadDefaultPatterns() {
+  if (!canEditAdminConfig.value) return
   try {
     const { data } = await automationApi.getDefaultPatterns()
     defaultAutomation.whitelistPatterns = data.whitelist || []
@@ -683,7 +695,7 @@ const providerColumns = computed<DataTableColumns<AIProvider>>(() => {
   { title: '默认', key: 'is_default', width: 60, render: (row) => row.is_default ? h(NTag, { size: 'small', type: 'info' }, () => '是') : '-' },
   ]
 
-  if (!isAdmin.value) return cols
+  if (!canEditAdminConfig.value) return cols
 
   cols.push({
     title: '操作', key: 'actions', width: 120,
@@ -708,14 +720,14 @@ async function fetchProviders() {
 }
 
 function editProvider(provider: AIProvider) {
-  if (!isAdmin.value) return
+  if (!canEditAdminConfig.value) return
   editingProvider.value = provider
   Object.assign(providerForm, { ...provider, api_key: '' })
   showProviderModal.value = true
 }
 
 async function saveProvider() {
-  if (!isAdmin.value) return false
+  if (!canEditAdminConfig.value) return false
   try { await providerFormRef.value?.validate() } catch { return false }
   try {
     if (editingProvider.value) {
@@ -733,7 +745,7 @@ async function saveProvider() {
 }
 
 async function deleteProvider(id: string) {
-  if (!isAdmin.value) return
+  if (!canEditAdminConfig.value) return
   try {
     await automationApi.deleteAIProvider(id)
     message.success('删除成功')
@@ -801,6 +813,10 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 16px;
   font-weight: 600;
+}
+
+.demo-banner {
+  margin-bottom: 12px;
 }
 
 :deep(.n-menu) { background: #252525; border-radius: 6px; padding: 8px 6px; }

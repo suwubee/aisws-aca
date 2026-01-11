@@ -147,6 +147,7 @@ ai-coding-assistant/
 |------|--------|------|
 | SERVER_HOST | 0.0.0.0 | 服务器监听地址 |
 | SERVER_PORT | 34007 | 服务器端口 |
+| DEMO_MODE | false | 演示模式（只读，禁止新增/修改/删除配置） |
 | DATABASE_DSN | ./data/aca.db | 数据库文件路径 |
 | JWT_SECRET | (内置默认值) | JWT密钥 |
 | AUTH_USERNAME | admin | 登录用户名 |

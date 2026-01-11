@@ -18,6 +18,7 @@
 - `AUTH_USERNAME` / `AUTH_PASSWORD`：替换默认账号密码
 - `DATABASE_DSN`：SQLite 数据库文件路径
 - `TERMINAL_DEFAULT_LOGIN_DIR`：默认 `~/`（新建本地终端会话默认进入目录）
+- `DEMO_MODE`：演示模式（`true/false`），开启后 API 仅允许读取（除登出外），用于演示环境防误操作
 
 ## 2) 直接运行（二进制）
 

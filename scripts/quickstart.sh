@@ -95,9 +95,11 @@ init_env() {
   fi
 
   local server_host server_port db_dsn auth_user auth_pass jwt_secret terminal_shell terminal_login_dir log_level log_file
+  local demo_mode
 
   prompt "SERVER_HOST" "0.0.0.0" server_host
   prompt "SERVER_PORT" "34007" server_port
+  prompt "DEMO_MODE (true/false)" "false" demo_mode
   prompt "DATABASE_DSN (relative to backend/)" "./data/aca.db" db_dsn
   prompt "AUTH_USERNAME (first login bootstrap)" "admin" auth_user
   prompt "AUTH_PASSWORD (first login bootstrap)" "admin123" auth_pass 1
@@ -117,6 +119,7 @@ init_env() {
 # Server
 SERVER_HOST=${server_host}
 SERVER_PORT=${server_port}
+DEMO_MODE=${demo_mode}
 
 # Database (SQLite)
 DATABASE_DSN=${db_dsn}

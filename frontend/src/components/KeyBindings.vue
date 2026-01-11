@@ -28,9 +28,9 @@
                 <n-tag size="small" :bordered="false">{{ item.id }}</n-tag>
               </n-space>
               <n-space :size="8">
-                <n-button v-if="isAdmin" size="tiny" @click="openEdit(item)">编辑</n-button>
+                <n-button v-if="canEdit" size="tiny" @click="openEdit(item)">编辑</n-button>
                 <n-popconfirm
-                  v-if="isAdmin"
+                  v-if="canEdit"
                   @positive-click="() => void resetOne(item.id)"
                   positive-text="恢复"
                   negative-text="取消"
@@ -106,6 +106,8 @@ const keyBindingsStore = useKeyBindingsStore()
 const message = useMessage()
 
 const isAdmin = computed(() => authStore.isAdmin)
+const isDemoMode = computed(() => authStore.isDemoMode)
+const canEdit = computed(() => isAdmin.value && !isDemoMode.value)
 const items = computed(() => keyBindingsStore.items)
 const loading = computed(() => keyBindingsStore.loading)
 
@@ -135,7 +137,7 @@ function closeEdit() {
 }
 
 async function saveEdit() {
-  if (!isAdmin.value) return
+  if (!canEdit.value) return
   saving.value = true
   try {
     await keyBindingsStore.update(editForm.id, {
@@ -155,7 +157,7 @@ async function saveEdit() {
 }
 
 async function resetOne(id: string) {
-  if (!isAdmin.value) return
+  if (!canEdit.value) return
   try {
     await keyBindingsStore.reset(id)
     message.success('已恢复默认')
@@ -192,4 +194,3 @@ onMounted(() => {
   padding: 12px 0;
 }
 </style>
-

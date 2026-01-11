@@ -97,10 +97,12 @@ func main() {
 	// 认证API - login不需要认证
 	authController := api.NewAuthController(&cfg.Auth)
 	authController.SetTerminalManager(terminalManager)
+	authController.SetDemoMode(cfg.App.DemoMode)
 	app.Post("/api/auth/login", authController.Login)
 
 	// 需要认证的API
 	apiGroup.Use(middleware.AuthMiddleware(&cfg.Auth))
+	apiGroup.Use(middleware.DemoModeMiddleware(cfg.App.DemoMode))
 
 	// 认证相关的需要认证的路由
 	apiGroup.Post("/auth/logout", authController.Logout)

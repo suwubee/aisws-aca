@@ -33,6 +33,7 @@ func setupTestAppWithAuth(t *testing.T) (*fiber.App, *config.AuthConfig, fiber.R
 	apiGroup := app.Group("/api")
 
 	ctrl := NewAuthController(authCfg)
+	ctrl.SetDemoMode(false)
 	app.Post("/api/auth/login", ctrl.Login)
 
 	apiGroup.Use(middleware.AuthMiddleware(authCfg))

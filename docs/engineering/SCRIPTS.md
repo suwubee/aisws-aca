@@ -46,6 +46,7 @@
 
 与脚本相关的常见变量：
 - `SERVER_HOST` / `SERVER_PORT`：后端监听
+- `DEMO_MODE`：演示模式（只读）
 - `DATABASE_DSN`：SQLite 路径（默认 `./data/aca.db`，通常落在 `backend/data/aca.db`）
 - `AUTH_USERNAME` / `AUTH_PASSWORD` / `JWT_SECRET`：认证
 - `TERMINAL_DEFAULT_LOGIN_DIR`：终端默认登入目录（新建本地终端会话默认进入，默认 `~/`）

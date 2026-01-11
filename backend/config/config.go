@@ -8,11 +8,16 @@ import (
 )
 
 type Config struct {
+	App      AppConfig
 	Server   ServerConfig
 	Database DatabaseConfig
 	Auth     AuthConfig
 	Terminal TerminalConfig
 	Log      LogConfig
+}
+
+type AppConfig struct {
+	DemoMode bool
 }
 
 type ServerConfig struct {
@@ -47,6 +52,9 @@ type LogConfig struct {
 
 func Load() *Config {
 	return &Config{
+		App: AppConfig{
+			DemoMode: getEnvBool("DEMO_MODE", false),
+		},
 		Server: ServerConfig{
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
 			Port: getEnv("SERVER_PORT", "34007"),
@@ -80,6 +88,21 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return defaultValue
+	}
 }
 
 func resolveDatabaseDSN(raw string) string {
