@@ -18,7 +18,11 @@ backend/server
 
 # Database
 *.db
+*.db-*
 *.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 data/
 
 # Logs
