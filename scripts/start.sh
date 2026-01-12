@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI Coding Assistant - 启动脚本
-# 用法: ./scripts/start.sh {dev|backend|backend-dev|frontend|all|restart|stop|status|logs}
+# 用法: ./scripts/start.sh [command] [options]
 
 set -euo pipefail
 
@@ -30,7 +30,19 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/start.sh {dev|backend|backend-dev|frontend|all|restart|stop|status|logs [backend|frontend]} [options]
+Usage: ./scripts/start.sh [command] [options]
+
+Commands:
+  guide            Step-by-step interactive guide (default when run in a TTY without args)
+  dev              Start backend(go run) + frontend(dev)
+  backend          Start backend only
+  backend-dev      Start backend with go run (dev)
+  frontend         Start frontend only
+  all              Start both (default in non-interactive mode)
+  restart          Restart both services
+  stop             Stop both services
+  status           Show service status
+  logs [backend|frontend]  Show logs
 
 Options:
   --takeover-ports   Kill any process listening on SERVER_PORT / ACA_FRONTEND_PORT before starting
@@ -46,6 +58,24 @@ require_cmd() {
         return 1
     fi
     return 0
+}
+
+is_interactive() {
+    [[ -t 0 && -t 1 ]]
+}
+
+confirm() {
+    local prompt_text="$1"
+    local answer=""
+    read -r -p "${prompt_text} [y/N]: " answer || true
+    case "${answer}" in
+        y|Y|yes|YES)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 is_port_listening() {
@@ -237,8 +267,13 @@ start_backend() {
         if [[ "${ACA_TAKEOVER_PORTS:-0}" == "1" ]]; then
             takeover_port "${SERVER_PORT}" || return 1
         else
-            log_error "Port ${SERVER_PORT} is already in use. Use --takeover-ports or change SERVER_PORT."
-            return 1
+            log_warn "Port ${SERVER_PORT} is already in use."
+            if is_interactive && confirm "Take over backend port ${SERVER_PORT} (stop existing process)?"; then
+                takeover_port "${SERVER_PORT}" || return 1
+            else
+                log_error "Port ${SERVER_PORT} is already in use. Use --takeover-ports or change SERVER_PORT."
+                return 1
+            fi
         fi
     fi
 
@@ -278,8 +313,13 @@ start_frontend() {
         if [[ "${ACA_TAKEOVER_PORTS:-0}" == "1" ]]; then
             takeover_port "${ACA_FRONTEND_PORT}" || return 1
         else
-            log_error "Port ${ACA_FRONTEND_PORT} is already in use. Use --takeover-ports or change ACA_FRONTEND_PORT."
-            return 1
+            log_warn "Port ${ACA_FRONTEND_PORT} is already in use."
+            if is_interactive && confirm "Take over frontend port ${ACA_FRONTEND_PORT} (stop existing process)?"; then
+                takeover_port "${ACA_FRONTEND_PORT}" || return 1
+            else
+                log_error "Port ${ACA_FRONTEND_PORT} is already in use. Use --takeover-ports or change ACA_FRONTEND_PORT."
+                return 1
+            fi
         fi
     fi
 
@@ -379,12 +419,99 @@ show_logs() {
     esac
 }
 
+run_guide() {
+    local step=0
+
+    step=$((step + 1))
+    echo "=== Step ${step}: Overview ==="
+    echo "Project: ${PROJECT_ROOT}"
+    echo "Backend: ${SERVER_HOST}:${SERVER_PORT} (mode: $(backend_mode))"
+    echo "Frontend dev port: ${ACA_FRONTEND_PORT}"
+    echo "Logs: ${LOG_DIR}"
+    echo ""
+
+    step=$((step + 1))
+    echo "=== Step ${step}: Choose action ==="
+    echo "  1) Start backend + frontend (recommended)"
+    echo "  2) Start backend only"
+    echo "  3) Start frontend only"
+    echo "  4) Dev mode (backend go run + frontend dev)"
+    echo "  5) Show status"
+    echo "  6) Show logs"
+    echo "  7) Stop services"
+    echo ""
+
+    local choice=""
+    read -r -p "Select [1]: " choice || true
+    case "${choice}" in
+        ""|1)
+            start_backend
+            start_frontend
+            show_status
+            ;;
+        2)
+            start_backend
+            show_status
+            ;;
+        3)
+            start_frontend
+            show_status
+            ;;
+        4)
+            ACA_BACKEND_MODE="go-run" start_backend
+            start_frontend
+            show_status
+            ;;
+        5)
+            show_status
+            ;;
+        6)
+            echo ""
+            echo "Which logs?"
+            echo "  1) all"
+            echo "  2) backend"
+            echo "  3) frontend"
+            local which=""
+            read -r -p "Select [1]: " which || true
+            case "${which}" in
+                2) show_logs backend ;;
+                3) show_logs frontend ;;
+                *) show_logs all ;;
+            esac
+            ;;
+        7)
+            stop_backend
+            stop_frontend
+            ;;
+        *)
+            log_error "Invalid selection"
+            return 1
+            ;;
+    esac
+
+    echo ""
+    echo "Done."
+    echo "Tips:"
+    echo "  - View logs: ./scripts/start.sh logs"
+    echo "  - Stop:      ./scripts/start.sh stop"
+    return 0
+}
+
 # 初始化开发环境变量（只加载一次，避免重复输出）
 init_dev_env
 
 # Parse args
-COMMAND="${1:-all}"
-shift || true
+COMMAND=""
+if [[ $# -eq 0 ]]; then
+    if is_interactive; then
+        COMMAND="guide"
+    else
+        COMMAND="all"
+    fi
+else
+    COMMAND="${1}"
+    shift
+fi
 
 LOG_TARGET="all"
 if [[ "${COMMAND}" == "logs" && $# -gt 0 && "${1}" != --* ]]; then
@@ -412,6 +539,9 @@ done
 
 # 主命令处理
 case "${COMMAND}" in
+    guide)
+        run_guide
+        ;;
     dev)
         ACA_BACKEND_MODE="go-run" start_backend
         start_frontend
