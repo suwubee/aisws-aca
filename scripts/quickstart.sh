@@ -47,6 +47,121 @@ require_cmd() {
   fi
 }
 
+format_host_for_url() {
+  local host="${1:-}"
+  if [[ -z "${host}" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ "${host}" == \[*\] ]]; then
+    echo "${host}"
+    return 0
+  fi
+  if [[ "${host}" == *:* ]]; then
+    echo "[${host}]"
+    return 0
+  fi
+  echo "${host}"
+}
+
+is_private_ipv4() {
+  local ip="${1:-}"
+  if [[ "${ip}" == 10.* ]]; then
+    return 0
+  fi
+  if [[ "${ip}" == 192.168.* ]]; then
+    return 0
+  fi
+  if [[ "${ip}" =~ ^172\.([0-9]{1,3})\. ]]; then
+    local second="${BASH_REMATCH[1]}"
+    if [[ "${second}" =~ ^[0-9]+$ ]] && (( second >= 16 && second <= 31 )); then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+ipv4_scope_label() {
+  local ip="${1:-}"
+  if [[ -z "${ip}" ]]; then
+    echo "unknown"
+    return 0
+  fi
+  if [[ "${ip}" == 127.* ]]; then
+    echo "local"
+    return 0
+  fi
+  if [[ "${ip}" == 169.254.* ]]; then
+    echo "link"
+    return 0
+  fi
+  if is_private_ipv4 "${ip}"; then
+    echo "lan"
+    return 0
+  fi
+  echo "public"
+}
+
+list_ipv4_addrs() {
+  local out=""
+
+  if command -v ip >/dev/null 2>&1; then
+    out="$(ip -o -4 addr show up scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)"
+    if [[ -z "${out}" ]]; then
+      out="$(ip -o -4 addr show up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)"
+    fi
+  elif command -v hostname >/dev/null 2>&1; then
+    out="$(hostname -I 2>/dev/null | tr ' ' '\n' || true)"
+  elif command -v ifconfig >/dev/null 2>&1; then
+    out="$(ifconfig 2>/dev/null | awk '/inet /{print $2}' || true)"
+  fi
+
+  echo "${out}" | tr ' ' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' | sort -u
+}
+
+print_access_urls() {
+  local label="${1:-Service}"
+  local bind_host="${2:-}"
+  local port="${3:-}"
+  local path="${4:-}"
+
+  if [[ -z "${port}" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${path}" && "${path:0:1}" != "/" ]]; then
+    path="/${path}"
+  fi
+
+  echo "[INFO] ${label} URLs:"
+
+  if [[ -z "${bind_host}" || "${bind_host}" == "0.0.0.0" || "${bind_host}" == "::" ]]; then
+    local ips=()
+    while IFS= read -r ip; do
+      [[ -n "${ip}" ]] && ips+=("${ip}")
+    done < <(list_ipv4_addrs)
+
+    if [[ ${#ips[@]} -gt 0 ]]; then
+      for ip in "${ips[@]}"; do
+        local scope
+        scope="$(ipv4_scope_label "${ip}")"
+        echo "[INFO]   - (${scope}) http://$(format_host_for_url "${ip}"):${port}${path}"
+      done
+    fi
+
+    echo "[INFO]   - (local) http://localhost:${port}${path}"
+    echo "[INFO]   - (local) http://127.0.0.1:${port}${path}"
+    return 0
+  fi
+
+  local show_host
+  show_host="$(format_host_for_url "${bind_host}")"
+  if [[ -z "${show_host}" ]]; then
+    show_host="localhost"
+  fi
+  echo "[INFO]   - http://${show_host}:${port}${path}"
+}
+
 prompt() {
   local label="$1"
   local default_value="$2"
@@ -192,15 +307,8 @@ start_backend() {
   cd "$ROOT"
 
   echo "[INFO] Starting backend..."
-  local show_host="${SERVER_HOST}"
-  if [[ -z "${show_host}" || "${show_host}" == "0.0.0.0" || "${show_host}" == "::" ]]; then
-    show_host="localhost"
-  fi
   echo "[INFO] Bind: ${SERVER_HOST}:${SERVER_PORT}"
-  echo "[INFO] Open: http://${show_host}:${SERVER_PORT}"
-  if [[ "${show_host}" == "localhost" ]]; then
-    echo "[INFO] If you are accessing from another machine, replace 'localhost' with your server IP."
-  fi
+  print_access_urls "Backend" "${SERVER_HOST}" "${SERVER_PORT}" ""
   exec "$BACKEND_BIN"
 }
 

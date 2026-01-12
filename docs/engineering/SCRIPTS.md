@@ -53,6 +53,20 @@
 - 若端口被占用，可使用 `--takeover-ports`（或 `ACA_TAKEOVER_PORTS=1`）自动终止占用 `SERVER_PORT/ACA_FRONTEND_PORT` 的进程并重启
 - 运行 `./scripts/start.sh`（无参数）会进入分步引导模式（TTY 下默认）
 
+## 2.1) start.bat（Windows 启动脚本）
+
+适用场景：Windows 环境快速启动（默认使用后端内置前端静态资源，因此不强制要求安装 Node）。
+
+```bat
+scripts\start.bat
+```
+
+说明：
+- 默认进入分步引导（setup/start/stop/status/logs）
+- 会输出可访问 URL（自动列出本机所有 IPv4 地址的访问地址，而不是只显示 localhost）
+- 若 `SERVER_PORT` 被占用，会提示是否接管端口并自动停止占用进程
+- 需要可执行文件 `backend\ai-coding-assistant.exe`（如未提供，可使用 Go 构建：`cd backend && go build -o ai-coding-assistant.exe .`）
+
 ## 3) 环境变量与默认值
 
 - 参考模板：`.env.example`
