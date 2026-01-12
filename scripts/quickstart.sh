@@ -192,7 +192,15 @@ start_backend() {
   cd "$ROOT"
 
   echo "[INFO] Starting backend..."
-  echo "[INFO] URL: http://${SERVER_HOST}:${SERVER_PORT}"
+  local show_host="${SERVER_HOST}"
+  if [[ -z "${show_host}" || "${show_host}" == "0.0.0.0" || "${show_host}" == "::" ]]; then
+    show_host="localhost"
+  fi
+  echo "[INFO] Bind: ${SERVER_HOST}:${SERVER_PORT}"
+  echo "[INFO] Open: http://${show_host}:${SERVER_PORT}"
+  if [[ "${show_host}" == "localhost" ]]; then
+    echo "[INFO] If you are accessing from another machine, replace 'localhost' with your server IP."
+  fi
   exec "$BACKEND_BIN"
 }
 

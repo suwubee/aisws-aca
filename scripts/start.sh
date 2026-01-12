@@ -28,6 +28,30 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        log_error "Missing required command: $1"
+        return 1
+    fi
+    return 0
+}
+
+display_backend_url() {
+    local host="${SERVER_HOST:-}"
+    local port="${SERVER_PORT:-}"
+    local show_host="$host"
+
+    if [[ -z "$show_host" || "$show_host" == "0.0.0.0" || "$show_host" == "::" ]]; then
+        show_host="localhost"
+    fi
+
+    log_info "Backend bind: ${host}:${port}"
+    log_info "Backend open: http://${show_host}:${port}"
+    if [[ "$show_host" == "localhost" ]]; then
+        log_info "If you are accessing from another machine, replace 'localhost' with your server IP."
+    fi
+}
+
 load_env() {
     local env_file="$PROJECT_ROOT/.env"
     if [[ -f "$env_file" ]]; then
@@ -73,7 +97,7 @@ is_running() {
 
 # 启动后端（Go run，开发用）
 start_backend_go_run() {
-    if ! command -v go >/dev/null 2>&1; then
+    if ! require_cmd go; then
         log_error "Go not found. Install Go 1.21+ or use ACA_BACKEND_MODE=binary."
         return 1
     fi
@@ -125,6 +149,7 @@ start_backend() {
 
     if is_running "$BACKEND_PID_FILE"; then
         log_info "Backend started (PID: $(cat $BACKEND_PID_FILE))"
+        display_backend_url
     else
         log_error "Failed to start backend. Check $BACKEND_LOG"
         return 1
@@ -138,9 +163,12 @@ start_frontend() {
         return 0
     fi
 
+    require_cmd node || return 1
+    require_cmd npm || return 1
+
     log_info "Starting frontend..."
     cd "$FRONTEND_DIR"
-    nohup npm run dev -- --host 0.0.0.0 --port "$ACA_FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
+    nohup npm run dev -- --host 0.0.0.0 --port "$ACA_FRONTEND_PORT" --strictPort > "$FRONTEND_LOG" 2>&1 &
     echo $! > "$FRONTEND_PID_FILE"
     sleep 3
 

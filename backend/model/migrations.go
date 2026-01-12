@@ -51,10 +51,12 @@ func RunMigrations(db *gorm.DB) error {
 
 	for _, m := range migrations {
 		var existing SchemaMigration
-		if err := db.First(&existing, "id = ?", m.id).Error; err == nil {
+		tx := db.Limit(1).Find(&existing, "id = ?", m.id)
+		if tx.Error != nil {
+			return tx.Error
+		}
+		if tx.RowsAffected > 0 {
 			continue
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
 		}
 
 		if err := m.up(db); err != nil {
