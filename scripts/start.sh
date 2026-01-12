@@ -28,9 +28,108 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/start.sh {dev|backend|backend-dev|frontend|all|restart|stop|status|logs [backend|frontend]} [options]
+
+Options:
+  --takeover-ports   Kill any process listening on SERVER_PORT / ACA_FRONTEND_PORT before starting
+
+Environment:
+  ACA_TAKEOVER_PORTS=1   Same as --takeover-ports
+EOF
+}
+
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
         log_error "Missing required command: $1"
+        return 1
+    fi
+    return 0
+}
+
+is_port_listening() {
+    local port="$1"
+    if [[ -z "${port}" ]]; then
+        return 1
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .
+        return $?
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -tln 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\.)${port}\$"
+        return $?
+    fi
+
+    return 1
+}
+
+list_listening_pids() {
+    local port="$1"
+    if [[ -z "${port}" ]]; then
+        return 0
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -ltnp "sport = :${port}" 2>/dev/null | grep -o 'pid=[0-9]\+' | cut -d= -f2 | sort -u
+        return 0
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -n -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | sort -u
+        return 0
+    fi
+
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -n tcp "${port}" 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u
+        return 0
+    fi
+
+    return 0
+}
+
+takeover_port() {
+    local port="$1"
+    if [[ -z "${port}" ]]; then
+        return 0
+    fi
+
+    local pids=()
+    while IFS= read -r pid; do
+        [[ -n "${pid}" ]] && pids+=("${pid}")
+    done < <(list_listening_pids "${port}")
+
+    if [[ ${#pids[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    log_warn "Port ${port} is in use. Taking over..."
+
+    for pid in "${pids[@]}"; do
+        local cmd
+        cmd="$(ps -p "${pid}" -o cmd= 2>/dev/null | sed 's/^[[:space:]]*//')"
+        log_warn "Stopping PID ${pid}: ${cmd:-unknown}"
+        kill "${pid}" 2>/dev/null || true
+    done
+
+    local deadline=$((SECONDS + 5))
+    while is_port_listening "${port}" && [[ ${SECONDS} -lt ${deadline} ]]; do
+        sleep 0.2
+    done
+
+    if is_port_listening "${port}"; then
+        log_warn "Port ${port} still in use, forcing stop (SIGKILL)..."
+        for pid in "${pids[@]}"; do
+            kill -9 "${pid}" 2>/dev/null || true
+        done
+        sleep 0.5
+    fi
+
+    if is_port_listening "${port}"; then
+        log_error "Port ${port} is still in use; cannot take over."
         return 1
     fi
     return 0
@@ -134,6 +233,15 @@ start_backend() {
         return 0
     fi
 
+    if is_port_listening "${SERVER_PORT}"; then
+        if [[ "${ACA_TAKEOVER_PORTS:-0}" == "1" ]]; then
+            takeover_port "${SERVER_PORT}" || return 1
+        else
+            log_error "Port ${SERVER_PORT} is already in use. Use --takeover-ports or change SERVER_PORT."
+            return 1
+        fi
+    fi
+
     case "$(backend_mode)" in
         go-run|gorun|go)
             start_backend_go_run
@@ -165,6 +273,15 @@ start_frontend() {
 
     require_cmd node || return 1
     require_cmd npm || return 1
+
+    if is_port_listening "${ACA_FRONTEND_PORT}"; then
+        if [[ "${ACA_TAKEOVER_PORTS:-0}" == "1" ]]; then
+            takeover_port "${ACA_FRONTEND_PORT}" || return 1
+        else
+            log_error "Port ${ACA_FRONTEND_PORT} is already in use. Use --takeover-ports or change ACA_FRONTEND_PORT."
+            return 1
+        fi
+    fi
 
     log_info "Starting frontend..."
     cd "$FRONTEND_DIR"
@@ -265,8 +382,36 @@ show_logs() {
 # 初始化开发环境变量（只加载一次，避免重复输出）
 init_dev_env
 
+# Parse args
+COMMAND="${1:-all}"
+shift || true
+
+LOG_TARGET="all"
+if [[ "${COMMAND}" == "logs" && $# -gt 0 && "${1}" != --* ]]; then
+    LOG_TARGET="${1}"
+    shift
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        --takeover-ports)
+            export ACA_TAKEOVER_PORTS=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            log_error "Unknown arg: ${1}"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
 # 主命令处理
-case "${1:-all}" in
+case "${COMMAND}" in
     dev)
         ACA_BACKEND_MODE="go-run" start_backend
         start_frontend
@@ -302,21 +447,10 @@ case "${1:-all}" in
         show_status
         ;;
     logs)
-        show_logs "${2:-all}"
+        show_logs "${LOG_TARGET}"
         ;;
     *)
-        echo "Usage: $0 {dev|backend|backend-dev|frontend|all|restart|stop|status|logs [backend|frontend]}"
-        echo ""
-        echo "Commands:"
-        echo "  dev       - Start backend(go run) + frontend(dev)"
-        echo "  backend   - Start backend only"
-        echo "  backend-dev - Start backend with go run (dev)"
-        echo "  frontend  - Start frontend only"
-        echo "  all       - Start both (default)"
-        echo "  restart   - Restart both services"
-        echo "  stop      - Stop both services"
-        echo "  status    - Show service status"
-        echo "  logs      - Show logs (optionally specify backend/frontend)"
+        usage
         exit 1
         ;;
 esac

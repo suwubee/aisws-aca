@@ -50,6 +50,7 @@
 - PID 文件：`.aca/pids/backend.pid`、`.aca/pids/frontend.pid`
 - `./scripts/start.sh dev` 会使用 `go run` 启动后端（用于调试源码）
 - 可通过环境变量切换后端启动方式：`ACA_BACKEND_MODE=binary|go-run`
+- 若端口被占用，可使用 `--takeover-ports`（或 `ACA_TAKEOVER_PORTS=1`）自动终止占用 `SERVER_PORT/ACA_FRONTEND_PORT` 的进程并重启
 
 ## 3) 环境变量与默认值
 
