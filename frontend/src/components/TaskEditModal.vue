@@ -84,6 +84,52 @@
         </template>
       </template>
 
+      <template v-else-if="form.automation_mode === 'agent'">
+        <n-form-item label="目标服务器">
+          <n-select
+            v-model:value="form.target_server_ids"
+            :options="serverStore.serverOptions"
+            :loading="serverStore.loading"
+            multiple
+            clearable
+            placeholder="空表示本地执行"
+          />
+        </n-form-item>
+        <n-form-item label="工作目录">
+          <n-input v-model:value="form.work_dir" placeholder="~/（可选，默认空）" />
+        </n-form-item>
+        <n-form-item label="任务目标">
+          <n-input
+            v-model:value="form.initial_prompt"
+            type="textarea"
+            :rows="3"
+            placeholder="描述要达成的目标（AI将根据命令返回动态决定下一步）"
+          />
+        </n-form-item>
+
+        <n-divider>AI托管配置</n-divider>
+        <n-form-item label="托管提示">
+          <n-input
+            v-model:value="form.ai_prompt"
+            type="textarea"
+            :rows="2"
+            placeholder="可选：约束/策略/注意事项"
+          />
+        </n-form-item>
+        <n-form-item label="结束条件">
+          <n-input
+            v-model:value="form.ai_end_condition"
+            placeholder="任务什么时候算完成（可选）"
+          />
+        </n-form-item>
+        <n-form-item label="错误处理">
+          <n-select
+            v-model:value="form.ai_error_handling"
+            :options="errorHandlingOptions"
+          />
+        </n-form-item>
+      </template>
+
       <template v-else-if="form.automation_mode === 'script'">
         <n-form-item label="目标服务器">
           <n-select
@@ -171,6 +217,7 @@ const cliOptions = [
 const modeOptions = [
   { label: '仅记录', value: 'none' },
   { label: 'AI CLI', value: 'cli' },
+  { label: 'AI 托管(动态)', value: 'agent' },
   { label: '脚本 / Runbook', value: 'script' }
 ]
 
@@ -235,15 +282,15 @@ async function save() {
       priority: form.priority,
       project_id: form.project_id,
       automation_mode: form.automation_mode,
-      target_server_ids: form.automation_mode === 'script' ? form.target_server_ids : undefined,
+      target_server_ids: (form.automation_mode === 'script' || form.automation_mode === 'agent') ? form.target_server_ids : undefined,
       script: form.automation_mode === 'script' ? form.script : undefined,
       work_dir: form.automation_mode === 'none' ? undefined : form.work_dir,
       cli_type: form.automation_mode === 'cli' ? (form.cli_type || '') : undefined,
-      initial_prompt: form.automation_mode === 'cli' ? form.initial_prompt : undefined,
+      initial_prompt: (form.automation_mode === 'cli' || form.automation_mode === 'agent') ? form.initial_prompt : undefined,
       ai_managed: form.automation_mode === 'cli' ? form.ai_managed : undefined,
-      ai_prompt: form.automation_mode === 'cli' ? form.ai_prompt : undefined,
-      ai_end_condition: form.automation_mode === 'cli' ? form.ai_end_condition : undefined,
-      ai_error_handling: form.automation_mode === 'cli' ? form.ai_error_handling : undefined
+      ai_prompt: (form.automation_mode === 'cli' || form.automation_mode === 'agent') ? form.ai_prompt : undefined,
+      ai_end_condition: (form.automation_mode === 'cli' || form.automation_mode === 'agent') ? form.ai_end_condition : undefined,
+      ai_error_handling: (form.automation_mode === 'cli' || form.automation_mode === 'agent') ? form.ai_error_handling : undefined
     })
     message.success('任务已更新')
     emit('saved', updated)

@@ -84,6 +84,7 @@ function formatTime(dateStr: string) {
 function formatMode(task: any) {
   const mode = String(task?.automation_mode || '').trim().toLowerCase()
   if (mode === 'script') return '脚本'
+  if (mode === 'agent') return 'AI托管'
   if (mode === 'none') return '仅记录'
   return task?.cli_type || 'cli'
 }

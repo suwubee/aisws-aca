@@ -95,7 +95,8 @@ type Task struct {
 	CompletedAt *time.Time `json:"completed_at"`
 
 	// 自动化任务配置
-	AutomationMode  string      `gorm:"default:cli" json:"automation_mode"` // none, cli, script
+	AutomationMode  string      `gorm:"default:cli" json:"automation_mode"` // none, cli, script, agent
+	AgentSessionID  string      `gorm:"index" json:"agent_session_id"`      // AI 托管(动态)会话ID（绑定 AIWorkflowSession）
 	TargetServerIDs StringArray `gorm:"type:text" json:"target_server_ids"`
 	Script          string      `json:"script"`
 	WorkDir         string      `json:"work_dir"`                            // 工作目录

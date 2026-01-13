@@ -40,6 +40,8 @@ func (e *ToolExecutor) Execute(ctx context.Context, tool string, args map[string
 		return e.startTask(args)
 	case "execute_command":
 		return e.executeCommand(args, sessionCtx)
+	case "batch_execute_command":
+		return e.batchExecuteCommand(args, sessionCtx)
 	case "git_operation":
 		return e.gitOperation(args, sessionCtx)
 	case "check_task_status":
@@ -224,6 +226,132 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 	return &ToolResult{Success: true, Output: string(out)}
 }
 
+func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[string]any) *ToolResult {
+	command, _ := args["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return &ToolResult{Success: false, Error: "command is required"}
+	}
+
+	workDir, _ := args["work_dir"].(string)
+	workDir = strings.TrimSpace(workDir)
+
+	ids := make([]string, 0)
+	switch raw := args["server_ids"].(type) {
+	case []any:
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				id := strings.TrimSpace(s)
+				if id != "" {
+					ids = append(ids, id)
+				}
+			}
+		}
+	case []string:
+		for _, s := range raw {
+			id := strings.TrimSpace(s)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+
+	// 兼容：未显式传 server_ids 时，尝试从上下文读取
+	if len(ids) == 0 {
+		if ctxIDs, ok := sessionCtx["target_server_ids"].([]string); ok && len(ctxIDs) > 0 {
+			for _, sid := range ctxIDs {
+				id := strings.TrimSpace(sid)
+				if id != "" {
+					ids = append(ids, id)
+				}
+			}
+		}
+	}
+
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, serverID := range ids {
+		sid := strings.TrimSpace(serverID)
+		if sid == "" {
+			continue
+		}
+		if _, ok := seen[sid]; ok {
+			continue
+		}
+		seen[sid] = struct{}{}
+		unique = append(unique, sid)
+	}
+
+	// Build full command with work_dir
+	fullCmd := command
+	if workDir != "" {
+		fullCmd = fmt.Sprintf("cd %s && %s", workDir, command)
+	}
+
+	// 本地执行
+	if len(unique) == 0 || e.sshManager == nil {
+		out, err := exec.Command("sh", "-c", fullCmd).CombinedOutput()
+		if err != nil {
+			return &ToolResult{Success: false, Error: err.Error(), Output: string(out)}
+		}
+		return &ToolResult{Success: true, Output: string(out)}
+	}
+
+	type resultItem struct {
+		Output string `json:"output"`
+		Error  string `json:"error,omitempty"`
+	}
+
+	results := make(map[string]resultItem, len(unique))
+	var sb strings.Builder
+	success := true
+
+	type pair struct {
+		id  string
+		res resultItem
+	}
+
+	ch := make(chan pair, len(unique))
+	for _, sid := range unique {
+		go func(id string) {
+			output, err := e.sshManager.ExecuteCommand(id, fullCmd)
+			item := resultItem{Output: output}
+			if err != nil {
+				item.Error = err.Error()
+			}
+			ch <- pair{id: id, res: item}
+		}(sid)
+	}
+
+	for i := 0; i < len(unique); i++ {
+		p := <-ch
+		results[p.id] = p.res
+		if p.res.Error != "" {
+			success = false
+		}
+
+		sb.WriteString("=== ")
+		sb.WriteString(p.id)
+		sb.WriteString(" ===\n")
+		if p.res.Error != "" {
+			sb.WriteString("ERROR: ")
+			sb.WriteString(p.res.Error)
+			sb.WriteString("\n")
+		}
+		sb.WriteString(p.res.Output)
+		if !strings.HasSuffix(p.res.Output, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	return &ToolResult{
+		Success: success,
+		Output:  strings.TrimSpace(sb.String()),
+		Data:    results,
+	}
+}
+
 // gitOperation executes git operations
 func (e *ToolExecutor) gitOperation(args map[string]any, sessionCtx map[string]any) *ToolResult {
 	operation, _ := args["operation"].(string)
@@ -235,6 +363,12 @@ func (e *ToolExecutor) gitOperation(args map[string]any, sessionCtx map[string]a
 	repoURL, _ := args["repo_url"].(string)
 	branch, _ := args["branch"].(string)
 	message, _ := args["message"].(string)
+	serverID, _ := args["server_id"].(string)
+	if serverID == "" {
+		if sid, ok := sessionCtx["current_server_id"].(string); ok {
+			serverID = sid
+		}
+	}
 
 	var cmd string
 	switch operation {
@@ -268,7 +402,7 @@ func (e *ToolExecutor) gitOperation(args map[string]any, sessionCtx map[string]a
 		return &ToolResult{Success: false, Error: fmt.Sprintf("unknown git operation: %s", operation)}
 	}
 
-	return e.executeCommand(map[string]any{"command": cmd, "work_dir": workDir}, sessionCtx)
+	return e.executeCommand(map[string]any{"command": cmd, "work_dir": workDir, "server_id": serverID}, sessionCtx)
 }
 
 // checkTaskStatus checks task status

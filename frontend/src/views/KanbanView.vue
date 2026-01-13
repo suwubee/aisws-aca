@@ -147,20 +147,20 @@ async function handleCreateTask() {
       title: newTask.title,
       description: newTask.description,
       priority: newTask.priority,
-      server_id: newTask.automation_mode === 'script' ? undefined : (newTask.server_id || undefined),
+      server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
       project_id: newTask.project_id || undefined,
       automation_mode: newTask.automation_mode,
-      target_server_ids: newTask.automation_mode === 'script' ? newTask.target_server_ids : undefined,
+      target_server_ids: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? newTask.target_server_ids : undefined,
       script: newTask.automation_mode === 'script' ? newTask.script : undefined,
       work_dir: newTask.automation_mode === 'none' ? undefined : newTask.work_dir,
       cli_type: newTask.automation_mode === 'cli' ? (newTask.cli_type || 'claude') : undefined,
-      initial_prompt: newTask.automation_mode === 'cli' ? newTask.initial_prompt : undefined,
+      initial_prompt: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.initial_prompt : undefined,
       auto_create_dir: newTask.auto_create_dir,
       auto_start: newTask.auto_start,
       ai_managed: newTask.automation_mode === 'cli' ? newTask.ai_managed : undefined,
-      ai_prompt: newTask.automation_mode === 'cli' ? newTask.ai_prompt : undefined,
-      ai_end_condition: newTask.automation_mode === 'cli' ? newTask.ai_end_condition : undefined,
-      ai_error_handling: newTask.automation_mode === 'cli' ? newTask.ai_error_handling : undefined
+      ai_prompt: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.ai_prompt : undefined,
+      ai_end_condition: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.ai_end_condition : undefined,
+      ai_error_handling: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.ai_error_handling : undefined
     })
     message.success('任务创建成功')
     showCreateTask.value = false
@@ -168,6 +168,7 @@ async function handleCreateTask() {
     const canAutoStart = newTask.auto_start && (() => {
       if (newTask.automation_mode === 'none') return false
       if (newTask.automation_mode === 'script') return Boolean(newTask.script?.trim())
+      if (newTask.automation_mode === 'agent') return Boolean(newTask.initial_prompt?.trim())
       return Boolean(newTask.work_dir?.trim() || newTask.initial_prompt?.trim() || newTask.ai_managed)
     })()
 

@@ -84,6 +84,7 @@
                       {{ ['低','中','高','紧急'][task.priority] }}
                     </n-tag>
                     <n-tag v-if="getMode(task) === 'script'" size="small" type="info">脚本</n-tag>
+                    <n-tag v-else-if="getMode(task) === 'agent'" size="small" type="info">AI托管</n-tag>
                     <n-tag v-else-if="getMode(task) === 'cli' && task.cli_type" size="small" type="info">{{ task.cli_type }}</n-tag>
                     <n-tag v-if="Array.isArray(task.target_server_ids) && task.target_server_ids.length > 1" size="small">
                       {{ task.target_server_ids.length }}台服务器
@@ -247,6 +248,7 @@ function isStartable(task: any) {
   const mode = getMode(task)
   if (mode === 'none') return false
   if (mode === 'script') return Boolean(String(task?.script || '').trim())
+  if (mode === 'agent') return Boolean(String(task?.initial_prompt || '').trim())
   return Boolean(
     String(task?.work_dir || '').trim() ||
     String(task?.initial_prompt || '').trim() ||
@@ -301,6 +303,7 @@ const columns: DataTableColumns<any> = [
     render(row) {
       const mode = getMode(row)
       if (mode === 'script') return '脚本'
+      if (mode === 'agent') return 'AI托管'
       if (mode === 'none') return '仅记录'
       return row.cli_type || 'cli'
     }
@@ -461,20 +464,20 @@ async function handleCreateTask() {
       title: newTask.title,
       description: newTask.description,
       priority: newTask.priority,
-      server_id: newTask.automation_mode === 'script' ? undefined : (newTask.server_id || undefined),
+      server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
       project_id: newTask.project_id || undefined,
       automation_mode: newTask.automation_mode,
-      target_server_ids: newTask.automation_mode === 'script' ? newTask.target_server_ids : undefined,
+      target_server_ids: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? newTask.target_server_ids : undefined,
       script: newTask.automation_mode === 'script' ? newTask.script : undefined,
       work_dir: newTask.automation_mode === 'none' ? undefined : newTask.work_dir,
       cli_type: newTask.automation_mode === 'cli' ? (newTask.cli_type || 'claude') : undefined,
-      initial_prompt: newTask.automation_mode === 'cli' ? newTask.initial_prompt : undefined,
+      initial_prompt: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.initial_prompt : undefined,
       auto_create_dir: newTask.auto_create_dir,
       auto_start: newTask.auto_start,
       ai_managed: newTask.automation_mode === 'cli' ? newTask.ai_managed : undefined,
-      ai_prompt: newTask.automation_mode === 'cli' ? newTask.ai_prompt : undefined,
-      ai_end_condition: newTask.automation_mode === 'cli' ? newTask.ai_end_condition : undefined,
-      ai_error_handling: newTask.automation_mode === 'cli' ? newTask.ai_error_handling : undefined
+      ai_prompt: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.ai_prompt : undefined,
+      ai_end_condition: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.ai_end_condition : undefined,
+      ai_error_handling: (newTask.automation_mode === 'cli' || newTask.automation_mode === 'agent') ? newTask.ai_error_handling : undefined
     })
     message.success('任务创建成功')
     showCreateTask.value = false

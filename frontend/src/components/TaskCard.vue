@@ -41,6 +41,7 @@
           {{ projectLabel }}
         </n-tag>
         <n-tag v-if="mode === 'script'" size="small" type="info">脚本</n-tag>
+        <n-tag v-else-if="mode === 'agent'" size="small" type="info">AI托管</n-tag>
         <n-tag v-else-if="mode === 'cli' && task.cli_type" size="small" type="info">
           {{ task.cli_type }}
         </n-tag>
@@ -118,6 +119,7 @@ const mode = computed(() => {
 const isStartable = computed(() => {
   if (mode.value === 'none') return false
   if (mode.value === 'script') return Boolean(String(props.task.script || '').trim())
+  if (mode.value === 'agent') return Boolean(String(props.task.initial_prompt || '').trim())
   return Boolean(
     String(props.task.work_dir || '').trim() ||
       String(props.task.initial_prompt || '').trim() ||

@@ -8,6 +8,7 @@ import (
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/service/terminal"
+	"github.com/ai-coding-assistant/service/workflow"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -15,12 +16,17 @@ import (
 
 type TaskController struct {
 	automationService *task.AutomationService
+	aiWorkflowEngine  *workflow.AIWorkflowEngine
 }
 
 func NewTaskController(tm *terminal.Manager) *TaskController {
 	return &TaskController{
 		automationService: task.NewAutomationService(tm),
 	}
+}
+
+func (ctrl *TaskController) SetAIWorkflowEngine(engine *workflow.AIWorkflowEngine) {
+	ctrl.aiWorkflowEngine = engine
 }
 
 type CreateTaskRequest struct {
@@ -120,6 +126,7 @@ var allowedAutomationModes = map[string]struct{}{
 	"none":   {},
 	"cli":    {},
 	"script": {},
+	"agent":  {},
 }
 
 func normalizeAutomationMode(value string) (string, bool) {
@@ -762,6 +769,60 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(taskModel.AutomationMode))
+	if mode == "agent" {
+		if ctrl.aiWorkflowEngine == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
+		}
+
+		// 幂等：任务进行中/暂停时直接返回已有会话
+		if taskModel.Status == "in_progress" || taskModel.Status == "paused" {
+			sessionID := strings.TrimSpace(taskModel.AgentSessionID)
+			needsUserAction := taskModel.Status == "paused"
+			userHint := ""
+
+			if sessionID != "" {
+				if session, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && session != nil {
+					if strings.EqualFold(strings.TrimSpace(session.Status), "paused") {
+						needsUserAction = true
+						userHint = strings.TrimSpace(session.Summary)
+					}
+				}
+			}
+
+			return c.JSON(fiber.Map{
+				"message":           "Task already running",
+				"task":              taskModel,
+				"agent_session_id":  sessionID,
+				"terminal_id":       "",
+				"terminal_ids":      []string{},
+				"work_dir":          taskModel.WorkDir,
+				"cli_started":       false,
+				"needs_user_action": needsUserAction,
+				"user_action_hint":  userHint,
+			})
+		}
+
+		session, err := ctrl.aiWorkflowEngine.StartTaskAgent(c.Context(), &taskModel)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		model.DB.First(&taskModel, "id = ?", id)
+
+		return c.JSON(fiber.Map{
+			"message":           "Task started",
+			"task":              taskModel,
+			"agent_session_id":  session.ID,
+			"terminal_id":       "",
+			"terminal_ids":      []string{},
+			"work_dir":          taskModel.WorkDir,
+			"cli_started":       false,
+			"needs_user_action": strings.EqualFold(strings.TrimSpace(session.Status), "paused"),
+			"user_action_hint":  strings.TrimSpace(session.Summary),
+		})
+	}
+
 	// 如果任务已经在进行中，返回现有终端信息而不是错误
 	if taskModel.Status == "in_progress" {
 		var terminals []model.TerminalSession
@@ -805,6 +866,7 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"message":           "Task started",
 		"task":              result.Task,
+		"agent_session_id":  strings.TrimSpace(result.Task.AgentSessionID),
 		"terminal_id":       terminalID,
 		"terminal_ids":      terminalIDs,
 		"work_dir":          result.WorkDir,

@@ -33,17 +33,7 @@
       </n-gi>
     </n-grid>
 
-    <n-form-item v-if="model.automation_mode !== 'script'" label="服务器">
-      <n-select
-        v-model:value="model.server_id"
-        :options="serverStore.serverOptions"
-        :loading="serverStore.loading"
-        clearable
-        placeholder="本地"
-        :disabled="disabled"
-      />
-    </n-form-item>
-    <n-form-item v-else label="目标服务器">
+    <n-form-item v-if="model.automation_mode === 'script' || model.automation_mode === 'agent'" label="目标服务器">
       <n-select
         v-model:value="model.target_server_ids"
         :options="serverStore.serverOptions"
@@ -51,6 +41,16 @@
         clearable
         multiple
         placeholder="空表示本地执行"
+        :disabled="disabled"
+      />
+    </n-form-item>
+    <n-form-item v-else label="服务器">
+      <n-select
+        v-model:value="model.server_id"
+        :options="serverStore.serverOptions"
+        :loading="serverStore.loading"
+        clearable
+        placeholder="本地"
         :disabled="disabled"
       />
     </n-form-item>
@@ -102,6 +102,52 @@
           <n-checkbox v-model:checked="model.ai_managed" :disabled="disabled">AI全程托管</n-checkbox>
           <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
         </n-space>
+      </n-form-item>
+    </template>
+
+    <template v-else-if="model.automation_mode === 'agent'">
+      <n-form-item label="工作目录">
+        <n-input v-model:value="model.work_dir" placeholder="~/（可选，默认空）" :disabled="disabled" />
+      </n-form-item>
+      <n-form-item label="任务目标">
+        <n-input
+          v-model:value="model.initial_prompt"
+          type="textarea"
+          :rows="3"
+          placeholder="描述要达成的目标（AI将根据命令返回动态决定下一步）"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="选项">
+        <n-space size="small">
+          <n-checkbox v-model:checked="model.auto_start" :disabled="disabled">自动启动</n-checkbox>
+          <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
+        </n-space>
+      </n-form-item>
+
+      <n-divider style="margin: 8px 0">AI托管配置</n-divider>
+      <n-form-item label="托管提示">
+        <n-input
+          v-model:value="model.ai_prompt"
+          type="textarea"
+          :rows="2"
+          placeholder="可选：约束/策略/注意事项（例如先巡检、再批量执行；危险操作先询问）"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="结束条件">
+        <n-input
+          v-model:value="model.ai_end_condition"
+          placeholder="可选：任务什么时候算完成"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="错误处理">
+        <n-select
+          v-model:value="model.ai_error_handling"
+          :options="errorHandlingOptions"
+          :disabled="disabled"
+        />
       </n-form-item>
     </template>
 
@@ -203,6 +249,7 @@ const projectStore = useProjectStore()
 const automationModeOptions = [
   { label: '仅记录', value: 'none' },
   { label: 'AI CLI', value: 'cli' },
+  { label: 'AI 托管(动态)', value: 'agent' },
   { label: '脚本 / Runbook', value: 'script' }
 ]
 

@@ -121,6 +121,7 @@ export interface Task {
 
   // 自动化任务配置
   automation_mode?: string
+  agent_session_id?: string
   target_server_ids?: string[]
   script?: string
   work_dir: string

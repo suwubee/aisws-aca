@@ -89,6 +89,16 @@ func GetAvailableTools() []ToolDefinition {
 			Required: []string{"command"},
 		},
 		{
+			Name:        "batch_execute_command",
+			Description: "在多台服务器上批量执行同一条命令（可用于巡检/批量运维）；server_ids 为空时表示本地执行",
+			Parameters: map[string]ToolParam{
+				"command":    {Type: "string", Description: "要执行的命令"},
+				"server_ids": {Type: "array", Description: "目标服务器ID列表（可选）"},
+				"work_dir":   {Type: "string", Description: "工作目录（可选）"},
+			},
+			Required: []string{"command"},
+		},
+		{
 			Name:        "git_operation",
 			Description: "执行Git操作",
 			Parameters: map[string]ToolParam{
@@ -221,6 +231,10 @@ func FormatObservation(result *ToolResult) string {
 
 // FormatToolsForPrompt formats tools for AI prompt using ReAct framework
 func FormatToolsForPrompt() (string, error) {
+	return FormatToolsForPromptWithTemplate(promptsvc.TemplateKeyAIWorkflowSystemPrompt, nil)
+}
+
+func FormatToolsForPromptWithTemplate(templateKey string, extraVars map[string]any) (string, error) {
 	tools := GetAvailableTools()
 
 	type promptParam struct {
@@ -269,7 +283,20 @@ func FormatToolsForPrompt() (string, error) {
 		})
 	}
 
-	return promptsvc.RenderTemplate(promptsvc.TemplateKeyAIWorkflowSystemPrompt, map[string]any{
+	vars := map[string]any{
 		"tools": formatted,
-	})
+	}
+	for k, v := range extraVars {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		vars[k] = v
+	}
+
+	key := strings.TrimSpace(templateKey)
+	if key == "" {
+		key = promptsvc.TemplateKeyAIWorkflowSystemPrompt
+	}
+
+	return promptsvc.RenderTemplate(key, vars)
 }

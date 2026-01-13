@@ -82,6 +82,33 @@
               </n-descriptions-item>
             </template>
 
+            <template v-else-if="automationMode === 'agent'">
+              <n-descriptions-item label="目标服务器">
+                <n-tag v-if="(task.target_server_ids?.length || 0) > 0" type="info">
+                  {{ task.target_server_ids?.length }}台
+                </n-tag>
+                <span v-else>本地</span>
+              </n-descriptions-item>
+              <n-descriptions-item label="自动启动">
+                {{ task.auto_start ? '是' : '否' }}
+              </n-descriptions-item>
+              <n-descriptions-item v-if="task.initial_prompt" label="任务目标" :span="2">
+                <n-text code style="white-space: pre-wrap">{{ task.initial_prompt }}</n-text>
+              </n-descriptions-item>
+              <n-descriptions-item v-if="task.ai_prompt" label="托管提示" :span="2">
+                <n-text code style="white-space: pre-wrap">{{ task.ai_prompt }}</n-text>
+              </n-descriptions-item>
+              <n-descriptions-item v-if="task.ai_end_condition" label="结束条件" :span="2">
+                <n-text code style="white-space: pre-wrap">{{ task.ai_end_condition }}</n-text>
+              </n-descriptions-item>
+              <n-descriptions-item label="错误处理">
+                {{ task.ai_error_handling || 'pause' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="会话ID">
+                <n-text code>{{ task.agent_session_id || '-' }}</n-text>
+              </n-descriptions-item>
+            </template>
+
             <template v-else-if="automationMode === 'script'">
               <n-descriptions-item label="目标服务器">
                 <n-tag v-if="(task.target_server_ids?.length || 0) > 0" type="info">
@@ -100,6 +127,14 @@
               </n-descriptions-item>
             </template>
           </n-descriptions>
+        </n-card>
+
+        <AIWorkflowSessionPanel
+          v-if="automationMode === 'agent' && task.agent_session_id"
+          :session-id="task.agent_session_id"
+        />
+        <n-card v-else-if="automationMode === 'agent'" title="AI 托管会话" size="small">
+          <n-empty description="尚未启动会话" />
         </n-card>
 
         <!-- 关联终端 -->
@@ -172,6 +207,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
+import AIWorkflowSessionPanel from '@/components/AIWorkflowSessionPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -241,6 +277,7 @@ const automationMode = computed(() => {
 
 const automationModeLabel = computed(() => {
   if (automationMode.value === 'script') return '脚本'
+  if (automationMode.value === 'agent') return 'AI托管(动态)'
   if (automationMode.value === 'none') return '仅记录'
   return 'AI CLI'
 })
@@ -250,6 +287,7 @@ const canStartTask = computed(() => {
   const mode = automationMode.value
   if (mode === 'none') return false
   if (mode === 'script') return Boolean(String(task.value.script || '').trim())
+  if (mode === 'agent') return Boolean(String(task.value.initial_prompt || '').trim())
   return Boolean(
     String(task.value.work_dir || '').trim() ||
     String(task.value.initial_prompt || '').trim() ||
@@ -353,6 +391,8 @@ async function handleStartTask() {
       await terminalStore.fetchTerminals()
       terminalStore.setActiveTerminal(result.terminal_id)
       router.push('/')
+    } else {
+      await loadTaskDetail()
     }
   } catch (error: any) {
     message.error(error.response?.data?.error || '启动任务失败')

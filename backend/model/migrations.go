@@ -36,6 +36,10 @@ func RunMigrations(db *gorm.DB) error {
 			up: migrateAddTaskProjectID,
 		},
 		{
+			id: "20260113_add_tasks_agent_session_id",
+			up: migrateAddTaskAgentSessionID,
+		},
+		{
 			id: "20260107_add_approval_records_server_id",
 			up: migrateAddApprovalRecordServerID,
 		},
@@ -97,6 +101,20 @@ func migrateAddTaskProjectID(db *gorm.DB) error {
 	}
 
 	return db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)").Error
+}
+
+func migrateAddTaskAgentSessionID(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&Task{}) {
+		return nil
+	}
+
+	if !db.Migrator().HasColumn(&Task{}, "AgentSessionID") {
+		if err := db.Migrator().AddColumn(&Task{}, "AgentSessionID"); err != nil {
+			return err
+		}
+	}
+
+	return db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_agent_session_id ON tasks(agent_session_id)").Error
 }
 
 func migrateAddApprovalRecordServerID(db *gorm.DB) error {

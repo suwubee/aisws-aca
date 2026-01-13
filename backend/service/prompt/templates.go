@@ -19,6 +19,8 @@ const (
 	TemplateKeyApprovalSystemPrompt     = "approval.system_prompt"
 	TemplateKeyTaskMonitorSystemPrompt  = "task_monitor.system_prompt"
 	TemplateKeyTaskManagedPrompt        = "task.managed_prompt"
+	TemplateKeyTaskAgentSystemPrompt    = "task_agent.system_prompt"
+	TemplateKeyTaskAgentUserGoalPrompt  = "task_agent.user_goal_prompt"
 	TemplateKeyAIWorkflowSystemPrompt   = "ai_workflow.system_prompt"
 	TemplateKeyAIWorkflowUserGoalPrompt = "ai_workflow.user_goal_prompt"
 )
@@ -52,6 +54,20 @@ var builtinTemplates = []builtinTemplate{
 		Description: "用于 AI 托管模式下发送给 CLI 的提示词模板（由任务字段与完成标记渲染）。",
 		Variables:   []string{"task_initial_prompt", "task_ai_prompt", "task_ai_end_condition", "task_done_marker"},
 		File:        "defaults/task_managed_prompt.tmpl",
+	},
+	{
+		Key:         TemplateKeyTaskAgentSystemPrompt,
+		Name:        "AI 托管(动态)：系统提示词",
+		Description: "用于“AI 托管(动态)”任务模式：基于任务目标 + 命令返回循环决策下一步（ReAct + 工具调用）。",
+		Variables:   []string{"tools", "task_title", "task_description", "task_initial_prompt", "task_ai_prompt", "task_ai_end_condition", "task_ai_error_handling", "work_dir", "target_servers"},
+		File:        "defaults/task_agent_system_prompt.tmpl",
+	},
+	{
+		Key:         TemplateKeyTaskAgentUserGoalPrompt,
+		Name:        "AI 托管(动态)：用户目标包装模板",
+		Description: "用于“AI 托管(动态)”任务启动时包装用户目标/约束/服务器上下文的提示词模板。",
+		Variables:   []string{"user_goal", "task_title", "task_description", "task_initial_prompt", "task_ai_prompt", "task_ai_end_condition", "task_ai_error_handling", "work_dir", "target_servers"},
+		File:        "defaults/task_agent_user_goal_prompt.tmpl",
 	},
 	{
 		Key:         TemplateKeyAIWorkflowSystemPrompt,

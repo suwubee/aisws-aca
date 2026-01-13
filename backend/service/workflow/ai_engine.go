@@ -61,9 +61,26 @@ type AIWorkflowStep struct {
 	Timestamp  time.Time `json:"timestamp"`
 }
 
+type StartWorkflowOptions struct {
+	WorkflowID string
+
+	Context map[string]any
+
+	SystemPromptTemplateKey string
+	SystemPromptVars        map[string]any
+
+	UserGoalTemplateKey string
+	UserGoalVars        map[string]any
+}
+
 // StartWorkflow starts an AI-driven workflow with user goal
 func (e *AIWorkflowEngine) StartWorkflow(ctx context.Context, userGoal string) (*AIWorkflowSession, error) {
-	if strings.TrimSpace(userGoal) == "" {
+	return e.StartWorkflowWithOptions(ctx, userGoal, StartWorkflowOptions{})
+}
+
+func (e *AIWorkflowEngine) StartWorkflowWithOptions(ctx context.Context, userGoal string, opts StartWorkflowOptions) (*AIWorkflowSession, error) {
+	goal := strings.TrimSpace(userGoal)
+	if goal == "" {
 		return nil, errors.New("user goal is required")
 	}
 
@@ -73,19 +90,33 @@ func (e *AIWorkflowEngine) StartWorkflow(ctx context.Context, userGoal string) (
 		return nil, fmt.Errorf("no AI provider configured: %w", err)
 	}
 
+	workflowID := strings.TrimSpace(opts.WorkflowID)
+
 	// Create session
 	session := &AIWorkflowSession{
-		ID:        uuid.New().String(),
-		UserGoal:  userGoal,
-		Status:    "running",
-		Messages:  []ai.ChatMessage{},
-		Steps:     []AIWorkflowStep{},
-		Context:   make(map[string]any),
-		StartedAt: time.Now(),
+		ID:         uuid.New().String(),
+		WorkflowID: workflowID,
+		UserGoal:   goal,
+		Status:     "running",
+		Messages:   []ai.ChatMessage{},
+		Steps:      []AIWorkflowStep{},
+		Context:    make(map[string]any),
+		StartedAt:  time.Now(),
+	}
+
+	for k, v := range opts.Context {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		session.Context[k] = v
 	}
 
 	// Build system prompt with tools
-	systemPrompt, err := FormatToolsForPrompt()
+	systemKey := strings.TrimSpace(opts.SystemPromptTemplateKey)
+	if systemKey == "" {
+		systemKey = promptsvc.TemplateKeyAIWorkflowSystemPrompt
+	}
+	systemPrompt, err := FormatToolsForPromptWithTemplate(systemKey, opts.SystemPromptVars)
 	if err != nil {
 		return nil, err
 	}
@@ -95,11 +126,21 @@ func (e *AIWorkflowEngine) StartWorkflow(ctx context.Context, userGoal string) (
 	})
 
 	// Add user goal
-	userGoalPrompt, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyAIWorkflowUserGoalPrompt, map[string]any{
-		"user_goal": userGoal,
-	})
+	userGoalKey := strings.TrimSpace(opts.UserGoalTemplateKey)
+	if userGoalKey == "" {
+		userGoalKey = promptsvc.TemplateKeyAIWorkflowUserGoalPrompt
+	}
+	userVars := map[string]any{"user_goal": goal}
+	for k, v := range opts.UserGoalVars {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		userVars[k] = v
+	}
+	userVars["user_goal"] = goal
+	userGoalPrompt, err := promptsvc.RenderTemplate(userGoalKey, userVars)
 	if err != nil {
-		userGoalPrompt = userGoal
+		userGoalPrompt = goal
 	}
 	session.Messages = append(session.Messages, ai.ChatMessage{
 		Role:    "user",

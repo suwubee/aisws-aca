@@ -19,6 +19,7 @@ export interface Task {
   completed_at: string | null
   // 自动化配置
   automation_mode?: string
+  agent_session_id?: string
   target_server_ids?: string[]
   script?: string
   work_dir?: string

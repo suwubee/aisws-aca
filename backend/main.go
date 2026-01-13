@@ -13,8 +13,8 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
-	"github.com/ai-coding-assistant/service/setupwizard"
 	"github.com/ai-coding-assistant/service/schedule"
+	"github.com/ai-coding-assistant/service/setupwizard"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/service/terminal"
@@ -189,6 +189,7 @@ func main() {
 	automationService := task.NewAutomationService(terminalManager)
 	toolExecutor := workflow.NewToolExecutor(sshManager, automationService, workflow.NewTerminalManagerAdapter(terminalManager))
 	aiWorkflowEngine := api.InitAIWorkflowEngine(toolExecutor)
+	taskController.SetAIWorkflowEngine(aiWorkflowEngine)
 	aiWorkflowGroup := apiGroup.Group("/ai-workflow")
 	aiWorkflowGroup.Post("/start", api.StartAIWorkflow)
 	aiWorkflowGroup.Get("/session/:id", api.GetAIWorkflowSession)

@@ -19,9 +19,6 @@ type DefaultExecutor struct {
 func (e DefaultExecutor) Execute(ctx context.Context, job model.ScheduledJob) (any, error) {
 	switch job.TargetType {
 	case TargetTypeTask:
-		if e.Automation == nil {
-			return nil, errors.New("task automation service not configured")
-		}
 		if job.TaskID == nil || strings.TrimSpace(*job.TaskID) == "" {
 			return nil, errors.New("task_id is required")
 		}
@@ -29,6 +26,40 @@ func (e DefaultExecutor) Execute(ctx context.Context, job model.ScheduledJob) (a
 		var taskModel model.Task
 		if err := model.DB.First(&taskModel, "id = ?", strings.TrimSpace(*job.TaskID)).Error; err != nil {
 			return nil, err
+		}
+
+		if strings.EqualFold(strings.TrimSpace(taskModel.AutomationMode), "agent") {
+			if e.AIWorkflow == nil {
+				return nil, errors.New("AI workflow engine not configured")
+			}
+
+			// 幂等：任务进行中/暂停时不重复启动
+			if taskModel.Status == "in_progress" || taskModel.Status == "paused" {
+				return map[string]any{
+					"task_id":           taskModel.ID,
+					"agent_session_id":  strings.TrimSpace(taskModel.AgentSessionID),
+					"needs_user_action": taskModel.Status == "paused",
+				}, nil
+			}
+
+			session, err := e.AIWorkflow.StartTaskAgent(ctx, &taskModel)
+			if session != nil {
+				out := map[string]any{
+					"task_id":          taskModel.ID,
+					"agent_session_id": session.ID,
+					"status":           session.Status,
+				}
+				if strings.TrimSpace(session.Summary) != "" {
+					out["summary"] = strings.TrimSpace(session.Summary)
+				}
+				out["needs_user_action"] = strings.EqualFold(strings.TrimSpace(session.Status), "paused")
+				return out, err
+			}
+			return map[string]any{"task_id": taskModel.ID}, err
+		}
+
+		if e.Automation == nil {
+			return nil, errors.New("task automation service not configured")
 		}
 
 		result, err := e.Automation.StartTask(&taskModel)
