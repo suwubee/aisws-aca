@@ -59,6 +59,7 @@ type UpdateTaskRequest struct {
 	Priority    *int    `json:"priority"`
 	Status      *string `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
+	ServerID    *string `json:"server_id"`
 	ProjectID   *string `json:"project_id"`
 	// 自动化配置
 	AutomationMode  *string   `json:"automation_mode"`
@@ -259,6 +260,21 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 	if serverID == nil && len(targetServerIDs) > 0 {
 		first := targetServerIDs[0]
 		serverID = &first
+	}
+
+	// 自动化任务不允许隐式本地执行：必须显式选择服务器（本地也需要在服务器列表中配置）
+	switch automationMode {
+	case "cli":
+		if serverID == nil || strings.TrimSpace(*serverID) == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Server is required (local must be configured in Servers)"})
+		}
+	case "script", "agent":
+		if (serverID == nil || strings.TrimSpace(*serverID) == "") && len(targetServerIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Target server is required (local must be configured in Servers)"})
+		}
+		if len(targetServerIDs) == 0 && serverID != nil && strings.TrimSpace(*serverID) != "" {
+			targetServerIDs = append(targetServerIDs, strings.TrimSpace(*serverID))
+		}
 	}
 
 	var projectID *string
@@ -576,6 +592,28 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 		}
 	}
 
+	nextServerID := ""
+	if task.ServerID != nil {
+		nextServerID = strings.TrimSpace(*task.ServerID)
+	}
+	if req.ServerID != nil {
+		trimmed := strings.TrimSpace(*req.ServerID)
+		if trimmed == "" {
+			nextServerID = ""
+			updates["server_id"] = nil
+		} else {
+			var server model.SSHServer
+			if err := model.DB.First(&server, "id = ?", trimmed).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return c.Status(400).JSON(fiber.Map{"error": "Server not found"})
+				}
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
+			}
+			nextServerID = trimmed
+			updates["server_id"] = trimmed
+		}
+	}
+
 	nextAutomationMode := strings.TrimSpace(task.AutomationMode)
 	if nextAutomationMode == "" {
 		nextAutomationMode = "cli"
@@ -588,6 +626,21 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 		nextAutomationMode = normalized
 		updates["automation_mode"] = normalized
 	}
+
+	nextTargetServerIDs := make([]string, 0, len(task.TargetServerIDs))
+	seenTargetIDs := map[string]struct{}{}
+	for _, raw := range task.TargetServerIDs {
+		sid := strings.TrimSpace(raw)
+		if sid == "" {
+			continue
+		}
+		if _, ok := seenTargetIDs[sid]; ok {
+			continue
+		}
+		seenTargetIDs[sid] = struct{}{}
+		nextTargetServerIDs = append(nextTargetServerIDs, sid)
+	}
+
 	// 自动化配置字段
 	if req.TargetServerIDs != nil {
 		targetServerIDs := make([]string, 0, len(*req.TargetServerIDs))
@@ -620,8 +673,38 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 			}
 		}
 
+		nextTargetServerIDs = targetServerIDs
 		updates["target_server_ids"] = model.StringArray(targetServerIDs)
 	}
+
+	// 自动化任务不允许隐式本地执行：必须显式选择服务器（本地也需要在服务器列表中配置）
+	switch nextAutomationMode {
+	case "cli":
+		if nextServerID == "" {
+			if len(nextTargetServerIDs) > 0 {
+				nextServerID = nextTargetServerIDs[0]
+				updates["server_id"] = nextServerID
+			} else {
+				return c.Status(400).JSON(fiber.Map{"error": "Server is required (local must be configured in Servers)"})
+			}
+		}
+	case "script", "agent":
+		if nextServerID == "" && len(nextTargetServerIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Target server is required (local must be configured in Servers)"})
+		}
+		if len(nextTargetServerIDs) == 0 && nextServerID != "" {
+			nextTargetServerIDs = []string{nextServerID}
+			updates["target_server_ids"] = model.StringArray(nextTargetServerIDs)
+		}
+		if len(nextTargetServerIDs) > 0 {
+			first := nextTargetServerIDs[0]
+			if nextServerID == "" || nextServerID != first {
+				nextServerID = first
+				updates["server_id"] = first
+			}
+		}
+	}
+
 	if req.Script != nil {
 		updates["script"] = *req.Script
 	}
@@ -775,6 +858,10 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 			return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
 		}
 
+		if taskModel.ServerID == nil && len(taskModel.TargetServerIDs) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Target server is required (local must be configured in Servers)"})
+		}
+
 		// 幂等：任务进行中/暂停时直接返回已有会话
 		if taskModel.Status == "in_progress" || taskModel.Status == "paused" {
 			sessionID := strings.TrimSpace(taskModel.AgentSessionID)
@@ -821,6 +908,27 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 			"needs_user_action": strings.EqualFold(strings.TrimSpace(session.Status), "paused"),
 			"user_action_hint":  strings.TrimSpace(session.Summary),
 		})
+	}
+
+	if mode == "" {
+		mode = "cli"
+	}
+	if mode == "cli" {
+		if taskModel.ServerID == nil || strings.TrimSpace(*taskModel.ServerID) == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Server is required (local must be configured in Servers)"})
+		}
+	}
+	if mode == "script" {
+		hasServer := false
+		if taskModel.ServerID != nil && strings.TrimSpace(*taskModel.ServerID) != "" {
+			hasServer = true
+		}
+		if len(taskModel.TargetServerIDs) > 0 {
+			hasServer = true
+		}
+		if !hasServer {
+			return c.Status(400).JSON(fiber.Map{"error": "Target server is required (local must be configured in Servers)"})
+		}
 	}
 
 	// 如果任务已经在进行中，返回现有终端信息而不是错误

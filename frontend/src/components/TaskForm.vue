@@ -40,7 +40,7 @@
         :loading="serverStore.loading"
         clearable
         multiple
-        placeholder="空表示本地执行"
+        placeholder="请选择目标服务器（本地也需要添加为服务器记录）"
         :disabled="disabled"
       />
     </n-form-item>
@@ -50,7 +50,7 @@
         :options="serverStore.serverOptions"
         :loading="serverStore.loading"
         clearable
-        placeholder="本地"
+        placeholder="请选择服务器（本地也需要添加为服务器记录）"
         :disabled="disabled"
       />
     </n-form-item>
@@ -212,7 +212,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 import { useServerStore } from '@/stores/server'
 import { useProjectStore } from '@/stores/project'
 
@@ -238,10 +238,12 @@ export interface TaskFormModel {
   ai_error_handling: string
 }
 
-defineProps<{
+const props = defineProps<{
   model: TaskFormModel
   disabled?: boolean
 }>()
+
+const model = props.model
 
 const serverStore = useServerStore()
 const projectStore = useProjectStore()
@@ -276,4 +278,23 @@ onMounted(() => {
   serverStore.fetchServers().catch(() => {})
   projectStore.fetchAll().catch(() => {})
 })
+
+watch(
+  () => String(model.automation_mode || '').trim().toLowerCase(),
+  (mode) => {
+    if (mode === 'script' || mode === 'agent') {
+      if ((!model.target_server_ids || model.target_server_ids.length === 0) && model.server_id) {
+        model.target_server_ids = [model.server_id]
+      }
+      return
+    }
+
+    if (mode === 'cli') {
+      if (!model.server_id && Array.isArray(model.target_server_ids) && model.target_server_ids.length === 1) {
+        model.server_id = model.target_server_ids[0] || null
+      }
+    }
+  },
+  { immediate: true }
+)
 </script>

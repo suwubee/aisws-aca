@@ -101,17 +101,13 @@ func initTestDB(t *testing.T) {
 	}
 }
 
-func TestAutomationService_StartTask_UsesLocalTerminalWhenServerIDNil(t *testing.T) {
+func TestAutomationService_StartTask_ReturnsErrorWhenServerIDNil(t *testing.T) {
 	initTestDB(t)
-
-	tmp := t.TempDir()
-	workDir := filepath.Join(tmp, "work")
 
 	taskModel := model.Task{
 		ID:            "task-1",
 		Title:         "Example",
 		Status:        "todo",
-		WorkDir:       workDir,
 		CLIType:       "codex",
 		InitialPrompt: "hello",
 		AutoCreateDir: true,
@@ -129,45 +125,22 @@ func TestAutomationService_StartTask_UsesLocalTerminalWhenServerIDNil(t *testing
 	t.Cleanup(func() { sleep = origSleep })
 
 	result, err := svc.StartTask(&taskModel)
-	if err != nil {
-		t.Fatalf("StartTask error: %v", err)
+	if err == nil {
+		t.Fatalf("expected error")
 	}
-	if !result.CLIStarted {
-		t.Fatalf("expected CLIStarted true")
+	if result == nil || result.Error == "" {
+		t.Fatalf("expected error message")
 	}
-	if tm.localSessionsCreated != 1 || tm.sshSessionsCreated != 0 {
-		t.Fatalf("expected local session created once, got local=%d ssh=%d", tm.localSessionsCreated, tm.sshSessionsCreated)
-	}
-
-	expectedTitle := "[codex] Example"
-	if tm.lastCreateTitle != expectedTitle {
-		t.Fatalf("expected CreateSession title %q, got %q", expectedTitle, tm.lastCreateTitle)
-	}
-
-	expectedWrites := []string{
-		"cd " + workDir + "\r",
-		"codex\r",
-		"hello\r",
-	}
-	if len(session.writes) != len(expectedWrites) {
-		t.Fatalf("expected %d writes, got %d: %v", len(expectedWrites), len(session.writes), session.writes)
-	}
-	for i := range expectedWrites {
-		if session.writes[i] != expectedWrites[i] {
-			t.Fatalf("expected write[%d] %q, got %q", i, expectedWrites[i], session.writes[i])
-		}
-	}
-
-	if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
-		t.Fatalf("expected workDir to exist as directory, err=%v", err)
+	if tm.localSessionsCreated != 0 || tm.sshSessionsCreated != 0 {
+		t.Fatalf("expected no terminal sessions created, got local=%d ssh=%d", tm.localSessionsCreated, tm.sshSessionsCreated)
 	}
 
 	var updated model.Task
 	if err := model.DB.First(&updated, "id = ?", taskModel.ID).Error; err != nil {
 		t.Fatalf("query updated task: %v", err)
 	}
-	if updated.Status != "in_progress" {
-		t.Fatalf("expected status %q, got %q", "in_progress", updated.Status)
+	if updated.Status != "todo" {
+		t.Fatalf("expected status %q, got %q", "todo", updated.Status)
 	}
 }
 
@@ -281,37 +254,6 @@ func TestAutomationService_StartTask_ReturnsErrorWhenServerMissing(t *testing.T)
 	}
 	if tm.localSessionsCreated != 0 || tm.sshSessionsCreated != 0 {
 		t.Fatalf("expected no terminal sessions created, got local=%d ssh=%d", tm.localSessionsCreated, tm.sshSessionsCreated)
-	}
-}
-
-func TestAutomationService_StartTask_DoesNotCreateTerminalWhenLocalDirCreationFails(t *testing.T) {
-	initTestDB(t)
-
-	taskModel := model.Task{
-		ID:            "task-4",
-		Title:         "Local",
-		Status:        "todo",
-		WorkDir:       "/dev/null/work",
-		CLIType:       "claude",
-		AutoCreateDir: true,
-	}
-	if err := model.DB.Create(&taskModel).Error; err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	tm := &fakeTerminalManager{}
-	svc := &AutomationService{terminalManager: tm}
-
-	origSleep := sleep
-	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
-	t.Cleanup(func() { sleep = origSleep })
-
-	_, err := svc.StartTask(&taskModel)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if tm.localSessionsCreated != 0 {
-		t.Fatalf("expected no terminal created, got %d", tm.localSessionsCreated)
 	}
 }
 

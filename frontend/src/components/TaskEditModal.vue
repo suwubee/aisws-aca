@@ -34,6 +34,15 @@
       </n-form-item>
 
       <template v-if="form.automation_mode === 'cli'">
+        <n-form-item label="服务器">
+          <n-select
+            v-model:value="form.server_id"
+            :options="serverStore.serverOptions"
+            :loading="serverStore.loading"
+            clearable
+            placeholder="请选择服务器（本地也需要添加为服务器记录）"
+          />
+        </n-form-item>
         <n-form-item label="工作目录">
           <n-input v-model:value="form.work_dir" placeholder="/path/to/project" />
         </n-form-item>
@@ -92,7 +101,7 @@
             :loading="serverStore.loading"
             multiple
             clearable
-            placeholder="空表示本地执行"
+            placeholder="请选择目标服务器（本地也需要添加为服务器记录）"
           />
         </n-form-item>
         <n-form-item label="工作目录">
@@ -138,7 +147,7 @@
             :loading="serverStore.loading"
             multiple
             clearable
-            placeholder="空表示本地执行"
+            placeholder="请选择目标服务器（本地也需要添加为服务器记录）"
           />
         </n-form-item>
         <n-form-item label="工作目录">
@@ -194,6 +203,7 @@ const form = reactive({
   title: '',
   description: '',
   priority: 1,
+  server_id: null as string | null,
   project_id: null as string | null,
   automation_mode: 'cli',
   target_server_ids: [] as string[],
@@ -234,6 +244,7 @@ function syncFormFromTask(task: Task | null) {
   form.description = task?.description ?? ''
   const priority = typeof task?.priority === 'number' ? task.priority : 1
   form.priority = Math.min(3, Math.max(0, priority))
+  form.server_id = task?.server_id ?? null
   form.project_id = task?.project_id ?? null
   form.target_server_ids = task?.target_server_ids ? [...task.target_server_ids] : []
   form.script = task?.script ?? ''
@@ -245,6 +256,10 @@ function syncFormFromTask(task: Task | null) {
   form.ai_prompt = task?.ai_prompt ?? ''
   form.ai_end_condition = task?.ai_end_condition ?? ''
   form.ai_error_handling = task?.ai_error_handling || 'pause'
+
+  if ((form.automation_mode === 'script' || form.automation_mode === 'agent') && form.target_server_ids.length === 0 && form.server_id) {
+    form.target_server_ids = [form.server_id]
+  }
 }
 
 watch(
@@ -257,6 +272,23 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  () => String(form.automation_mode || '').trim().toLowerCase(),
+  (mode) => {
+    if (mode === 'script' || mode === 'agent') {
+      if (form.target_server_ids.length === 0 && form.server_id) {
+        form.target_server_ids = [form.server_id]
+      }
+      return
+    }
+    if (mode === 'cli') {
+      if (!form.server_id && form.target_server_ids.length === 1) {
+        form.server_id = form.target_server_ids[0]
+      }
+    }
+  }
 )
 
 function close() {
@@ -282,6 +314,7 @@ async function save() {
       priority: form.priority,
       project_id: form.project_id,
       automation_mode: form.automation_mode,
+      server_id: form.automation_mode === 'cli' ? (form.server_id || '') : undefined,
       target_server_ids: (form.automation_mode === 'script' || form.automation_mode === 'agent') ? form.target_server_ids : undefined,
       script: form.automation_mode === 'script' ? form.script : undefined,
       work_dir: form.automation_mode === 'none' ? undefined : form.work_dir,

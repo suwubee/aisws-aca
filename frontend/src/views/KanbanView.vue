@@ -45,6 +45,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import { useProjectStore } from '@/stores/project'
@@ -54,6 +55,7 @@ import Kanban from '@/components/Kanban.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
 const message = useMessage()
+const router = useRouter()
 const taskStore = useTaskStore()
 const terminalStore = useTerminalStore()
 const projectStore = useProjectStore()
@@ -142,7 +144,17 @@ async function handleCreateTask() {
     message.warning('请输入任务标题')
     return
   }
+  const mode = String(newTask.automation_mode || '').trim().toLowerCase()
+  if (mode === 'cli' && !newTask.server_id) {
+    message.warning('请选择服务器（本地也需要添加为服务器记录）')
+    return
+  }
+  if ((mode === 'script' || mode === 'agent') && (!Array.isArray(newTask.target_server_ids) || newTask.target_server_ids.length === 0)) {
+    message.warning('请选择目标服务器（本地也需要添加为服务器记录）')
+    return
+  }
   try {
+    const shouldReturn = newTask.return_to_workbench
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
@@ -195,6 +207,10 @@ async function handleCreateTask() {
       auto_create_dir: true, auto_start: false, return_to_workbench: false,
       ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'
     })
+
+    if (shouldReturn) {
+      router.push('/')
+    }
   } catch (e: any) {
     message.error(e.message || '创建失败')
   }

@@ -33,6 +33,9 @@ func (e *AIWorkflowEngine) StartTaskAgent(ctx context.Context, task *model.Task)
 	}
 
 	targetServerIDs := collectTaskTargetServerIDs(task)
+	if len(targetServerIDs) == 0 {
+		return nil, errors.New("target server is required")
+	}
 	targetServers := loadTargetServers(targetServerIDs)
 
 	sysVars := map[string]any{

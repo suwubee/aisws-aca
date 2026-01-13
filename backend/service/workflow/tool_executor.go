@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -63,7 +62,7 @@ func (e *ToolExecutor) listServers() *ToolResult {
 	}
 
 	if len(servers) == 0 {
-		return &ToolResult{Success: true, Output: "没有可用的服务器。可以在本地执行命令。"}
+		return &ToolResult{Success: true, Output: "没有可用的服务器。请先在服务器页面添加服务器（本地也需要添加为一条服务器记录）。"}
 	}
 
 	var sb strings.Builder
@@ -120,6 +119,17 @@ func (e *ToolExecutor) createTask(args map[string]any, sessionCtx map[string]any
 	} else if sid, ok := sessionCtx["current_server_id"].(string); ok && sid != "" {
 		serverID = &sid
 	}
+
+	if serverID == nil || strings.TrimSpace(*serverID) == "" {
+		return &ToolResult{Success: false, Error: "server_id is required (local must be configured in Servers)"}
+	}
+
+	trimmedServerID := strings.TrimSpace(*serverID)
+	var server model.SSHServer
+	if err := model.DB.First(&server, "id = ?", trimmedServerID).Error; err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("server not found: %s", trimmedServerID)}
+	}
+	serverID = &trimmedServerID
 
 	task := &model.Task{
 		ID:            uuid.New().String(),
@@ -203,6 +213,13 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 		}
 	}
 
+	if strings.TrimSpace(serverID) == "" {
+		return &ToolResult{Success: false, Error: "server_id is required (local must be configured in Servers)"}
+	}
+	if e.sshManager == nil {
+		return &ToolResult{Success: false, Error: "ssh manager is not configured"}
+	}
+
 	// Build full command with work_dir
 	fullCmd := command
 	if workDir != "" {
@@ -210,20 +227,11 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 	}
 
 	// Execute on server or locally
-	if serverID != "" && e.sshManager != nil {
-		output, err := e.sshManager.ExecuteCommand(serverID, fullCmd)
-		if err != nil {
-			return &ToolResult{Success: false, Error: err.Error(), Output: output}
-		}
-		return &ToolResult{Success: true, Output: output}
-	}
-
-	// Local execution
-	out, err := exec.Command("sh", "-c", fullCmd).CombinedOutput()
+	output, err := e.sshManager.ExecuteCommand(serverID, fullCmd)
 	if err != nil {
-		return &ToolResult{Success: false, Error: err.Error(), Output: string(out)}
+		return &ToolResult{Success: false, Error: err.Error(), Output: output}
 	}
-	return &ToolResult{Success: true, Output: string(out)}
+	return &ToolResult{Success: true, Output: output}
 }
 
 func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[string]any) *ToolResult {
@@ -288,13 +296,11 @@ func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[s
 		fullCmd = fmt.Sprintf("cd %s && %s", workDir, command)
 	}
 
-	// 本地执行
-	if len(unique) == 0 || e.sshManager == nil {
-		out, err := exec.Command("sh", "-c", fullCmd).CombinedOutput()
-		if err != nil {
-			return &ToolResult{Success: false, Error: err.Error(), Output: string(out)}
-		}
-		return &ToolResult{Success: true, Output: string(out)}
+	if len(unique) == 0 {
+		return &ToolResult{Success: false, Error: "server_ids is required (local must be configured in Servers)"}
+	}
+	if e.sshManager == nil {
+		return &ToolResult{Success: false, Error: "ssh manager is not configured"}
 	}
 
 	type resultItem struct {

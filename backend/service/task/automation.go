@@ -224,6 +224,11 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		serverID = strings.TrimSpace(*task.ServerID)
 	}
 
+	if serverID == "" {
+		result.Error = "Server is required (local must be configured in Servers)"
+		return result, errors.New("server is required")
+	}
+
 	// 1. 处理工作目录
 	workDir := strings.TrimSpace(task.WorkDir)
 	if workDir == "" {
@@ -540,6 +545,11 @@ func (s *AutomationService) startScriptTask(task *model.Task) (*StartTaskResult,
 		}
 	}
 
+	if len(targetServerIDs) == 0 {
+		result.Error = "Target server is required (local must be configured in Servers)"
+		return result, errors.New("target server is required")
+	}
+
 	isRemote := len(targetServerIDs) > 0
 
 	workDir := strings.TrimSpace(task.WorkDir)
@@ -553,42 +563,30 @@ func (s *AutomationService) startScriptTask(task *model.Task) (*StartTaskResult,
 	}
 	result.WorkDir = workDir
 
-	// 创建终端会话（目标服务器为空时，执行本地脚本任务）
+	// 创建终端会话（脚本模式：每台目标服务器一个 SSH 终端）
 	targets := make([]scriptTarget, 0, maxInt(1, len(targetServerIDs)))
 	sessions := make([]taskTerminal, 0, maxInt(1, len(targetServerIDs)))
 
-	if len(targetServerIDs) == 0 {
+	for _, serverID := range targetServerIDs {
+		serverLabel := resolveServerLabel(serverID)
 		title := fmt.Sprintf("[script] %s", task.Title)
-		session, err := s.terminalManager.CreateSession(title, &task.ID)
+		if serverLabel != "" {
+			title = fmt.Sprintf("%s @ %s", title, serverLabel)
+		}
+
+		session, err := s.terminalManager.CreateSSHSession(serverID)
 		if err != nil {
-			result.Error = fmt.Sprintf("Failed to create terminal: %v", err)
+			result.Error = fmt.Sprintf("Failed to create SSH terminal: %v", err)
 			return result, err
 		}
-		result.Terminal = session
-		targets = append(targets, scriptTarget{TerminalID: session.ID(), Label: "local"})
-		sessions = append(sessions, session)
-	} else {
-		for _, serverID := range targetServerIDs {
-			serverLabel := resolveServerLabel(serverID)
-			title := fmt.Sprintf("[script] %s", task.Title)
-			if serverLabel != "" {
-				title = fmt.Sprintf("%s @ %s", title, serverLabel)
-			}
+		_ = s.terminalManager.LinkTask(session.ID(), &task.ID)
+		_ = s.terminalManager.RenameSession(session.ID(), title)
 
-			session, err := s.terminalManager.CreateSSHSession(serverID)
-			if err != nil {
-				result.Error = fmt.Sprintf("Failed to create SSH terminal: %v", err)
-				return result, err
-			}
-			_ = s.terminalManager.LinkTask(session.ID(), &task.ID)
-			_ = s.terminalManager.RenameSession(session.ID(), title)
-
-			if result.Terminal == nil {
-				result.Terminal = session
-			}
-			targets = append(targets, scriptTarget{TerminalID: session.ID(), Label: serverLabel})
-			sessions = append(sessions, session)
+		if result.Terminal == nil {
+			result.Terminal = session
 		}
+		targets = append(targets, scriptTarget{TerminalID: session.ID(), Label: serverLabel})
+		sessions = append(sessions, session)
 	}
 
 	result.TerminalIDs = make([]string, 0, len(targets))

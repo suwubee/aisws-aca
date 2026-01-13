@@ -142,14 +142,9 @@
         :disabled="creatingTask"
       />
       <template #action>
-        <n-space justify="space-between" align="center" style="width: 100%">
-          <n-checkbox v-model:checked="navigateToDashboardAfterCreate" :disabled="creatingTask">
-            创建后前往工作台
-          </n-checkbox>
-          <n-space>
-            <n-button :disabled="creatingTask" @click="closeCreateTask">取消</n-button>
-            <n-button type="primary" :loading="creatingTask" @click="handleCreateTask">创建</n-button>
-          </n-space>
+        <n-space justify="end" align="center" style="width: 100%">
+          <n-button :disabled="creatingTask" @click="closeCreateTask">取消</n-button>
+          <n-button type="primary" :loading="creatingTask" @click="handleCreateTask">创建</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -289,7 +284,6 @@ const deletingId = ref<string | null>(null)
 
 const showCreateTask = ref(false)
 const creatingTask = ref(false)
-const navigateToDashboardAfterCreate = ref(false)
 const creatingForServer = ref<SSHServer | null>(null)
 const newTask = reactive<TaskFormModel>({
   title: '',
@@ -616,7 +610,18 @@ async function handleCreateTask() {
     return
   }
 
+  const mode = String(newTask.automation_mode || '').trim().toLowerCase()
+  if (mode === 'cli' && !newTask.server_id) {
+    message.warning('请选择服务器（本地也需要添加为服务器记录）')
+    return
+  }
+  if ((mode === 'script' || mode === 'agent') && (!Array.isArray(newTask.target_server_ids) || newTask.target_server_ids.length === 0)) {
+    message.warning('请选择目标服务器（本地也需要添加为服务器记录）')
+    return
+  }
+
   creatingTask.value = true
+  const shouldReturn = newTask.return_to_workbench
   try {
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
@@ -683,7 +688,7 @@ async function handleCreateTask() {
     newTask.ai_end_condition = ''
     newTask.ai_error_handling = 'pause'
 
-    if (navigateToDashboardAfterCreate.value) {
+    if (shouldReturn) {
       router.push('/')
     }
   } catch (e: any) {

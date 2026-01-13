@@ -458,6 +458,16 @@ async function handleCreateTask() {
     message.warning('请输入任务标题')
     return
   }
+
+  const mode = String(newTask.automation_mode || '').trim().toLowerCase()
+  if (mode === 'cli' && !newTask.server_id) {
+    message.warning('请选择服务器（本地也需要添加为服务器记录）')
+    return
+  }
+  if ((mode === 'script' || mode === 'agent') && (!Array.isArray(newTask.target_server_ids) || newTask.target_server_ids.length === 0)) {
+    message.warning('请选择目标服务器（本地也需要添加为服务器记录）')
+    return
+  }
   try {
     const shouldReturn = newTask.return_to_workbench
     await taskStore.createAutomationTask({

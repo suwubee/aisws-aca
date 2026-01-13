@@ -81,7 +81,7 @@ func TestTaskController_CreateTask_WithAndWithoutServer(t *testing.T) {
 		t.Fatalf("expected server_id %q, got %v", server.ID, createWithServerBody.Item.ServerID)
 	}
 
-	createWithoutServerReq := httptest.NewRequest("POST", "/api/tasks", bytes.NewBufferString(`{"title":"task-2"}`))
+	createWithoutServerReq := httptest.NewRequest("POST", "/api/tasks", bytes.NewBufferString(`{"title":"task-2","automation_mode":"none"}`))
 	createWithoutServerReq.Header.Set("Content-Type", "application/json")
 	createWithoutServerResp, err := app.Test(createWithoutServerReq)
 	if err != nil {
@@ -287,7 +287,7 @@ func TestTaskController_CreateTask_WithProjectInfo(t *testing.T) {
 		t.Fatalf("create project failed: %v", err)
 	}
 
-	req := httptest.NewRequest("POST", "/api/tasks", bytes.NewBufferString(`{"title":"task-1","project_id":"p-1"}`))
+	req := httptest.NewRequest("POST", "/api/tasks", bytes.NewBufferString(`{"title":"task-1","project_id":"p-1","automation_mode":"none"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)
 	if err != nil {

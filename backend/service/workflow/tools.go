@@ -80,20 +80,20 @@ func GetAvailableTools() []ToolDefinition {
 		},
 		{
 			Name:        "execute_command",
-			Description: "在终端中执行命令",
+			Description: "在服务器上执行命令（不允许隐式本地执行；必须显式选择服务器，本地也需要作为服务器记录配置）",
 			Parameters: map[string]ToolParam{
 				"command":   {Type: "string", Description: "要执行的命令"},
-				"server_id": {Type: "string", Description: "目标服务器ID（可选，不填则本地执行）"},
+				"server_id": {Type: "string", Description: "目标服务器ID（可选，不填则使用当前选择的服务器）"},
 				"work_dir":  {Type: "string", Description: "工作目录（可选）"},
 			},
 			Required: []string{"command"},
 		},
 		{
 			Name:        "batch_execute_command",
-			Description: "在多台服务器上批量执行同一条命令（可用于巡检/批量运维）；server_ids 为空时表示本地执行",
+			Description: "在多台服务器上批量执行同一条命令（可用于巡检/批量运维）；不允许隐式本地执行",
 			Parameters: map[string]ToolParam{
 				"command":    {Type: "string", Description: "要执行的命令"},
-				"server_ids": {Type: "array", Description: "目标服务器ID列表（可选）"},
+				"server_ids": {Type: "array", Description: "目标服务器ID列表（可选，不填则使用当前任务上下文）"},
 				"work_dir":   {Type: "string", Description: "工作目录（可选）"},
 			},
 			Required: []string{"command"},
