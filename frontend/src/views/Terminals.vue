@@ -54,13 +54,23 @@
                   <template #header>
                     <div class="mobile-terminal-card-header">
                       <n-text strong class="mobile-terminal-title">{{ t.title || t.metadata?.title || 'Terminal' }}</n-text>
-                      <n-tag
-                        size="small"
-                        :bordered="false"
-                        :type="statusTagType(String(t.status))"
-                      >
-                        {{ statusLabel(String(t.status)) }}
-                      </n-tag>
+                      <n-space :size="6" align="center">
+                        <n-tag
+                          size="small"
+                          :bordered="false"
+                          :type="statusTagType(String(t.status))"
+                        >
+                          {{ statusLabel(String(t.status)) }}
+                        </n-tag>
+                        <n-tag
+                          v-if="t.hidden"
+                          size="small"
+                          :bordered="false"
+                          type="warning"
+                        >
+                          已隐藏
+                        </n-tag>
+                      </n-space>
                     </div>
                   </template>
 
@@ -83,6 +93,14 @@
 
                   <template #footer>
                     <n-space justify="end" :size="6" wrap>
+                      <n-button
+                        size="small"
+                        :disabled="isDemoMode"
+                        :loading="visibilityId === t.id"
+                        @click="() => { void toggleVisibility(t) }"
+                      >
+                        {{ t.hidden ? '显示' : '隐藏' }}
+                      </n-button>
                       <n-button
                         size="small"
                         type="primary"
@@ -180,6 +198,7 @@ const isDemoMode = computed(() => authStore.isDemoMode)
 const loading = ref(false)
 const terminals = ref<TerminalSession[]>([])
 const closingId = ref<string | null>(null)
+const visibilityId = ref<string | null>(null)
 
 const keyword = ref('')
 const statusFilter = ref<string | null>(null)
@@ -301,13 +320,40 @@ async function closeTerminal(row: TerminalSession) {
   }
 }
 
+async function toggleVisibility(row: TerminalSession) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (visibilityId.value) return
+
+  visibilityId.value = row.id
+  const nextHidden = !Boolean(row.hidden)
+  try {
+    await terminalApi.hide(row.id, nextHidden)
+    message.success(nextHidden ? '已从工作台隐藏' : '已显示到工作台')
+    await fetchTerminals()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '更新终端状态失败')
+  } finally {
+    visibilityId.value = null
+  }
+}
+
 const columns: DataTableColumns<TerminalSession> = [
   {
     title: '标题',
     key: 'title',
     width: 180,
     ellipsis: { tooltip: true },
-    render: (row) => row.title || row.metadata?.title || 'Terminal'
+    render: (row) => {
+      const title = row.title || row.metadata?.title || 'Terminal'
+      if (!row.hidden) return title
+      return h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } }, [
+        h('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, title),
+        h(NTag, { size: 'small', bordered: false, type: 'warning' }, () => '已隐藏')
+      ])
+    }
   },
   {
     title: '状态',
@@ -342,8 +388,15 @@ const columns: DataTableColumns<TerminalSession> = [
   {
     title: '操作',
     key: 'actions',
-    width: 190,
+    width: 260,
     render: (row) => h(NSpace, { size: 'small' }, () => [
+      h(NButton, {
+        size: 'tiny',
+        quaternary: true,
+        disabled: isDemoMode.value,
+        loading: visibilityId.value === row.id,
+        onClick: () => { void toggleVisibility(row) }
+      }, () => row.hidden ? '显示' : '隐藏'),
       h(NButton, {
         size: 'tiny',
         type: 'primary',
@@ -377,7 +430,7 @@ const columns: DataTableColumns<TerminalSession> = [
 async function fetchTerminals() {
   loading.value = true
   try {
-    const { data } = await terminalApi.list()
+    const { data } = await terminalApi.list({ show_hidden: true })
     terminals.value = data.items || []
   } catch (e: any) {
     message.error(e.response?.data?.error || '加载终端列表失败')

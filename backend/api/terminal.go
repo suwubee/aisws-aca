@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 
 	"github.com/ai-coding-assistant/config"
@@ -12,6 +13,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TerminalController struct {
@@ -37,6 +40,7 @@ type TerminalResponse struct {
 	Title     string                    `json:"title"`
 	TaskID    *string                   `json:"task_id"`
 	Status    string                    `json:"status"`
+	Hidden    bool                      `json:"hidden"`
 	PID       int                       `json:"pid"`
 	Metadata  *terminal.SessionMetadata `json:"metadata"`
 	CreatedAt int64                     `json:"created_at"`
@@ -61,6 +65,7 @@ func (ctrl *TerminalController) CreateTerminal(c *fiber.Ctx) error {
 			Title:     session.Title(),
 			TaskID:    session.TaskID(),
 			Status:    session.Status(),
+			Hidden:    false,
 			PID:       session.Metadata().PID,
 			Metadata:  session.Metadata(),
 			CreatedAt: session.CreatedAt().Unix(),
@@ -79,36 +84,38 @@ func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
 
 	sessions := ctrl.manager.ListSessions(taskIDPtr)
 
-	// 获取隐藏状态
-	var hiddenIDs []string
-	if !showHidden {
-		var hiddenSessions []model.TerminalSession
-		model.DB.Where("hidden = ?", true).Select("id").Find(&hiddenSessions)
-		for _, s := range hiddenSessions {
-			hiddenIDs = append(hiddenIDs, s.ID)
+	ids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		ids = append(ids, s.ID())
+	}
+
+	type terminalHiddenRow struct {
+		ID     string `gorm:"column:id"`
+		Hidden bool   `gorm:"column:hidden"`
+	}
+	hiddenByID := map[string]bool{}
+	if len(ids) > 0 {
+		var rows []terminalHiddenRow
+		if err := model.DB.Model(&model.TerminalSession{}).Select("id", "hidden").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query terminal visibility"})
+		}
+		for _, r := range rows {
+			hiddenByID[r.ID] = r.Hidden
 		}
 	}
 
 	items := make([]TerminalResponse, 0, len(sessions))
 	for _, s := range sessions {
-		// 过滤隐藏的终端
-		if !showHidden {
-			hidden := false
-			for _, hid := range hiddenIDs {
-				if s.ID() == hid {
-					hidden = true
-					break
-				}
-			}
-			if hidden {
-				continue
-			}
+		hidden := hiddenByID[s.ID()]
+		if hidden && !showHidden {
+			continue
 		}
 		items = append(items, TerminalResponse{
 			ID:        s.ID(),
 			Title:     s.Title(),
 			TaskID:    s.TaskID(),
 			Status:    s.Status(),
+			Hidden:    hidden,
 			PID:       s.Metadata().PID,
 			Metadata:  s.Metadata(),
 			CreatedAt: s.CreatedAt().Unix(),
@@ -126,12 +133,19 @@ func (ctrl *TerminalController) GetTerminal(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
 	}
 
+	hidden := false
+	var dbSession model.TerminalSession
+	if err := model.DB.Select("hidden").First(&dbSession, "id = ?", id).Error; err == nil {
+		hidden = dbSession.Hidden
+	}
+
 	return c.JSON(fiber.Map{
 		"item": TerminalResponse{
 			ID:        session.ID(),
 			Title:     session.Title(),
 			TaskID:    session.TaskID(),
 			Status:    session.Status(),
+			Hidden:    hidden,
 			PID:       session.Metadata().PID,
 			Metadata:  session.Metadata(),
 			CreatedAt: session.CreatedAt().Unix(),
@@ -157,6 +171,35 @@ func (ctrl *TerminalController) HideTerminal(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
+
+	var existing model.TerminalSession
+	err := model.DB.Select("id").First(&existing, "id = ?", id).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query terminal"})
+	}
+
+	// 终端记录可能因历史原因缺失；若运行中的会话存在，则补齐记录并写入隐藏状态
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if ctrl.manager == nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+		}
+		session := ctrl.manager.GetSession(id)
+		if session == nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+		}
+
+		dbSession := session.ToDBModel()
+		dbSession.Hidden = req.Hidden
+		if err := model.DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{"hidden": req.Hidden}),
+		}).Create(dbSession).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to update terminal"})
+		}
+
+		return c.JSON(fiber.Map{"message": "Terminal updated", "hidden": req.Hidden})
+	}
+
 	if err := model.DB.Model(&model.TerminalSession{}).Where("id = ?", id).Update("hidden", req.Hidden).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update terminal"})
 	}

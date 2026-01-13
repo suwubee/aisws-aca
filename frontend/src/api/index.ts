@@ -99,8 +99,8 @@ export const commentApi = {
 
 // Terminal API
 export const terminalApi = {
-  list: (taskId?: string) =>
-    api.get('/terminals', { params: taskId ? { task_id: taskId } : {} }),
+  list: (params?: { task_id?: string; show_hidden?: boolean }) =>
+    api.get('/terminals', { params: params || {} }),
   get: (id: string) => api.get(`/terminals/${id}`),
   create: (data?: CreateTerminalRequest) => api.post('/terminals', data || {}),
   close: (id: string) => api.post(`/terminals/${id}/close`),

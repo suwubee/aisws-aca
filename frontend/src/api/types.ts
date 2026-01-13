@@ -277,6 +277,7 @@ export interface Terminal {
   title: string
   task_id: string | null
   status: string
+  hidden?: boolean
   pid: number
   metadata: TerminalSessionMetadata
   created_at: UnixTimestampSeconds
