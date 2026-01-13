@@ -104,6 +104,7 @@ export const terminalApi = {
   get: (id: string) => api.get(`/terminals/${id}`),
   create: (data?: CreateTerminalRequest) => api.post('/terminals', data || {}),
   close: (id: string) => api.post(`/terminals/${id}/close`),
+  hide: (id: string, hidden: boolean) => api.post(`/terminals/${id}/hide`, { hidden }),
   rename: (id: string, title: string) =>
     api.post(`/terminals/${id}/rename`, { title }),
   linkTask: (id: string, taskId: string | null) =>

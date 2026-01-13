@@ -32,11 +32,14 @@ type CreateTaskRequest struct {
 	ServerID    *string `json:"server_id"`
 	ProjectID   *string `json:"project_id"`
 	// 自动化配置
-	WorkDir       string `json:"work_dir"`
-	CLIType       string `json:"cli_type"`
-	InitialPrompt string `json:"initial_prompt"`
-	AutoStart     bool   `json:"auto_start"`
-	AutoCreateDir *bool  `json:"auto_create_dir"`
+	AutomationMode  string   `json:"automation_mode"`
+	TargetServerIDs []string `json:"target_server_ids"`
+	Script          string   `json:"script"`
+	WorkDir         string   `json:"work_dir"`
+	CLIType         string   `json:"cli_type"`
+	InitialPrompt   string   `json:"initial_prompt"`
+	AutoStart       bool     `json:"auto_start"`
+	AutoCreateDir   *bool    `json:"auto_create_dir"`
 	// AI托管配置
 	AIManaged       bool   `json:"ai_managed"`
 	AIPrompt        string `json:"ai_prompt"`
@@ -52,11 +55,14 @@ type UpdateTaskRequest struct {
 	RuleSetID   *string `json:"rule_set_id"`
 	ProjectID   *string `json:"project_id"`
 	// 自动化配置
-	WorkDir       *string `json:"work_dir"`
-	CLIType       *string `json:"cli_type"`
-	InitialPrompt *string `json:"initial_prompt"`
-	AutoStart     *bool   `json:"auto_start"`
-	AutoCreateDir *bool   `json:"auto_create_dir"`
+	AutomationMode  *string   `json:"automation_mode"`
+	TargetServerIDs *[]string `json:"target_server_ids"`
+	Script          *string   `json:"script"`
+	WorkDir         *string   `json:"work_dir"`
+	CLIType         *string   `json:"cli_type"`
+	InitialPrompt   *string   `json:"initial_prompt"`
+	AutoStart       *bool     `json:"auto_start"`
+	AutoCreateDir   *bool     `json:"auto_create_dir"`
 	// AI托管配置
 	AIManaged       *bool   `json:"ai_managed"`
 	AIPrompt        *string `json:"ai_prompt"`
@@ -110,6 +116,21 @@ func normalizeTaskStatus(status string) (string, bool) {
 	return s, ok
 }
 
+var allowedAutomationModes = map[string]struct{}{
+	"none":   {},
+	"cli":    {},
+	"script": {},
+}
+
+func normalizeAutomationMode(value string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(value))
+	if s == "" {
+		return "cli", true
+	}
+	_, ok := allowedAutomationModes[s]
+	return s, ok
+}
+
 var allowedCLITypes = map[string]struct{}{
 	"claude": {},
 	"codex":  {},
@@ -157,16 +178,60 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
 	}
 
-	cliType := req.CLIType
-	if normalized, ok := normalizeCLIType(cliType); ok {
-		cliType = normalized
-	} else {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid cli_type"})
+	automationMode, ok := normalizeAutomationMode(req.AutomationMode)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid automation_mode"})
+	}
+
+	cliType := "claude"
+	if automationMode == "cli" {
+		if normalized, ok := normalizeCLIType(req.CLIType); ok {
+			cliType = normalized
+		} else {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid cli_type"})
+		}
+	} else if strings.TrimSpace(req.CLIType) != "" {
+		if normalized, ok := normalizeCLIType(req.CLIType); ok {
+			cliType = normalized
+		}
 	}
 
 	autoCreateDir := true
 	if req.AutoCreateDir != nil {
 		autoCreateDir = *req.AutoCreateDir
+	}
+
+	targetServerIDs := make([]string, 0, len(req.TargetServerIDs))
+	if len(req.TargetServerIDs) > 0 {
+		seen := map[string]struct{}{}
+		for _, raw := range req.TargetServerIDs {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			targetServerIDs = append(targetServerIDs, id)
+		}
+
+		if len(targetServerIDs) > 0 {
+			var servers []model.SSHServer
+			if err := model.DB.Select("id").Where("id IN ?", targetServerIDs).Find(&servers).Error; err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query servers"})
+			}
+
+			found := map[string]struct{}{}
+			for _, s := range servers {
+				found[s.ID] = struct{}{}
+			}
+			for _, sid := range targetServerIDs {
+				if _, ok := found[sid]; !ok {
+					return c.Status(400).JSON(fiber.Map{"error": "Server not found"})
+				}
+			}
+		}
 	}
 
 	var serverID *string
@@ -182,6 +247,11 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 			}
 			serverID = &trimmed
 		}
+	}
+
+	if serverID == nil && len(targetServerIDs) > 0 {
+		first := targetServerIDs[0]
+		serverID = &first
 	}
 
 	var projectID *string
@@ -200,20 +270,23 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 	}
 
 	task := model.Task{
-		ID:            uuid.New().String(),
-		Title:         req.Title,
-		Description:   req.Description,
-		Status:        status,
-		Priority:      req.Priority,
-		RuleSetID:     req.RuleSetID,
-		ServerID:      serverID,
-		ProjectID:     projectID,
-		OrderIndex:    float64(time.Now().UnixNano()),
-		WorkDir:       req.WorkDir,
-		CLIType:       cliType,
-		InitialPrompt: req.InitialPrompt,
-		AutoStart:     req.AutoStart,
-		AutoCreateDir: autoCreateDir,
+		ID:              uuid.New().String(),
+		Title:           req.Title,
+		Description:     req.Description,
+		Status:          status,
+		Priority:        req.Priority,
+		RuleSetID:       req.RuleSetID,
+		ServerID:        serverID,
+		ProjectID:       projectID,
+		OrderIndex:      float64(time.Now().UnixNano()),
+		AutomationMode:  automationMode,
+		TargetServerIDs: model.StringArray(targetServerIDs),
+		Script:          req.Script,
+		WorkDir:         req.WorkDir,
+		CLIType:         cliType,
+		InitialPrompt:   req.InitialPrompt,
+		AutoStart:       req.AutoStart,
+		AutoCreateDir:   autoCreateDir,
 		// AI托管配置
 		AIManaged:       req.AIManaged,
 		AIPrompt:        req.AIPrompt,
@@ -495,15 +568,66 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 			updates["project_id"] = trimmed
 		}
 	}
+
+	nextAutomationMode := strings.TrimSpace(task.AutomationMode)
+	if nextAutomationMode == "" {
+		nextAutomationMode = "cli"
+	}
+	if req.AutomationMode != nil {
+		normalized, ok := normalizeAutomationMode(*req.AutomationMode)
+		if !ok {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid automation_mode"})
+		}
+		nextAutomationMode = normalized
+		updates["automation_mode"] = normalized
+	}
 	// 自动化配置字段
+	if req.TargetServerIDs != nil {
+		targetServerIDs := make([]string, 0, len(*req.TargetServerIDs))
+		seen := map[string]struct{}{}
+		for _, raw := range *req.TargetServerIDs {
+			sid := strings.TrimSpace(raw)
+			if sid == "" {
+				continue
+			}
+			if _, ok := seen[sid]; ok {
+				continue
+			}
+			seen[sid] = struct{}{}
+			targetServerIDs = append(targetServerIDs, sid)
+		}
+
+		if len(targetServerIDs) > 0 {
+			var servers []model.SSHServer
+			if err := model.DB.Select("id").Where("id IN ?", targetServerIDs).Find(&servers).Error; err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to query servers"})
+			}
+			found := map[string]struct{}{}
+			for _, s := range servers {
+				found[s.ID] = struct{}{}
+			}
+			for _, sid := range targetServerIDs {
+				if _, ok := found[sid]; !ok {
+					return c.Status(400).JSON(fiber.Map{"error": "Server not found"})
+				}
+			}
+		}
+
+		updates["target_server_ids"] = model.StringArray(targetServerIDs)
+	}
+	if req.Script != nil {
+		updates["script"] = *req.Script
+	}
 	if req.WorkDir != nil {
 		updates["work_dir"] = *req.WorkDir
 	}
 	if req.CLIType != nil {
-		if normalized, ok := normalizeCLIType(*req.CLIType); ok {
-			updates["cli_type"] = normalized
-		} else {
-			return c.Status(400).JSON(fiber.Map{"error": "Invalid cli_type"})
+		if nextAutomationMode == "cli" {
+			if normalized, ok := normalizeCLIType(*req.CLIType); ok {
+				updates["cli_type"] = normalized
+			} else {
+				return c.Status(400).JSON(fiber.Map{"error": "Invalid cli_type"})
+			}
 		}
 	}
 	if req.InitialPrompt != nil {
@@ -640,19 +764,26 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 
 	// 如果任务已经在进行中，返回现有终端信息而不是错误
 	if taskModel.Status == "in_progress" {
-		var terminal model.TerminalSession
-		if err := model.DB.Where("task_id = ?", id).Order("created_at desc").First(&terminal).Error; err == nil {
-				return c.JSON(fiber.Map{
-					"message":     "Task already running",
-					"task":        taskModel,
-					"terminal_id": terminal.ID,
-					"work_dir":    taskModel.WorkDir,
-					"cli_started": true,
-					"needs_user_action": false,
-					"user_action_hint":  "",
-				})
+		var terminals []model.TerminalSession
+		_ = model.DB.Where("task_id = ?", id).Order("created_at desc").Find(&terminals).Error
+		if len(terminals) > 0 {
+			terminalIDs := make([]string, 0, len(terminals))
+			for _, t := range terminals {
+				terminalIDs = append(terminalIDs, t.ID)
 			}
+			cliStarted := strings.ToLower(strings.TrimSpace(taskModel.AutomationMode)) != "script"
+			return c.JSON(fiber.Map{
+				"message":           "Task already running",
+				"task":              taskModel,
+				"terminal_id":       terminals[0].ID,
+				"terminal_ids":      terminalIDs,
+				"work_dir":          taskModel.WorkDir,
+				"cli_started":       cliStarted,
+				"needs_user_action": false,
+				"user_action_hint":  "",
+			})
 		}
+	}
 
 	result, err := ctrl.automationService.StartTask(&taskModel)
 	if err != nil {
@@ -662,16 +793,26 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		})
 	}
 
-		return c.JSON(fiber.Map{
-			"message":           "Task started",
-			"task":              result.Task,
-			"terminal_id":       result.Terminal.ID(),
-			"work_dir":          result.WorkDir,
-			"cli_started":       result.CLIStarted,
-			"needs_user_action": result.NeedsUserAction,
-			"user_action_hint":  result.UserActionHint,
-		})
+	terminalIDs := result.TerminalIDs
+	terminalID := ""
+	if len(terminalIDs) > 0 {
+		terminalID = terminalIDs[0]
+	} else if result.Terminal != nil {
+		terminalID = result.Terminal.ID()
+		terminalIDs = []string{terminalID}
 	}
+
+	return c.JSON(fiber.Map{
+		"message":           "Task started",
+		"task":              result.Task,
+		"terminal_id":       terminalID,
+		"terminal_ids":      terminalIDs,
+		"work_dir":          result.WorkDir,
+		"cli_started":       result.CLIStarted,
+		"needs_user_action": result.NeedsUserAction,
+		"user_action_hint":  result.UserActionHint,
+	})
+}
 
 // GetTaskTerminals 获取任务关联的终端列表
 func (ctrl *TaskController) GetTaskTerminals(c *fiber.Ctx) error {

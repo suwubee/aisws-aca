@@ -26,7 +26,7 @@
             <div class="task-info">
               <div class="task-title">{{ task.title }}</div>
               <div class="task-meta">
-                <span class="cli-type">{{ task.cli_type || 'claude' }}</span>
+                <span class="cli-type">{{ formatMode(task) }}</span>
                 <span class="task-time">{{ formatTime(task.created_at) }}</span>
               </div>
             </div>
@@ -79,6 +79,13 @@ function formatTime(dateStr: string) {
   if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
   return `${Math.floor(diff / 86400000)}天前`
+}
+
+function formatMode(task: any) {
+  const mode = String(task?.automation_mode || '').trim().toLowerCase()
+  if (mode === 'script') return '脚本'
+  if (mode === 'none') return '仅记录'
+  return task?.cli_type || 'cli'
 }
 
 let refreshInterval: number | null = null

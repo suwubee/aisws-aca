@@ -120,6 +120,9 @@ export interface Task {
   completed_at: ISODateTimeString | null
 
   // 自动化任务配置
+  automation_mode?: string
+  target_server_ids?: string[]
+  script?: string
   work_dir: string
   cli_type: string
   initial_prompt: string
@@ -166,6 +169,9 @@ export interface CreateTaskRequest {
   rule_set_id?: string | null
   server_id?: string | null
   project_id?: string | null
+  automation_mode?: string
+  target_server_ids?: string[]
+  script?: string
   work_dir?: string
   cli_type?: string
   initial_prompt?: string
@@ -186,6 +192,9 @@ export interface UpdateTaskRequest {
   rule_set_id?: string | null
   server_id?: string | null
   project_id?: string | null
+  automation_mode?: string
+  target_server_ids?: string[]
+  script?: string
   work_dir?: string
   cli_type?: string
   initial_prompt?: string
@@ -207,6 +216,7 @@ export interface StartTaskResponse {
   message: string
   task: Task
   terminal_id: string
+  terminal_ids?: string[]
   work_dir: string
   cli_started: boolean
   needs_user_action?: boolean

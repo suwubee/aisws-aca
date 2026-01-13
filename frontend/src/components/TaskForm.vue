@@ -23,18 +23,37 @@
         </n-form-item>
       </n-gi>
       <n-gi>
-        <n-form-item label="服务器">
+        <n-form-item label="方式">
           <n-select
-            v-model:value="model.server_id"
-            :options="serverStore.serverOptions"
-            :loading="serverStore.loading"
-            clearable
-            placeholder="本地"
+            v-model:value="model.automation_mode"
+            :options="automationModeOptions"
             :disabled="disabled"
           />
         </n-form-item>
       </n-gi>
     </n-grid>
+
+    <n-form-item v-if="model.automation_mode !== 'script'" label="服务器">
+      <n-select
+        v-model:value="model.server_id"
+        :options="serverStore.serverOptions"
+        :loading="serverStore.loading"
+        clearable
+        placeholder="本地"
+        :disabled="disabled"
+      />
+    </n-form-item>
+    <n-form-item v-else label="目标服务器">
+      <n-select
+        v-model:value="model.target_server_ids"
+        :options="serverStore.serverOptions"
+        :loading="serverStore.loading"
+        clearable
+        multiple
+        placeholder="空表示本地执行"
+        :disabled="disabled"
+      />
+    </n-form-item>
 
     <n-form-item label="项目">
       <n-select
@@ -48,44 +67,76 @@
       />
     </n-form-item>
 
-    <n-divider style="margin: 8px 0">自动化配置</n-divider>
+    <n-divider v-if="model.automation_mode !== 'none'" style="margin: 8px 0">自动化配置</n-divider>
 
-    <n-grid :cols="2" :x-gap="12">
-      <n-gi>
-        <n-form-item label="工作目录">
-          <n-input v-model:value="model.work_dir" placeholder="/path/to/project" :disabled="disabled" />
-        </n-form-item>
-      </n-gi>
-      <n-gi>
-        <n-form-item label="CLI">
-          <n-select
-            v-model:value="model.cli_type"
-            :options="cliOptions"
-            :disabled="disabled"
-          />
-        </n-form-item>
-      </n-gi>
-    </n-grid>
-    <n-form-item label="初始提示">
-      <n-input
-        v-model:value="model.initial_prompt"
-        type="textarea"
-        :rows="2"
-        placeholder="启动后自动输入的提示内容"
-        :disabled="disabled"
-      />
-    </n-form-item>
-    <n-form-item label="选项">
-      <n-space size="small">
-        <n-checkbox v-model:checked="model.auto_create_dir" :disabled="disabled">自动创建目录</n-checkbox>
-        <n-checkbox v-model:checked="model.auto_start" :disabled="disabled">自动启动</n-checkbox>
-        <n-checkbox v-model:checked="model.ai_managed" :disabled="disabled">AI全程托管</n-checkbox>
-        <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
-      </n-space>
-    </n-form-item>
+    <template v-if="model.automation_mode === 'cli'">
+      <n-grid :cols="2" :x-gap="12">
+        <n-gi>
+          <n-form-item label="工作目录">
+            <n-input v-model:value="model.work_dir" placeholder="/path/to/project" :disabled="disabled" />
+          </n-form-item>
+        </n-gi>
+        <n-gi>
+          <n-form-item label="CLI">
+            <n-select
+              v-model:value="model.cli_type"
+              :options="cliOptions"
+              :disabled="disabled"
+            />
+          </n-form-item>
+        </n-gi>
+      </n-grid>
+      <n-form-item label="初始提示">
+        <n-input
+          v-model:value="model.initial_prompt"
+          type="textarea"
+          :rows="2"
+          placeholder="启动后自动输入的提示内容"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="选项">
+        <n-space size="small">
+          <n-checkbox v-model:checked="model.auto_create_dir" :disabled="disabled">自动创建目录</n-checkbox>
+          <n-checkbox v-model:checked="model.auto_start" :disabled="disabled">自动启动</n-checkbox>
+          <n-checkbox v-model:checked="model.ai_managed" :disabled="disabled">AI全程托管</n-checkbox>
+          <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
+        </n-space>
+      </n-form-item>
+    </template>
+
+    <template v-else-if="model.automation_mode === 'script'">
+      <n-form-item label="工作目录">
+        <n-input v-model:value="model.work_dir" placeholder="~/（可选，默认自动分配）" :disabled="disabled" />
+      </n-form-item>
+      <n-form-item label="脚本">
+        <n-input
+          v-model:value="model.script"
+          type="textarea"
+          :rows="8"
+          placeholder="支持多行脚本，适合 runbook/批量运维场景"
+          :disabled="disabled"
+        />
+      </n-form-item>
+      <n-form-item label="选项">
+        <n-space size="small">
+          <n-checkbox v-model:checked="model.auto_create_dir" :disabled="disabled">自动创建目录</n-checkbox>
+          <n-checkbox v-model:checked="model.auto_start" :disabled="disabled">自动启动</n-checkbox>
+          <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
+        </n-space>
+      </n-form-item>
+    </template>
+
+    <template v-else>
+      <n-form-item label="选项">
+        <n-space size="small">
+          <n-checkbox v-model:checked="model.return_to_workbench" :disabled="disabled">返回工作台</n-checkbox>
+        </n-space>
+      </n-form-item>
+    </template>
 
     <!-- AI托管配置 -->
-    <template v-if="model.ai_managed">
+    <template v-if="model.automation_mode === 'cli' && model.ai_managed">
       <n-divider style="margin: 8px 0">AI托管配置</n-divider>
       <n-form-item label="托管提示">
         <n-input
@@ -125,6 +176,9 @@ export interface TaskFormModel {
   priority: number
   server_id: string | null
   project_id: string | null
+  automation_mode: string
+  target_server_ids: string[]
+  script: string
   work_dir: string
   cli_type: string
   initial_prompt: string
@@ -145,6 +199,12 @@ defineProps<{
 
 const serverStore = useServerStore()
 const projectStore = useProjectStore()
+
+const automationModeOptions = [
+  { label: '仅记录', value: 'none' },
+  { label: 'AI CLI', value: 'cli' },
+  { label: '脚本 / Runbook', value: 'script' }
+]
 
 const cliOptions = [
   { label: 'Claude Code', value: 'claude' },

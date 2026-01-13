@@ -359,9 +359,9 @@ async function confirmCreateTerminal() {
   }
 }
 
-function hideTerminal(id: string) {
+async function hideTerminal(id: string) {
   try {
-    terminalStore.hideTerminal(id)
+    await terminalStore.hideTerminal(id)
     message.success('终端已隐藏')
   } catch (error) {
     message.error('隐藏终端失败')

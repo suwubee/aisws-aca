@@ -7,7 +7,7 @@
       <n-text strong style="font-size: 18px">任务详情</n-text>
       <div class="header-actions">
         <!-- 待处理状态：显示启动按钮 -->
-        <n-button v-if="taskStatus === 'todo' && task?.work_dir" type="primary" :disabled="isDemoMode" @click="handleStartTask">
+        <n-button v-if="taskStatus === 'todo' && canStartTask" type="primary" :disabled="isDemoMode" @click="handleStartTask">
           ▶ 启动任务
         </n-button>
         <!-- 进行中状态：显示终端和终止按钮 -->
@@ -58,23 +58,47 @@
         </n-card>
 
         <!-- 自动化配置 -->
-        <n-card v-if="task.work_dir || task.cli_type" title="自动化配置" size="small">
+        <n-card v-if="automationMode !== 'none'" title="自动化配置" size="small">
           <n-descriptions :column="2" label-placement="left">
+            <n-descriptions-item label="方式">
+              <n-tag type="info">{{ automationModeLabel }}</n-tag>
+            </n-descriptions-item>
             <n-descriptions-item label="工作目录">
               <n-text code>{{ task.work_dir || '-' }}</n-text>
             </n-descriptions-item>
-            <n-descriptions-item label="CLI 类型">
-              <n-tag type="info">{{ task.cli_type || 'claude' }}</n-tag>
-            </n-descriptions-item>
-            <n-descriptions-item label="自动创建目录">
-              {{ task.auto_create_dir ? '是' : '否' }}
-            </n-descriptions-item>
-            <n-descriptions-item label="自动启动">
-              {{ task.auto_start ? '是' : '否' }}
-            </n-descriptions-item>
-            <n-descriptions-item v-if="task.initial_prompt" label="初始提示" :span="2">
-              <n-text code style="white-space: pre-wrap">{{ task.initial_prompt }}</n-text>
-            </n-descriptions-item>
+
+            <template v-if="automationMode === 'cli'">
+              <n-descriptions-item label="CLI 类型">
+                <n-tag type="info">{{ task.cli_type || 'claude' }}</n-tag>
+              </n-descriptions-item>
+              <n-descriptions-item label="自动创建目录">
+                {{ task.auto_create_dir ? '是' : '否' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="自动启动">
+                {{ task.auto_start ? '是' : '否' }}
+              </n-descriptions-item>
+              <n-descriptions-item v-if="task.initial_prompt" label="初始提示" :span="2">
+                <n-text code style="white-space: pre-wrap">{{ task.initial_prompt }}</n-text>
+              </n-descriptions-item>
+            </template>
+
+            <template v-else-if="automationMode === 'script'">
+              <n-descriptions-item label="目标服务器">
+                <n-tag v-if="(task.target_server_ids?.length || 0) > 0" type="info">
+                  {{ task.target_server_ids?.length }}台
+                </n-tag>
+                <span v-else>本地</span>
+              </n-descriptions-item>
+              <n-descriptions-item label="自动创建目录">
+                {{ task.auto_create_dir ? '是' : '否' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="自动启动">
+                {{ task.auto_start ? '是' : '否' }}
+              </n-descriptions-item>
+              <n-descriptions-item v-if="task.script" label="脚本" :span="2">
+                <n-text code style="white-space: pre-wrap">{{ task.script }}</n-text>
+              </n-descriptions-item>
+            </template>
           </n-descriptions>
         </n-card>
 
@@ -210,12 +234,40 @@ const priorityType = computed(() => {
   return types[task.value?.priority || 0]
 })
 
+const automationMode = computed(() => {
+  const raw = String(task.value?.automation_mode || '').trim().toLowerCase()
+  return raw || 'cli'
+})
+
+const automationModeLabel = computed(() => {
+  if (automationMode.value === 'script') return '脚本'
+  if (automationMode.value === 'none') return '仅记录'
+  return 'AI CLI'
+})
+
+const canStartTask = computed(() => {
+  if (!task.value) return false
+  const mode = automationMode.value
+  if (mode === 'none') return false
+  if (mode === 'script') return Boolean(String(task.value.script || '').trim())
+  return Boolean(
+    String(task.value.work_dir || '').trim() ||
+    String(task.value.initial_prompt || '').trim() ||
+    task.value.ai_managed
+  )
+})
+
 const serverLabel = computed(() => {
+  const ids = task.value?.target_server_ids || []
+  if (ids.length > 1) return `${ids.length}台服务器`
+
+  const singleId = ids[0] || task.value?.server_id
+  if (!singleId) return null
+
   if (task.value?.server?.name) return task.value.server.name
-  if (!task.value?.server_id) return null
-  const cached = serverStore.getServerName(task.value.server_id)
+  const cached = serverStore.getServerName(singleId)
   if (cached) return cached
-  return serverLoading.value ? '加载中...' : task.value.server_id
+  return serverLoading.value ? '加载中...' : singleId
 })
 
 const approvalColumns = [
@@ -247,7 +299,8 @@ async function loadTaskDetail() {
     logs.value = detail.logs || []
     approvals.value = detail.approvals || []
 
-    void ensureServerLoaded(detail.task.server_id)
+    const firstServerId = detail.task.target_server_ids?.[0] || detail.task.server_id
+    void ensureServerLoaded(firstServerId)
   } catch (error) {
     message.error('加载任务详情失败')
   } finally {

@@ -69,6 +69,9 @@ const newTask = reactive({
   priority: 1,
   server_id: null as string | null,
   project_id: null as string | null,
+  automation_mode: 'none',
+  target_server_ids: [] as string[],
+  script: '',
   work_dir: '',
   cli_type: 'claude',
   initial_prompt: '',
@@ -144,22 +147,31 @@ async function handleCreateTask() {
       title: newTask.title,
       description: newTask.description,
       priority: newTask.priority,
-      server_id: newTask.server_id || undefined,
+      server_id: newTask.automation_mode === 'script' ? undefined : (newTask.server_id || undefined),
       project_id: newTask.project_id || undefined,
-      work_dir: newTask.work_dir,
-      cli_type: newTask.cli_type || 'claude',
-      initial_prompt: newTask.initial_prompt,
+      automation_mode: newTask.automation_mode,
+      target_server_ids: newTask.automation_mode === 'script' ? newTask.target_server_ids : undefined,
+      script: newTask.automation_mode === 'script' ? newTask.script : undefined,
+      work_dir: newTask.automation_mode === 'none' ? undefined : newTask.work_dir,
+      cli_type: newTask.automation_mode === 'cli' ? (newTask.cli_type || 'claude') : undefined,
+      initial_prompt: newTask.automation_mode === 'cli' ? newTask.initial_prompt : undefined,
       auto_create_dir: newTask.auto_create_dir,
       auto_start: newTask.auto_start,
-      ai_managed: newTask.ai_managed,
-      ai_prompt: newTask.ai_prompt,
-      ai_end_condition: newTask.ai_end_condition,
-      ai_error_handling: newTask.ai_error_handling
+      ai_managed: newTask.automation_mode === 'cli' ? newTask.ai_managed : undefined,
+      ai_prompt: newTask.automation_mode === 'cli' ? newTask.ai_prompt : undefined,
+      ai_end_condition: newTask.automation_mode === 'cli' ? newTask.ai_end_condition : undefined,
+      ai_error_handling: newTask.automation_mode === 'cli' ? newTask.ai_error_handling : undefined
     })
     message.success('任务创建成功')
     showCreateTask.value = false
 
-    if (newTask.auto_start && newTask.work_dir) {
+    const canAutoStart = newTask.auto_start && (() => {
+      if (newTask.automation_mode === 'none') return false
+      if (newTask.automation_mode === 'script') return Boolean(newTask.script?.trim())
+      return Boolean(newTask.work_dir?.trim() || newTask.initial_prompt?.trim() || newTask.ai_managed)
+    })()
+
+    if (canAutoStart) {
       try {
         const result = await taskStore.startTask(task.id)
         if (result.terminal_id) {
@@ -177,6 +189,7 @@ async function handleCreateTask() {
 
     Object.assign(newTask, {
       title: '', description: '', priority: 1, server_id: null, project_id: null,
+      automation_mode: 'none', target_server_ids: [], script: '',
       work_dir: '', cli_type: 'claude', initial_prompt: '',
       auto_create_dir: true, auto_start: false, return_to_workbench: false,
       ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'

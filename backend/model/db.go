@@ -95,11 +95,14 @@ type Task struct {
 	CompletedAt *time.Time `json:"completed_at"`
 
 	// 自动化任务配置
-	WorkDir       string `json:"work_dir"`                            // 工作目录
-	CLIType       string `gorm:"default:claude" json:"cli_type"`      // CLI类型: claude, codex, gemini
-	InitialPrompt string `json:"initial_prompt"`                      // 初始提示/需求描述
-	AutoStart     bool   `gorm:"default:false" json:"auto_start"`     // 是否自动启动
-	AutoCreateDir bool   `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
+	AutomationMode  string      `gorm:"default:cli" json:"automation_mode"` // none, cli, script
+	TargetServerIDs StringArray `gorm:"type:text" json:"target_server_ids"`
+	Script          string      `json:"script"`
+	WorkDir         string      `json:"work_dir"`                            // 工作目录
+	CLIType         string      `gorm:"default:claude" json:"cli_type"`      // CLI类型: claude, codex, gemini
+	InitialPrompt   string      `json:"initial_prompt"`                      // 初始提示/需求描述
+	AutoStart       bool        `gorm:"default:false" json:"auto_start"`     // 是否自动启动
+	AutoCreateDir   bool        `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
 
 	// AI托管配置
 	AIManaged       bool   `gorm:"default:false" json:"ai_managed"` // 是否AI全程托管

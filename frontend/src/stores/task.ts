@@ -18,6 +18,9 @@ export interface Task {
   updated_at: string
   completed_at: string | null
   // 自动化配置
+  automation_mode?: string
+  target_server_ids?: string[]
+  script?: string
   work_dir?: string
   cli_type?: string
   initial_prompt?: string
@@ -118,9 +121,12 @@ export const useTaskStore = defineStore('task', () => {
     priority?: number
     server_id?: string | null
     project_id?: string | null
-    work_dir: string
-    cli_type: string
-    initial_prompt: string
+    automation_mode?: string
+    target_server_ids?: string[]
+    script?: string
+    work_dir?: string
+    cli_type?: string
+    initial_prompt?: string
     auto_start?: boolean
     auto_create_dir?: boolean
     rule_set_id?: string

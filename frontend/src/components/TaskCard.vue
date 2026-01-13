@@ -40,7 +40,8 @@
         <n-tag v-if="projectLabel" size="small" type="success">
           {{ projectLabel }}
         </n-tag>
-        <n-tag v-if="task.cli_type" size="small" type="info">
+        <n-tag v-if="mode === 'script'" size="small" type="info">脚本</n-tag>
+        <n-tag v-else-if="mode === 'cli' && task.cli_type" size="small" type="info">
           {{ task.cli_type }}
         </n-tag>
         <n-tag v-if="aiStatus" :type="aiStatusType" size="small">
@@ -109,6 +110,21 @@ const terminalStore = useTerminalStore()
 const serverStore = useServerStore()
 const projectStore = useProjectStore()
 
+const mode = computed(() => {
+  const raw = String(props.task.automation_mode || '').trim().toLowerCase()
+  return raw || 'cli'
+})
+
+const isStartable = computed(() => {
+  if (mode.value === 'none') return false
+  if (mode.value === 'script') return Boolean(String(props.task.script || '').trim())
+  return Boolean(
+    String(props.task.work_dir || '').trim() ||
+      String(props.task.initial_prompt || '').trim() ||
+      props.task.ai_managed
+  )
+})
+
 const relatedTerminals = computed(() =>
   terminalStore.terminals.filter(t => t.task_id === props.task.id)
 )
@@ -176,9 +192,14 @@ const aiStatusType = computed(() => {
 })
 
 const serverLabel = computed(() => {
+  const ids = props.task.target_server_ids || []
+  if (ids.length > 1) return `${ids.length}台服务器`
+
+  const singleId = ids[0] || props.task.server_id
+  if (!singleId) return null
+
   if (props.task.server?.name) return props.task.server.name
-  if (!props.task.server_id) return null
-  return serverStore.getServerName(props.task.server_id) || props.task.server_id
+  return serverStore.getServerName(singleId) || singleId
 })
 
 const projectLabel = computed(() => {
@@ -206,7 +227,7 @@ const menuOptions = computed(() => {
   const options: any[] = []
 
   // 如果有自动化配置，添加启动选项
-  if (props.task.work_dir || props.task.cli_type) {
+  if (isStartable.value) {
     options.push({ label: '▶ 启动任务', key: 'start' })
   }
 

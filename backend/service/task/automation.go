@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -181,6 +183,7 @@ func buildManagedPrompt(task *model.Task) string {
 type StartTaskResult struct {
 	Task            *model.Task  `json:"task"`
 	Terminal        taskTerminal `json:"terminal"`
+	TerminalIDs     []string     `json:"terminal_ids,omitempty"`
 	WorkDir         string       `json:"work_dir"`
 	CLIStarted      bool         `json:"cli_started"`
 	NeedsUserAction bool         `json:"needs_user_action,omitempty"`
@@ -194,6 +197,18 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 	if task == nil {
 		result.Error = "Task is nil"
 		return result, errors.New("task is nil")
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(task.AutomationMode))
+	if mode == "" {
+		mode = "cli"
+	}
+	switch mode {
+	case "none":
+		result.Error = "Task automation is disabled"
+		return result, errors.New("task automation is disabled")
+	case "script":
+		return s.startScriptTask(task)
 	}
 
 	// 幂等性检查：如果任务已经在进行中，不重复启动
@@ -210,9 +225,14 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 	}
 
 	// 1. 处理工作目录
-	workDir := task.WorkDir
+	workDir := strings.TrimSpace(task.WorkDir)
 	if workDir == "" {
-		workDir = "/tmp/tasks/" + task.ID
+		workDir = defaultTaskWorkDir(task.ID, serverID != "")
+		task.WorkDir = workDir
+		model.DB.Model(task).Updates(map[string]interface{}{
+			"work_dir":   workDir,
+			"updated_at": time.Now(),
+		})
 	}
 	result.WorkDir = workDir
 
@@ -478,7 +498,440 @@ PROMPT_SENT:
 	// 7. 启动后台任务监控
 	go s.monitorTaskCompletion(task.ID, session.ID())
 
+	result.TerminalIDs = []string{session.ID()}
+
 	return result, nil
+}
+
+const (
+	scriptTaskExitCodeMarker = "ACA_TASK_EXIT_CODE:"
+	scriptTaskPauseMarker    = "ACA_TASK_PAUSE"
+)
+
+type scriptTarget struct {
+	TerminalID string
+	Label      string
+}
+
+func (s *AutomationService) startScriptTask(task *model.Task) (*StartTaskResult, error) {
+	result := &StartTaskResult{Task: task}
+	if task == nil {
+		result.Error = "Task is nil"
+		return result, errors.New("task is nil")
+	}
+
+	script := strings.TrimSpace(task.Script)
+	if script == "" {
+		result.Error = "Script is empty"
+		return result, errors.New("script is empty")
+	}
+
+	targetServerIDs := make([]string, 0)
+	for _, raw := range task.TargetServerIDs {
+		sid := strings.TrimSpace(raw)
+		if sid == "" {
+			continue
+		}
+		targetServerIDs = append(targetServerIDs, sid)
+	}
+	if len(targetServerIDs) == 0 && task.ServerID != nil {
+		if sid := strings.TrimSpace(*task.ServerID); sid != "" {
+			targetServerIDs = append(targetServerIDs, sid)
+		}
+	}
+
+	isRemote := len(targetServerIDs) > 0
+
+	workDir := strings.TrimSpace(task.WorkDir)
+	if workDir == "" {
+		workDir = defaultTaskWorkDir(task.ID, isRemote)
+		task.WorkDir = workDir
+		model.DB.Model(task).Updates(map[string]interface{}{
+			"work_dir":   workDir,
+			"updated_at": time.Now(),
+		})
+	}
+	result.WorkDir = workDir
+
+	// 创建终端会话（目标服务器为空时，执行本地脚本任务）
+	targets := make([]scriptTarget, 0, maxInt(1, len(targetServerIDs)))
+	sessions := make([]taskTerminal, 0, maxInt(1, len(targetServerIDs)))
+
+	if len(targetServerIDs) == 0 {
+		title := fmt.Sprintf("[script] %s", task.Title)
+		session, err := s.terminalManager.CreateSession(title, &task.ID)
+		if err != nil {
+			result.Error = fmt.Sprintf("Failed to create terminal: %v", err)
+			return result, err
+		}
+		result.Terminal = session
+		targets = append(targets, scriptTarget{TerminalID: session.ID(), Label: "local"})
+		sessions = append(sessions, session)
+	} else {
+		for _, serverID := range targetServerIDs {
+			serverLabel := resolveServerLabel(serverID)
+			title := fmt.Sprintf("[script] %s", task.Title)
+			if serverLabel != "" {
+				title = fmt.Sprintf("%s @ %s", title, serverLabel)
+			}
+
+			session, err := s.terminalManager.CreateSSHSession(serverID)
+			if err != nil {
+				result.Error = fmt.Sprintf("Failed to create SSH terminal: %v", err)
+				return result, err
+			}
+			_ = s.terminalManager.LinkTask(session.ID(), &task.ID)
+			_ = s.terminalManager.RenameSession(session.ID(), title)
+
+			if result.Terminal == nil {
+				result.Terminal = session
+			}
+			targets = append(targets, scriptTarget{TerminalID: session.ID(), Label: serverLabel})
+			sessions = append(sessions, session)
+		}
+	}
+
+	result.TerminalIDs = make([]string, 0, len(targets))
+	for _, t := range targets {
+		result.TerminalIDs = append(result.TerminalIDs, t.TerminalID)
+	}
+
+	// 设置任务为进行中，防止重复启动
+	model.DB.Model(task).Updates(map[string]interface{}{
+		"status":     "in_progress",
+		"updated_at": time.Now(),
+	})
+
+	// 写入并执行脚本
+	for _, session := range sessions {
+		if err := runScriptInTerminal(session, workDir, script, task.AutoCreateDir, isRemote); err != nil {
+			result.Error = fmt.Sprintf("Failed to start script: %v", err)
+			s.updateTaskStatus(task.ID, "failed", "脚本下发失败")
+			return result, err
+		}
+	}
+
+	// 后台监控脚本执行结果（多终端聚合）
+	go s.monitorScriptTask(task.ID, targets)
+
+	return result, nil
+}
+
+func runScriptInTerminal(session taskTerminal, workDir string, script string, autoCreateDir bool, isRemote bool) error {
+	if session == nil {
+		return errors.New("terminal session is nil")
+	}
+
+	dir := strings.TrimSpace(workDir)
+	if dir == "" {
+		return errors.New("workDir is empty")
+	}
+
+	// 本地创建目录（避免依赖 shell）
+	if autoCreateDir && !isRemote {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+
+	if autoCreateDir && isRemote {
+		cmd := fmt.Sprintf("mkdir -p -- %s", quoteShellPath(dir))
+		if err := writeShellLine(session, cmd); err != nil {
+			return err
+		}
+		sleep(150 * time.Millisecond)
+	}
+
+	if err := writeShellLine(session, fmt.Sprintf("cd -- %s", quoteShellPath(dir))); err != nil {
+		return err
+	}
+	sleep(150 * time.Millisecond)
+
+	const scriptFile = ".aca_task.sh"
+	if err := writeShellLine(session, fmt.Sprintf("cat > %s <<'ACA_SCRIPT_EOF'", scriptFile)); err != nil {
+		return err
+	}
+	sleep(80 * time.Millisecond)
+
+	normalized := normalizeScript(script)
+	for _, line := range normalized {
+		if err := writeShellLine(session, line); err != nil {
+			return err
+		}
+	}
+	if err := writeShellLine(session, "ACA_SCRIPT_EOF"); err != nil {
+		return err
+	}
+
+	// 执行并输出退出码标记，供监控聚合判断
+	run := fmt.Sprintf("bash %s; ACA_CODE=$?; echo \"%s${ACA_CODE}\"; unset ACA_CODE", scriptFile, scriptTaskExitCodeMarker)
+	return writeShellLine(session, run)
+}
+
+func normalizeScript(script string) []string {
+	text := strings.ReplaceAll(script, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	// 保留空行，避免破坏 here-doc 等结构
+	return lines
+}
+
+func writeShellLine(session taskTerminal, line string) error {
+	if session == nil {
+		return errors.New("terminal session is nil")
+	}
+	return session.Write([]byte(line + "\r"))
+}
+
+func quoteShellPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "''"
+	}
+
+	if trimmed == "~" {
+		return "\"$HOME\""
+	}
+	if strings.HasPrefix(trimmed, "~/") {
+		rest := strings.TrimPrefix(trimmed, "~/")
+		return "\"$HOME/" + escapeDoubleQuoted(rest) + "\""
+	}
+
+	// 默认使用单引号，避免变量/命令替换
+	return "'" + strings.ReplaceAll(trimmed, "'", "'\\''") + "'"
+}
+
+func escapeDoubleQuoted(text string) string {
+	escaped := strings.ReplaceAll(text, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	escaped = strings.ReplaceAll(escaped, "$", "\\$")
+	escaped = strings.ReplaceAll(escaped, "`", "\\`")
+	return escaped
+}
+
+func resolveServerLabel(serverID string) string {
+	id := strings.TrimSpace(serverID)
+	if id == "" {
+		return ""
+	}
+
+	var server model.SSHServer
+	if err := model.DB.Select("id", "name", "host").First(&server, "id = ?", id).Error; err != nil {
+		return id
+	}
+	if strings.TrimSpace(server.Name) != "" {
+		return strings.TrimSpace(server.Name)
+	}
+	if strings.TrimSpace(server.Host) != "" {
+		return strings.TrimSpace(server.Host)
+	}
+	return id
+}
+
+func defaultTaskWorkDir(taskID string, remote bool) string {
+	id := strings.TrimSpace(taskID)
+	if id == "" {
+		id = uuid.New().String()
+	}
+	if remote {
+		return "~/.aca/tasks/" + id
+	}
+	runtimeDir := resolveRuntimeDir()
+	return filepath.Join(runtimeDir, "tasks", id)
+}
+
+func resolveRuntimeDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ".aca"
+	}
+
+	dir := cwd
+	for {
+		if fileExists(filepath.Join(dir, "backend", "go.mod")) {
+			return filepath.Join(dir, ".aca")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return filepath.Join(cwd, ".aca")
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (s *AutomationService) monitorScriptTask(taskID string, targets []scriptTarget) {
+	checkInterval := 5 * time.Second
+	maxDuration := 2 * time.Hour
+	startTime := time.Now()
+
+	utils.Info("Script task monitoring started",
+		zap.String("task_id", taskID),
+		zap.Int("targets", len(targets)))
+
+	for {
+		if time.Since(startTime) > maxDuration {
+			s.updateTaskStatus(taskID, "timeout", "脚本任务监控超时")
+			return
+		}
+
+		sleep(checkInterval)
+
+		var task model.Task
+		if err := model.DB.First(&task, "id = ?", taskID).Error; err != nil {
+			return
+		}
+		if task.Status != "in_progress" {
+			return
+		}
+
+		allDone := true
+		var firstTerminal string
+		var pauseReasons []string
+		var failReasons []string
+
+		for _, target := range targets {
+			terminalID := strings.TrimSpace(target.TerminalID)
+			if terminalID == "" {
+				continue
+			}
+			if firstTerminal == "" {
+				firstTerminal = terminalID
+			}
+
+			logText := loadTerminalLogsText(taskID, terminalID, 400)
+			exitFound, exitCode := parseExitCodeMarker(logText)
+			needsUser := containsScriptNeedsUserSignal(logText)
+
+			if !exitFound {
+				allDone = false
+				continue
+			}
+
+			if exitCode != 0 {
+				failReasons = append(failReasons, fmt.Sprintf("%s: exit code %d", target.Label, exitCode))
+				continue
+			}
+
+			if needsUser {
+				pauseReasons = append(pauseReasons, fmt.Sprintf("%s: user action required", target.Label))
+				continue
+			}
+		}
+
+		if len(failReasons) > 0 {
+			reason := strings.Join(failReasons, "; ")
+			s.updateTaskStatus(taskID, "failed", reason)
+			if firstTerminal != "" {
+				s.createTaskMessage(taskID, firstTerminal, "error", "脚本执行失败", reason)
+			}
+			return
+		}
+
+		if len(pauseReasons) > 0 {
+			reason := strings.Join(pauseReasons, "; ")
+			s.updateTaskStatus(taskID, "paused", reason)
+			if firstTerminal != "" {
+				s.createTaskMessage(taskID, firstTerminal, "approval_needed", "脚本需要人工确认", reason)
+			}
+			return
+		}
+
+		if allDone {
+			s.updateTaskStatus(taskID, "done", "脚本执行完成")
+			return
+		}
+	}
+}
+
+func loadTerminalLogsText(taskID, terminalID string, limit int) string {
+	if model.DB == nil {
+		return ""
+	}
+	tid := strings.TrimSpace(terminalID)
+	if tid == "" {
+		return ""
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	query := model.DB.Where("terminal_id = ?", tid)
+	if strings.TrimSpace(taskID) != "" {
+		query = query.Where("task_id = ? OR task_id IS NULL", strings.TrimSpace(taskID))
+	}
+
+	var logs []model.Log
+	if err := query.Order("created_at desc").Limit(limit).Find(&logs).Error; err != nil {
+		return ""
+	}
+
+	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
+		logs[i], logs[j] = logs[j], logs[i]
+	}
+
+	var b strings.Builder
+	for _, entry := range logs {
+		content := strings.TrimRight(entry.Content, "\n")
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		b.WriteString(content)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func parseExitCodeMarker(logText string) (bool, int) {
+	text := strings.ToUpper(logText)
+	idx := strings.LastIndex(text, strings.ToUpper(scriptTaskExitCodeMarker))
+	if idx < 0 {
+		return false, 0
+	}
+
+	after := strings.TrimSpace(text[idx+len(scriptTaskExitCodeMarker):])
+	if after == "" {
+		return true, 0
+	}
+
+	end := 0
+	for end < len(after) {
+		ch := after[end]
+		if ch < '0' || ch > '9' {
+			break
+		}
+		end++
+	}
+	if end == 0 {
+		return true, 0
+	}
+
+	code, err := strconv.Atoi(after[:end])
+	if err != nil {
+		return true, 0
+	}
+	return true, code
+}
+
+func containsScriptNeedsUserSignal(logText string) bool {
+	text := strings.ToLower(logText)
+	return strings.Contains(text, strings.ToLower(scriptTaskPauseMarker)) ||
+		strings.Contains(text, "reboot") ||
+		strings.Contains(text, "重启") ||
+		strings.Contains(text, "restart")
 }
 
 // monitorTaskCompletion 后台监控任务完成状态
