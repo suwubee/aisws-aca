@@ -293,6 +293,14 @@ func TestManager_CreateSSHSession_StreamsResizeAndExit(t *testing.T) {
 		t.Fatalf("expected session to be stored in manager")
 	}
 
+	var dbSession model.TerminalSession
+	if err := model.DB.First(&dbSession, "id = ?", session.ID()).Error; err != nil {
+		t.Fatalf("query TerminalSession failed: %v", err)
+	}
+	if dbSession.ServerID == nil || *dbSession.ServerID != "srv-1" {
+		t.Fatalf("expected db server_id %q, got %v", "srv-1", dbSession.ServerID)
+	}
+
 	subID, events := session.Subscribe()
 	defer session.Unsubscribe(subID)
 
@@ -335,6 +343,16 @@ func TestManager_CreateSSHSession_StreamsResizeAndExit(t *testing.T) {
 
 	if session.Status() != "exited" {
 		t.Fatalf("expected status %q, got %q", "exited", session.Status())
+	}
+
+	if err := model.DB.First(&dbSession, "id = ?", session.ID()).Error; err != nil {
+		t.Fatalf("query TerminalSession after close failed: %v", err)
+	}
+	if dbSession.Status != "exited" {
+		t.Fatalf("expected db status %q, got %q", "exited", dbSession.Status)
+	}
+	if dbSession.ClosedAt == nil {
+		t.Fatalf("expected db ClosedAt to be set")
 	}
 }
 

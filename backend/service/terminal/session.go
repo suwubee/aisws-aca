@@ -85,6 +85,9 @@ type SessionMetadata struct {
 	Status         string       `json:"status"`
 	RunningCommand string       `json:"running_command,omitempty"`
 	TaskID         *string      `json:"task_id,omitempty"`
+	ServerID       *string      `json:"server_id,omitempty"`
+	ServerName     string       `json:"server_name,omitempty"`
+	ServerHost     string       `json:"server_host,omitempty"`
 	AIAssistant    *AIAssistant `json:"ai_assistant,omitempty"`
 	AutomationMode string       `json:"automation_mode,omitempty"` // manual, auto_yes, smart
 	TmuxSession    string       `json:"tmux_session,omitempty"`    // tmux 会话名称
@@ -106,6 +109,7 @@ type Session struct {
 	id          string
 	title       string
 	taskID      *string
+	serverID    *string
 	shell       string
 	startDir    string
 	backend     sessionBackend
@@ -159,6 +163,58 @@ type sessionBackend interface {
 	Write(data []byte) error
 	Resize(cols, rows uint16) error
 	Close() error
+}
+
+type pipeShellBackend struct {
+	cmd         *exec.Cmd
+	stdinWriter *os.File
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+func (b *pipeShellBackend) Write(data []byte) error {
+	if b == nil || b.stdinWriter == nil {
+		return errors.New("stdin pipe is not initialized")
+	}
+	n, err := b.stdinWriter.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func (b *pipeShellBackend) Resize(_, _ uint16) error {
+	// No PTY available: ignore resize requests.
+	return nil
+}
+
+func (b *pipeShellBackend) Close() error {
+	if b == nil {
+		return nil
+	}
+
+	b.closeOnce.Do(func() {
+		var errs []error
+
+		if b.stdinWriter != nil {
+			if err := b.stdinWriter.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+				errs = append(errs, err)
+			}
+		}
+
+		if b.cmd != nil && b.cmd.Process != nil {
+			_ = b.cmd.Process.Signal(syscall.SIGTERM)
+			time.Sleep(100 * time.Millisecond)
+			_ = b.cmd.Process.Kill()
+		}
+
+		b.closeErr = errors.Join(errs...)
+	})
+
+	return b.closeErr
 }
 
 // LogEntry 日志条目
@@ -305,14 +361,23 @@ func (s *Session) StartWithTmux(attach bool) error {
 
 // startDirectShell 直接启动 shell（fallback）
 func (s *Session) startDirectShell() error {
-	cmd := execCommand(s.shell)
-	if strings.TrimSpace(s.startDir) != "" {
-		cmd.Dir = s.startDir
+	newCmd := func() *exec.Cmd {
+		cmd := execCommand(s.shell)
+		if strings.TrimSpace(s.startDir) != "" {
+			cmd.Dir = s.startDir
+		}
+		applyTerminalEnv(cmd)
+		return cmd
 	}
-	applyTerminalEnv(cmd)
+
+	cmd := newCmd()
 
 	ptmx, err := ptyStart(cmd)
 	if err != nil {
+		if os.IsPermission(err) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			// pty.Start may mutate SysProcAttr; create a fresh cmd for pipe mode to avoid ENOTTY.
+			return s.startPipeShell(newCmd())
+		}
 		return err
 	}
 
@@ -328,8 +393,56 @@ func (s *Session) startDirectShell() error {
 	return nil
 }
 
+func (s *Session) startPipeShell(cmd *exec.Cmd) error {
+	if cmd == nil {
+		return errors.New("command is nil")
+	}
+
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdinReader.Close()
+		_ = stdinWriter.Close()
+		return err
+	}
+
+	cmd.Stdin = stdinReader
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stdoutWriter
+
+	if err := cmd.Start(); err != nil {
+		_ = stdinReader.Close()
+		_ = stdinWriter.Close()
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		return err
+	}
+
+	_ = stdinReader.Close()
+	_ = stdoutWriter.Close()
+
+	s.backend = &pipeShellBackend{cmd: cmd, stdinWriter: stdinWriter}
+	s.pty = stdoutReader
+	s.cmd = cmd
+	s.metadata.PID = cmd.Process.Pid
+
+	s.loadAutomationConfig()
+	go s.readPTY()
+	go s.wait()
+	go s.flushLogs()
+
+	return nil
+}
+
 // loadAutomationConfig 加载自动化配置
 func (s *Session) loadAutomationConfig() {
+	if model.DB == nil {
+		return
+	}
 	config, err := s.approvalEngine.GetAutomationConfig(s.id)
 	if err != nil {
 		return
@@ -1091,12 +1204,22 @@ func (s *Session) SetTaskID(taskID *string) {
 	s.metaMutex.Unlock()
 }
 
+func (s *Session) SetServerInfo(serverID *string, name, host string) {
+	s.metaMutex.Lock()
+	s.serverID = serverID
+	s.metadata.ServerID = serverID
+	s.metadata.ServerName = strings.TrimSpace(name)
+	s.metadata.ServerHost = strings.TrimSpace(host)
+	s.metaMutex.Unlock()
+}
+
 // ToDBModel 转换为数据库模型
 func (s *Session) ToDBModel() *model.TerminalSession {
 	return &model.TerminalSession{
 		ID:        s.id,
 		Title:     s.title,
 		TaskID:    s.taskID,
+		ServerID:  s.serverID,
 		Shell:     s.shell,
 		Status:    s.status,
 		PID:       s.metadata.PID,

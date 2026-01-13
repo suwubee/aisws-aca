@@ -40,6 +40,10 @@ func RunMigrations(db *gorm.DB) error {
 			up: migrateAddTaskAgentSessionID,
 		},
 		{
+			id: "20260113_add_terminal_sessions_server_id",
+			up: migrateAddTerminalSessionServerID,
+		},
+		{
 			id: "20260107_add_approval_records_server_id",
 			up: migrateAddApprovalRecordServerID,
 		},
@@ -115,6 +119,20 @@ func migrateAddTaskAgentSessionID(db *gorm.DB) error {
 	}
 
 	return db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_agent_session_id ON tasks(agent_session_id)").Error
+}
+
+func migrateAddTerminalSessionServerID(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&TerminalSession{}) {
+		return nil
+	}
+
+	if !db.Migrator().HasColumn(&TerminalSession{}, "ServerID") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "ServerID"); err != nil {
+			return err
+		}
+	}
+
+	return db.Exec("CREATE INDEX IF NOT EXISTS idx_terminal_sessions_server_id ON terminal_sessions(server_id)").Error
 }
 
 func migrateAddApprovalRecordServerID(db *gorm.DB) error {

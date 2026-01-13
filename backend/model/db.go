@@ -118,6 +118,7 @@ type TerminalSession struct {
 	UserID      string     `gorm:"index" json:"user_id"`
 	Title       string     `json:"title"`
 	TaskID      *string    `gorm:"index" json:"task_id"`
+	ServerID    *string    `gorm:"index" json:"server_id"`
 	Shell       string     `gorm:"default:bash" json:"shell"`
 	Status      string     `gorm:"default:running;index" json:"status"` // running, exited, detached
 	Hidden      bool       `gorm:"default:false" json:"hidden"`         // 是否在工作台隐藏

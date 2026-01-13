@@ -269,6 +269,92 @@ func TestTaskController_GetTasksByStatus_IncludesServerInfo(t *testing.T) {
 	}
 }
 
+func TestTaskController_StartTask_InProgressPrefersServerMatchedTerminal(t *testing.T) {
+	app := setupTaskTestApp(t)
+
+	server := model.SSHServer{
+		ID:       "srv-1",
+		Name:     "Prod",
+		Host:     "127.0.0.1",
+		Port:     22,
+		Username: "root",
+		AuthType: "password",
+	}
+	if err := model.DB.Create(&server).Error; err != nil {
+		t.Fatalf("create server failed: %v", err)
+	}
+
+	now := time.Now()
+	serverID := server.ID
+	task := model.Task{
+		ID:             "task-1",
+		UserID:         "u1",
+		Title:          "task-1",
+		Status:         "in_progress",
+		AutomationMode: "cli",
+		ServerID:       &serverID,
+		OrderIndex:     float64(now.UnixNano()),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := model.DB.Create(&task).Error; err != nil {
+		t.Fatalf("create task failed: %v", err)
+	}
+
+	sshTerminal := model.TerminalSession{
+		ID:        "term-ssh",
+		UserID:    "u1",
+		Title:     "SSH terminal",
+		TaskID:    &task.ID,
+		ServerID:  &serverID,
+		Shell:     "ssh",
+		Status:    "running",
+		CreatedAt: now.Add(-time.Minute),
+	}
+	localTerminal := model.TerminalSession{
+		ID:        "term-local",
+		UserID:    "u1",
+		Title:     "Local terminal",
+		TaskID:    &task.ID,
+		Shell:     "bash",
+		Status:    "running",
+		CreatedAt: now.Add(time.Minute),
+	}
+	if err := model.DB.Create(&sshTerminal).Error; err != nil {
+		t.Fatalf("create ssh terminal failed: %v", err)
+	}
+	if err := model.DB.Create(&localTerminal).Error; err != nil {
+		t.Fatalf("create local terminal failed: %v", err)
+	}
+
+	startReq := httptest.NewRequest("POST", "/api/tasks/task-1/start", bytes.NewBufferString(`{}`))
+	startReq.Header.Set("Content-Type", "application/json")
+	startResp, err := app.Test(startReq)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	defer startResp.Body.Close()
+
+	if startResp.StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", startResp.StatusCode)
+	}
+
+	var body struct {
+		TerminalID  string   `json:"terminal_id"`
+		TerminalIDs []string `json:"terminal_ids"`
+	}
+	if err := json.NewDecoder(startResp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+
+	if body.TerminalID != "term-ssh" {
+		t.Fatalf("expected terminal_id %q, got %q", "term-ssh", body.TerminalID)
+	}
+	if len(body.TerminalIDs) == 0 || body.TerminalIDs[0] != "term-ssh" {
+		t.Fatalf("expected terminal_ids to start with %q, got %v", "term-ssh", body.TerminalIDs)
+	}
+}
+
 func TestTaskController_CreateTask_WithProjectInfo(t *testing.T) {
 	app := setupTaskTestApp(t)
 

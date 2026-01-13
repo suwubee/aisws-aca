@@ -931,27 +931,83 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		}
 	}
 
-	// 如果任务已经在进行中，返回现有终端信息而不是错误
-	if taskModel.Status == "in_progress" {
+	// 如果任务已经在进行中/暂停，优先返回匹配服务器的运行中终端，避免误返回到本地终端
+	if taskModel.Status == "in_progress" || taskModel.Status == "paused" {
 		var terminals []model.TerminalSession
-		_ = model.DB.Where("task_id = ?", id).Order("created_at desc").Find(&terminals).Error
+		_ = model.DB.Where("task_id = ? AND status = ?", id, "running").Order("created_at desc").Find(&terminals).Error
 		if len(terminals) > 0 {
-			terminalIDs := make([]string, 0, len(terminals))
-			for _, t := range terminals {
-				terminalIDs = append(terminalIDs, t.ID)
+			desiredServers := map[string]struct{}{}
+			if taskModel.ServerID != nil {
+				if sid := strings.TrimSpace(*taskModel.ServerID); sid != "" {
+					desiredServers[sid] = struct{}{}
+				}
 			}
-			cliStarted := strings.ToLower(strings.TrimSpace(taskModel.AutomationMode)) != "script"
-			return c.JSON(fiber.Map{
-				"message":           "Task already running",
-				"task":              taskModel,
-				"terminal_id":       terminals[0].ID,
-				"terminal_ids":      terminalIDs,
-				"work_dir":          taskModel.WorkDir,
-				"cli_started":       cliStarted,
-				"needs_user_action": false,
-				"user_action_hint":  "",
-			})
+			for _, raw := range taskModel.TargetServerIDs {
+				if sid := strings.TrimSpace(raw); sid != "" {
+					desiredServers[sid] = struct{}{}
+				}
+			}
+
+			ordered := make([]string, 0, len(terminals))
+			seen := map[string]struct{}{}
+			appendUnique := func(id string) {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					return
+				}
+				if _, ok := seen[id]; ok {
+					return
+				}
+				seen[id] = struct{}{}
+				ordered = append(ordered, id)
+			}
+
+			// 1) 优先选择 server_id 匹配的终端
+			if len(desiredServers) > 0 {
+				for _, t := range terminals {
+					if t.ServerID == nil {
+						continue
+					}
+					sid := strings.TrimSpace(*t.ServerID)
+					if sid == "" {
+						continue
+					}
+					if _, ok := desiredServers[sid]; ok {
+						appendUnique(t.ID)
+					}
+				}
+			}
+
+			// 2) 若任务有期望服务器但终端缺少 server_id（历史数据），退化为优先返回 SSH 终端
+			if len(ordered) == 0 && len(desiredServers) > 0 {
+				for _, t := range terminals {
+					if strings.EqualFold(strings.TrimSpace(t.Shell), "ssh") {
+						appendUnique(t.ID)
+					}
+				}
+			}
+
+			// 3) 补齐剩余终端
+			for _, t := range terminals {
+				appendUnique(t.ID)
+			}
+
+			if len(ordered) > 0 {
+				cliStarted := strings.ToLower(strings.TrimSpace(taskModel.AutomationMode)) != "script"
+				return c.JSON(fiber.Map{
+					"message":           "Task already running",
+					"task":              taskModel,
+					"terminal_id":       ordered[0],
+					"terminal_ids":      ordered,
+					"work_dir":          taskModel.WorkDir,
+					"cli_started":       cliStarted,
+					"needs_user_action": taskModel.Status == "paused",
+					"user_action_hint":  "",
+				})
+			}
 		}
+		// 任务标记为进行中但不存在运行中终端：允许重新启动（避免卡死）
+		taskModel.Status = "todo"
 	}
 
 	result, err := ctrl.automationService.StartTask(&taskModel)

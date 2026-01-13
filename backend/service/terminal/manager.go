@@ -173,21 +173,29 @@ func (m *Manager) getSSHManager() (sshSessionProvider, error) {
 
 // CreateSSHSession 创建SSH终端会话，并注册到 sessions map。
 func (m *Manager) CreateSSHSession(serverID string) (*Session, error) {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return nil, errors.New("serverID is required")
+	}
+
 	id := uuid.New().String()
 	session := NewSession(id, "ssh", m.config.ScrollbackBytes)
 
 	serverName := strings.TrimSpace(serverID)
+	serverHost := ""
 	var server model.SSHServer
-	if err := model.DB.First(&server, "id = ?", serverID).Error; err == nil {
+	if err := model.DB.Select("id", "name", "host").First(&server, "id = ?", serverID).Error; err == nil {
 		if strings.TrimSpace(server.Name) != "" {
 			serverName = server.Name
 		}
+		serverHost = strings.TrimSpace(server.Host)
 	}
 	if serverName != "" {
 		session.SetTitle("SSH: " + serverName)
 	} else {
 		session.SetTitle("SSH")
 	}
+	session.SetServerInfo(&serverID, serverName, serverHost)
 
 	sshManager, err := m.getSSHManager()
 	if err != nil {
@@ -291,6 +299,17 @@ func (m *Manager) waitSSHSession(session *Session, adapter *sshservice.SSHTermin
 	now := time.Now()
 	session.closedAt = &now
 	session.metaMutex.Unlock()
+
+	if model.DB != nil {
+		if err := model.DB.Model(&model.TerminalSession{}).Where("id = ?", session.ID()).Updates(map[string]interface{}{
+			"status":    "exited",
+			"closed_at": now,
+		}).Error; err != nil {
+			utils.Warn("Failed to update ssh session status to exited", zap.String("id", session.ID()), zap.Error(err))
+		}
+	}
+
+	m.completeTaskIfNeeded(session.TaskID(), session.ID())
 
 	session.broadcast(StreamEvent{
 		Type:     StreamEventExit,
