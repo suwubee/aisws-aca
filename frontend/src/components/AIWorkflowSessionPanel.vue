@@ -1,5 +1,5 @@
 <template>
-  <n-card size="small" title="AI 托管会话">
+  <n-card size="small" title="AI 托管会话" class="workflow-card">
     <template #header-extra>
       <n-space align="center" size="small">
         <n-tag v-if="session" size="small" :bordered="false" :type="statusTagType(session.status)">
@@ -9,83 +9,90 @@
       </n-space>
     </template>
 
-    <n-spin :show="loading">
-      <n-empty v-if="!sessionId" description="暂无会话" />
-      <n-empty v-else-if="!session" description="加载中..." />
+    <n-spin :show="loading" class="workflow-spin">
+      <div class="workflow-body">
+        <n-empty v-if="!sessionId" description="暂无会话" />
+        <n-empty v-else-if="!session" description="加载中..." />
 
-      <template v-else>
-        <n-text depth="3" style="display: block; font-size: 12px; margin-bottom: 6px">
-          <span class="mono">{{ session.id }}</span>
-        </n-text>
-        <n-text depth="3" style="display: block; font-size: 12px; margin-bottom: 10px">
-          {{ formatDateTime(session.started_at) }}
-          <span v-if="session.completed_at"> → {{ formatDateTime(session.completed_at) }}</span>
-        </n-text>
+        <template v-else>
+          <n-text depth="3" style="display: block; font-size: 12px; margin-bottom: 6px">
+            <span class="mono">{{ session.id }}</span>
+          </n-text>
+          <n-text depth="3" style="display: block; font-size: 12px; margin-bottom: 10px">
+            {{ formatDateTime(session.started_at) }}
+            <span v-if="session.completed_at"> → {{ formatDateTime(session.completed_at) }}</span>
+          </n-text>
 
-        <n-alert
-          v-if="safeText(session.summary)"
-          :bordered="false"
-          :type="safeText(session.status).toLowerCase() === 'completed' ? 'success' : 'warning'"
-          style="margin-bottom: 10px"
-        >
-          {{ session.summary }}
-        </n-alert>
+          <n-alert
+            v-if="safeText(session.summary)"
+            :bordered="false"
+            :type="safeText(session.status).toLowerCase() === 'completed' ? 'success' : 'warning'"
+            style="margin-bottom: 10px"
+          >
+            {{ session.summary }}
+          </n-alert>
 
-        <div v-if="canResume(session.status)" class="resume-panel">
-          <n-input
-            v-model:value="resumeMessage"
-            type="textarea"
-            :autosize="{ minRows: 2, maxRows: 4 }"
-            :placeholder="resumePlaceholder(session.status)"
-            :disabled="isDemoMode"
-            @keydown.ctrl.enter.prevent="resume"
-          />
-          <n-space justify="end" style="margin-top: 8px">
-            <n-button
-              size="small"
-              type="primary"
-              :loading="resuming"
-              :disabled="isDemoMode || !resumeMessage.trim()"
-              @click="resume"
-            >
-              {{ resumeButtonLabel(session.status) }}
-            </n-button>
-          </n-space>
-        </div>
+          <div v-if="canResume(session.status)" class="resume-panel">
+            <n-input
+              v-model:value="resumeMessage"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              :placeholder="resumePlaceholder(session.status)"
+              :disabled="isDemoMode"
+              @keydown.ctrl.enter.prevent="resume"
+            />
+            <n-space justify="end" style="margin-top: 8px">
+              <n-button
+                size="small"
+                type="primary"
+                :loading="resuming"
+                :disabled="isDemoMode || !resumeMessage.trim()"
+                @click="resume"
+              >
+                {{ resumeButtonLabel(session.status) }}
+              </n-button>
+            </n-space>
+          </div>
 
-        <n-empty v-if="!session.steps?.length" description="暂无步骤" />
-        <div v-else class="steps">
-          <div v-for="step in session.steps" :key="step.id" class="step">
-            <div class="step__header">
-              <n-space align="center" size="small">
-                <n-tag size="small" :bordered="false" type="default">
-                  #{{ Number.isFinite(step.iteration) ? step.iteration + 1 : '—' }}
-                </n-tag>
-                <n-tag size="small" :bordered="false" :type="step.success ? 'success' : 'error'">
-                  {{ step.success ? 'success' : 'failed' }}
-                </n-tag>
-                <n-text depth="3" style="font-size: 12px">
-                  {{ formatDateTime(step.timestamp) }}
-                </n-text>
-              </n-space>
-            </div>
-            <div class="step__row">
-              <div class="step__label">action</div>
-              <div class="step__content mono">{{ step.action || '—' }}</div>
-            </div>
-            <div class="step__row">
-              <div class="step__label">result</div>
-              <pre class="step__pre">{{ step.result || '—' }}</pre>
+          <n-empty v-if="!session.steps?.length" description="暂无步骤" />
+          <div v-else ref="stepsContainer" class="steps-container" @scroll="handleScroll">
+            <div class="steps">
+              <div v-for="step in session.steps" :key="step.id" class="step">
+                <div class="step__header">
+                  <n-space align="center" size="small">
+                    <n-tag size="small" :bordered="false" type="default">
+                      #{{ Number.isFinite(step.iteration) ? step.iteration + 1 : '—' }}
+                    </n-tag>
+                    <n-tag size="small" :bordered="false" :type="step.success ? 'success' : 'error'">
+                      {{ step.success ? 'success' : 'failed' }}
+                    </n-tag>
+                    <n-text depth="3" style="font-size: 12px">
+                      {{ formatDateTime(step.timestamp) }}
+                    </n-text>
+                  </n-space>
+                </div>
+                <div class="step__row">
+                  <div class="step__label">action</div>
+                  <div class="step__content mono">{{ step.action || '—' }}</div>
+                </div>
+                <div class="step__row">
+                  <div class="step__label">result</div>
+                  <pre class="step__pre">{{ step.result || '—' }}</pre>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </template>
+          <div v-if="showScrollToBottom" class="scroll-bottom">
+            <n-button size="tiny" type="primary" @click="scrollToBottom">回到底部</n-button>
+          </div>
+        </template>
+      </div>
     </n-spin>
   </n-card>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getAIWorkflowSession, postAIWorkflowMessage, type AIWorkflowSession } from '@/api/ai-workflow'
 import { useAuthStore } from '@/stores/auth'
@@ -102,6 +109,8 @@ const session = ref<AIWorkflowSession | null>(null)
 const loading = ref(false)
 const resuming = ref(false)
 const resumeMessage = ref('')
+const stepsContainer = ref<HTMLElement | null>(null)
+const showScrollToBottom = ref(false)
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled'])
 const resumableStatuses = new Set(['paused', 'completed', 'failed', 'cancelled'])
@@ -159,6 +168,23 @@ function stopPolling() {
   }
 }
 
+function isNearBottom(threshold = 80) {
+  const el = stepsContainer.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+}
+
+function scrollToBottom() {
+  const el = stepsContainer.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+  showScrollToBottom.value = false
+}
+
+function handleScroll() {
+  showScrollToBottom.value = !isNearBottom()
+}
+
 async function refresh(silent = true) {
   const id = safeText(props.sessionId)
   if (!id || loading.value || pollInFlight) return
@@ -166,9 +192,17 @@ async function refresh(silent = true) {
   const seq = ++requestSeq
   loading.value = true
   try {
+    const shouldStick = !showScrollToBottom.value || isNearBottom()
     const { data } = await getAIWorkflowSession(id)
     if (seq !== requestSeq) return
     session.value = (data?.session as AIWorkflowSession) || null
+    if (shouldStick) {
+      await nextTick()
+      scrollToBottom()
+    } else {
+      await nextTick()
+      showScrollToBottom.value = !isNearBottom()
+    }
   } catch (e: any) {
     if (!silent) message.error(e?.response?.data?.error || '获取会话失败')
   } finally {
@@ -211,10 +245,25 @@ watch(
   async () => {
     session.value = null
     requestSeq++
+    showScrollToBottom.value = false
     await refresh(true)
     startPolling()
   },
   { immediate: true }
+)
+
+watch(
+  () => session.value?.steps?.length || 0,
+  async (len, prev) => {
+    if (!len) return
+    const shouldStick = prev === 0 || !showScrollToBottom.value || isNearBottom()
+    await nextTick()
+    if (shouldStick) {
+      scrollToBottom()
+    } else {
+      showScrollToBottom.value = !isNearBottom()
+    }
+  }
 )
 
 onMounted(() => {
@@ -229,6 +278,56 @@ onUnmounted(() => {
 <style scoped>
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.workflow-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-card :deep(.n-card__content) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workflow-spin {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-spin :deep(.n-spin-container) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.steps-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.scroll-bottom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
 }
 
 .steps {
