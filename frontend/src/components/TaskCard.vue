@@ -57,7 +57,7 @@
         style="max-width: 280px"
       >
         <template #trigger>
-          <n-button size="tiny" quaternary @click="$emit('open-terminal', task)">
+          <n-button size="tiny" quaternary @click="$emit('open-terminal', { task })">
             终端
             <n-badge :value="terminalCount" :max="99" class="terminal-badge" />
           </n-button>
@@ -74,12 +74,12 @@
             <span class="terminal-state">{{ t.status }}</span>
           </div>
           <n-divider style="margin: 8px 0" />
-          <div class="terminal-popover-item terminal-popover-new" @click="$emit('open-terminal', task)">
+          <div class="terminal-popover-item terminal-popover-new" @click="$emit('open-terminal', { task })">
             + 新建终端
           </div>
         </div>
       </n-popover>
-      <n-button v-else size="tiny" quaternary @click="$emit('open-terminal', task)">
+      <n-button v-else size="tiny" quaternary @click="$emit('open-terminal', { task })">
         终端
       </n-button>
     </div>
@@ -100,7 +100,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'edit', task: Task): void
   (e: 'delete', task: Task): void
-  (e: 'open-terminal', task: Task): void
+  (e: 'open-terminal', payload: { task: Task; terminalId?: string }): void
   (e: 'start', task: Task): void
   (e: 'detail', task: Task): void
   (e: 'move', task: Task, status: string): void
@@ -222,7 +222,7 @@ function taskStatusGroup(status: string) {
 }
 
 function activateTerminal(id: string) {
-  terminalStore.setActiveTerminal(id)
+  emit('open-terminal', { task: props.task, terminalId: id })
 }
 
 const menuOptions = computed(() => {

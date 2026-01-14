@@ -430,7 +430,7 @@ const columns: DataTableColumns<TerminalSession> = [
 async function fetchTerminals() {
   loading.value = true
   try {
-    const { data } = await terminalApi.list({ show_hidden: true })
+    const { data } = await terminalApi.list({ show_hidden: true, include_history: true })
     terminals.value = data.items || []
   } catch (e: any) {
     message.error(e.response?.data?.error || '加载终端列表失败')

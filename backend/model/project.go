@@ -12,6 +12,7 @@ type Project struct {
 	ID          string `gorm:"primaryKey" json:"id"`
 	Name        string `gorm:"not null" json:"name"`
 	Description string `json:"description"`
+	Remark      string `json:"remark"`
 
 	Type string `gorm:"not null;default:local;index" json:"type"` // local, remote, git
 
@@ -35,6 +36,7 @@ type ProjectGroup struct {
 	ID          string  `gorm:"primaryKey" json:"id"`
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
+	Remark      string  `json:"remark"`
 	ParentID    *string `gorm:"index" json:"parent_id"`
 }
 

@@ -374,7 +374,7 @@ const columns: DataTableColumns<DecisionLogRow> = [
 async function fetchTerminals() {
   loadingTerminals.value = true
   try {
-    const { data } = await terminalApi.list({ show_hidden: true })
+    const { data } = await terminalApi.list({ show_hidden: true, include_history: true })
     terminals.value = (data.items || []).map((t: any) => ({
       id: t.id,
       title: t.title || t.metadata?.title || t.id

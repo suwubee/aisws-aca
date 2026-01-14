@@ -174,6 +174,7 @@ import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useProjectStore } from '@/stores/project'
 import { useGlobalContextStore } from '@/stores/context'
+import { useTerminalStore } from '@/stores/terminal'
 import { useIsMobile } from '@/utils/useIsMobile'
 import ProjectPortfolioManager from '@/components/ProjectPortfolioManager.vue'
 import TaskForm from '@/components/TaskForm.vue'
@@ -186,6 +187,7 @@ const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const projectStore = useProjectStore()
 const contextStore = useGlobalContextStore()
+const terminalStore = useTerminalStore()
 const isDemoMode = computed(() => authStore.isDemoMode)
 
 const loading = ref(false)
@@ -200,6 +202,7 @@ const { isMobile } = useIsMobile()
 const newTask = reactive({
   title: '',
   description: '',
+  remark: '',
   priority: 1,
   server_id: null as string | null,
   project_id: null as string | null,
@@ -470,9 +473,10 @@ async function handleCreateTask() {
   }
   try {
     const shouldReturn = newTask.return_to_workbench
-    await taskStore.createAutomationTask({
+    const created = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
+      remark: newTask.remark,
       priority: newTask.priority,
       server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
       project_id: newTask.project_id || undefined,
@@ -491,8 +495,35 @@ async function handleCreateTask() {
     })
     message.success('任务创建成功')
     showCreateTask.value = false
+
+    let startedTerminalId = ''
+    const canAutoStart = newTask.auto_start && (() => {
+      if (newTask.automation_mode === 'none') return false
+      if (newTask.automation_mode === 'script') return Boolean(newTask.script?.trim())
+      if (newTask.automation_mode === 'agent') return Boolean(newTask.initial_prompt?.trim())
+      return Boolean(newTask.work_dir?.trim() || newTask.initial_prompt?.trim() || newTask.ai_managed)
+    })()
+
+    if (canAutoStart) {
+      try {
+        const result = await taskStore.startTask(created.id)
+        if (result.terminal_id) {
+          startedTerminalId = String(result.terminal_id || '').trim()
+          await terminalStore.fetchTerminals()
+          terminalStore.setActiveTerminal(result.terminal_id)
+        }
+        if (result?.needs_user_action) {
+          message.warning(result.user_action_hint || '任务已启动但需要用户确认')
+        } else {
+          message.success('任务已自动启动')
+        }
+      } catch {
+        message.warning('任务创建成功，但自动启动失败')
+      }
+    }
+
     Object.assign(newTask, {
-      title: '', description: '', priority: 1, server_id: null, project_id: null,
+      title: '', description: '', remark: '', priority: 1, server_id: null, project_id: null,
       automation_mode: 'none',
       target_server_ids: [],
       script: '',
@@ -501,7 +532,11 @@ async function handleCreateTask() {
       ai_managed: false, ai_prompt: '', ai_end_condition: '', ai_error_handling: 'pause'
     })
     if (shouldReturn) {
-      router.push('/')
+      if (startedTerminalId) {
+        router.push({ path: '/', query: { terminal: startedTerminalId } })
+      } else {
+        router.push('/')
+      }
     }
   } catch (e: any) {
     message.error(e.message || '创建失败')

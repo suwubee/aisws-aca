@@ -288,6 +288,7 @@ const creatingForServer = ref<SSHServer | null>(null)
 const newTask = reactive<TaskFormModel>({
   title: '',
   description: '',
+  remark: '',
   priority: 1,
   server_id: null,
   project_id: null,
@@ -623,14 +624,15 @@ async function handleCreateTask() {
   creatingTask.value = true
   const shouldReturn = newTask.return_to_workbench
   try {
-    const task = await taskStore.createAutomationTask({
-      title: newTask.title,
-      description: newTask.description,
-      priority: newTask.priority,
-      server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
-      project_id: newTask.project_id || undefined,
-      automation_mode: newTask.automation_mode,
-      target_server_ids: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? newTask.target_server_ids : undefined,
+	    const task = await taskStore.createAutomationTask({
+	      title: newTask.title,
+	      description: newTask.description,
+	      remark: newTask.remark,
+	      priority: newTask.priority,
+	      server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
+	      project_id: newTask.project_id || undefined,
+	      automation_mode: newTask.automation_mode,
+	      target_server_ids: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? newTask.target_server_ids : undefined,
       script: newTask.automation_mode === 'script' ? newTask.script : undefined,
       work_dir: newTask.automation_mode === 'none' ? undefined : newTask.work_dir,
       cli_type: newTask.automation_mode === 'cli' ? (newTask.cli_type || 'claude') : undefined,
@@ -669,12 +671,13 @@ async function handleCreateTask() {
       }
     }
 
-    newTask.title = ''
-    newTask.description = ''
-    newTask.priority = 1
-    newTask.server_id = null
-    newTask.project_id = null
-    newTask.automation_mode = 'cli'
+	    newTask.title = ''
+	    newTask.description = ''
+	    newTask.remark = ''
+	    newTask.priority = 1
+	    newTask.server_id = null
+	    newTask.project_id = null
+	    newTask.automation_mode = 'cli'
     newTask.target_server_ids = []
     newTask.script = ''
     newTask.work_dir = ''

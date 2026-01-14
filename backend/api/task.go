@@ -32,6 +32,7 @@ func (ctrl *TaskController) SetAIWorkflowEngine(engine *workflow.AIWorkflowEngin
 type CreateTaskRequest struct {
 	Title       string  `json:"title"`
 	Description string  `json:"description"`
+	Remark      string  `json:"remark"`
 	Priority    int     `json:"priority"`
 	Status      string  `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
@@ -56,6 +57,7 @@ type CreateTaskRequest struct {
 type UpdateTaskRequest struct {
 	Title       *string `json:"title"`
 	Description *string `json:"description"`
+	Remark      *string `json:"remark"`
 	Priority    *int    `json:"priority"`
 	Status      *string `json:"status"`
 	RuleSetID   *string `json:"rule_set_id"`
@@ -296,6 +298,7 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		ID:              uuid.New().String(),
 		Title:           req.Title,
 		Description:     req.Description,
+		Remark:          strings.TrimSpace(req.Remark),
 		Status:          status,
 		Priority:        req.Priority,
 		RuleSetID:       req.RuleSetID,
@@ -554,6 +557,9 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	}
 	if req.Description != nil {
 		updates["description"] = *req.Description
+	}
+	if req.Remark != nil {
+		updates["remark"] = strings.TrimSpace(*req.Remark)
 	}
 	if req.Priority != nil {
 		updates["priority"] = *req.Priority
@@ -867,6 +873,8 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 			sessionID := strings.TrimSpace(taskModel.AgentSessionID)
 			needsUserAction := taskModel.Status == "paused"
 			userHint := ""
+			terminalID := ""
+			terminalIDs := []string{}
 
 			if sessionID != "" {
 				if session, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && session != nil {
@@ -874,15 +882,31 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 						needsUserAction = true
 						userHint = strings.TrimSpace(session.Summary)
 					}
+					if session.Context != nil {
+						if v, ok := session.Context["terminal_id"].(string); ok {
+							terminalID = strings.TrimSpace(v)
+						}
+					}
 				}
+			}
+
+			if terminalID == "" {
+				var terminals []model.TerminalSession
+				_ = model.DB.Where("task_id = ? AND status = ? AND hidden = ?", id, "running", false).Order("created_at desc").Find(&terminals).Error
+				if len(terminals) > 0 {
+					terminalID = strings.TrimSpace(terminals[0].ID)
+				}
+			}
+			if terminalID != "" {
+				terminalIDs = []string{terminalID}
 			}
 
 			return c.JSON(fiber.Map{
 				"message":           "Task already running",
 				"task":              taskModel,
 				"agent_session_id":  sessionID,
-				"terminal_id":       "",
-				"terminal_ids":      []string{},
+				"terminal_id":       terminalID,
+				"terminal_ids":      terminalIDs,
 				"work_dir":          taskModel.WorkDir,
 				"cli_started":       false,
 				"needs_user_action": needsUserAction,
@@ -896,13 +920,30 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		}
 
 		model.DB.First(&taskModel, "id = ?", id)
+		terminalID := ""
+		terminalIDs := []string{}
+		if session != nil && session.Context != nil {
+			if v, ok := session.Context["terminal_id"].(string); ok {
+				terminalID = strings.TrimSpace(v)
+			}
+		}
+		if terminalID == "" {
+			var terminals []model.TerminalSession
+			_ = model.DB.Where("task_id = ? AND status = ? AND hidden = ?", id, "running", false).Order("created_at desc").Find(&terminals).Error
+			if len(terminals) > 0 {
+				terminalID = strings.TrimSpace(terminals[0].ID)
+			}
+		}
+		if terminalID != "" {
+			terminalIDs = []string{terminalID}
+		}
 
 		return c.JSON(fiber.Map{
 			"message":           "Task started",
 			"task":              taskModel,
 			"agent_session_id":  session.ID,
-			"terminal_id":       "",
-			"terminal_ids":      []string{},
+			"terminal_id":       terminalID,
+			"terminal_ids":      terminalIDs,
 			"work_dir":          taskModel.WorkDir,
 			"cli_started":       false,
 			"needs_user_action": strings.EqualFold(strings.TrimSpace(session.Status), "paused"),

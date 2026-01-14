@@ -63,12 +63,17 @@ type automationService interface {
 type terminalSession interface {
 	ID() string
 	Write(data []byte) error
+	BroadcastAILog(logType, message string)
+	BroadcastAILogWithInput(logType, message, inputType, inputData string)
+	InjectOutput(data []byte)
+	RunCommand(command, workDir string, timeout time.Duration) (string, int, error)
 }
 
 type terminalManager interface {
 	CreateSession(title string, taskID *string) (terminalSession, error)
 	CreateSSHSession(serverID string) (terminalSession, error)
 	RenameSession(id, title string) error
+	LinkTask(id string, taskID *string) error
 	GetOrResumeSession(id string) (terminalSession, error)
 }
 

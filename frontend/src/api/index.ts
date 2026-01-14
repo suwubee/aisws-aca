@@ -99,10 +99,10 @@ export const commentApi = {
 
 // Terminal API
 export const terminalApi = {
-  list: (params?: { task_id?: string; show_hidden?: boolean }) =>
+  list: (params?: { task_id?: string; show_hidden?: boolean; include_history?: boolean }) =>
     api.get('/terminals', { params: params || {} }),
   get: (id: string) => api.get(`/terminals/${id}`),
-  create: (data?: CreateTerminalRequest) => api.post('/terminals', data || {}),
+  create: (data: CreateTerminalRequest) => api.post('/terminals', data),
   close: (id: string) => api.post(`/terminals/${id}/close`),
   hide: (id: string, hidden: boolean) => api.post(`/terminals/${id}/hide`, { hidden }),
   rename: (id: string, title: string) =>

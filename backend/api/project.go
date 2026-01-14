@@ -20,6 +20,7 @@ func NewProjectController() *ProjectController {
 type CreateProjectRequest struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
+	Remark      string            `json:"remark"`
 	Type        string            `json:"type"` // local, remote, git
 	GroupID     *string           `json:"group_id"`
 	LocalPath   string            `json:"local_path"`
@@ -33,6 +34,7 @@ type CreateProjectRequest struct {
 type UpdateProjectRequest struct {
 	Name        *string            `json:"name"`
 	Description *string            `json:"description"`
+	Remark      *string            `json:"remark"`
 	Type        *string            `json:"type"` // local, remote, git
 	GroupID     *string            `json:"group_id"`
 	LocalPath   *string            `json:"local_path"`
@@ -152,6 +154,7 @@ func (ctrl *ProjectController) CreateProject(c *fiber.Ctx) error {
 		ID:          uuid.New().String(),
 		Name:        name,
 		Description: req.Description,
+		Remark:      strings.TrimSpace(req.Remark),
 		Type:        projectType,
 		GroupID:     groupID,
 		LocalPath:   strings.TrimSpace(req.LocalPath),
@@ -212,6 +215,9 @@ func (ctrl *ProjectController) UpdateProject(c *fiber.Ctx) error {
 	}
 	if req.Description != nil {
 		updates["description"] = *req.Description
+	}
+	if req.Remark != nil {
+		updates["remark"] = strings.TrimSpace(*req.Remark)
 	}
 	if req.Type != nil {
 		projectType, err := normalizeProjectType(*req.Type)

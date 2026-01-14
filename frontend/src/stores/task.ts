@@ -6,6 +6,7 @@ export interface Task {
   id: string
   title: string
   description: string
+  remark?: string
   status: string
   priority: number
   order_index: number
@@ -119,6 +120,7 @@ export const useTaskStore = defineStore('task', () => {
   async function createAutomationTask(params: {
     title: string
     description?: string
+    remark?: string
     priority?: number
     server_id?: string | null
     project_id?: string | null

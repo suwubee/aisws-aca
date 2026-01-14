@@ -13,6 +13,9 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/appsetting"
+	"github.com/ai-coding-assistant/service/keybinding"
+	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/service/schedule"
 	"github.com/ai-coding-assistant/service/setupwizard"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
@@ -64,6 +67,20 @@ func main() {
 		log.Fatal(err)
 	}
 	utils.Info("Database initialized", zap.String("dsn", cfg.Database.DSN))
+
+	// Ensure builtin defaults exist (prompt templates / key bindings / settings).
+	if err := promptsvc.EnsureDefaults(); err != nil {
+		utils.Error("Failed to ensure prompt templates", zap.Error(err))
+		log.Fatal(err)
+	}
+	if err := keybinding.EnsureDefaults(); err != nil {
+		utils.Error("Failed to ensure key bindings", zap.Error(err))
+		log.Fatal(err)
+	}
+	if err := appsetting.EnsureDefaults(); err != nil {
+		utils.Error("Failed to ensure app settings", zap.Error(err))
+		log.Fatal(err)
+	}
 
 	// 创建终端管理器
 	terminalManager := terminal.NewManager(&cfg.Terminal)

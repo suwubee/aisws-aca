@@ -79,8 +79,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import { terminalApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
@@ -89,6 +91,8 @@ import TerminalPanel from '@/components/TerminalPanel.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
 const message = useMessage()
+const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
@@ -99,6 +103,7 @@ const showCreateTask = ref(false)
 const newTask = reactive({
   title: '',
   description: '',
+  remark: '',
   priority: 1,
   server_id: null as string | null,
   project_id: null as string | null,
@@ -140,7 +145,57 @@ onMounted(async () => {
       message.warning('加载服务器列表失败')
     })
   ])
+
+  await applyTerminalQuery()
 })
+
+watch(
+  () => route.query.terminal,
+  () => {
+    void applyTerminalQuery()
+  }
+)
+
+async function applyTerminalQuery() {
+  const terminalId = String(route.query.terminal || '').trim()
+  if (!terminalId) return
+
+  const ensureLoaded = async () => {
+    if (terminalStore.terminals.some(t => t.id === terminalId)) return true
+
+    try {
+      await terminalStore.fetchTerminals()
+    } catch {
+      // ignore
+    }
+    if (terminalStore.terminals.some(t => t.id === terminalId)) return true
+
+    // Fallback: fetch by id (may be hidden or not in current list)
+    try {
+      const { data } = await terminalApi.get(terminalId)
+      const item = data?.item
+      if (item?.hidden) {
+        await terminalApi.hide(terminalId, false).catch(() => {})
+      }
+      // refresh list to include it
+      await terminalStore.fetchTerminals().catch(() => {})
+      return terminalStore.terminals.some(t => t.id === terminalId)
+    } catch {
+      return false
+    }
+  }
+
+  const ok = await ensureLoaded()
+  if (ok) {
+    terminalStore.setActiveTerminal(terminalId)
+  } else {
+    message.warning('终端会话不存在或已退出')
+  }
+
+  const nextQuery = { ...route.query }
+  delete (nextQuery as any).terminal
+  router.replace({ path: route.path, query: nextQuery })
+}
 
 async function handleCreateTask() {
   if (isDemoMode.value) {
@@ -166,6 +221,7 @@ async function handleCreateTask() {
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
+      remark: newTask.remark,
       priority: newTask.priority,
       server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
       project_id: newTask.project_id || undefined,
@@ -211,7 +267,7 @@ async function handleCreateTask() {
 
     // 重置表单
     Object.assign(newTask, {
-      title: '', description: '', priority: 1, server_id: null, project_id: null,
+      title: '', description: '', remark: '', priority: 1, server_id: null, project_id: null,
       automation_mode: 'none', target_server_ids: [], script: '',
       work_dir: '', cli_type: 'claude', initial_prompt: '',
       auto_create_dir: true, auto_start: false, return_to_workbench: true,

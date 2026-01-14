@@ -962,6 +962,15 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 				zap.String("task_id", taskID),
 				zap.String("terminal_id", terminalID))
 
+			// 如果任务状态已经变化（例如终端关闭触发的自动完成），不要覆盖现有结果
+			var current model.Task
+			if err := model.DB.Select("id", "status").First(&current, "id = ?", taskID).Error; err != nil {
+				return
+			}
+			if strings.TrimSpace(current.Status) != "in_progress" {
+				return
+			}
+
 			// 终端关闭前做最后一次日志分析，判断任务是否已完成
 			finalDecision, _ := monitor.StartMonitoring(taskID, terminalID)
 			if finalDecision.Action == MonitorActionComplete {
@@ -1066,14 +1075,23 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 
 // updateTaskStatus 更新任务状态
 func (s *AutomationService) updateTaskStatus(taskID, status, reason string) {
+	now := time.Now()
 	updates := map[string]interface{}{
 		"status":     status,
-		"updated_at": time.Now(),
+		"updated_at": now,
 	}
 	if status == "done" {
-		updates["completed_at"] = time.Now()
+		updates["completed_at"] = now
 	}
 	model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(updates)
+
+	// 备注字段：如果用户未填写，则用系统决策/总结补全（不覆盖用户内容）
+	trimmed := strings.TrimSpace(reason)
+	if trimmed != "" {
+		model.DB.Model(&model.Task{}).
+			Where("id = ? AND (remark IS NULL OR remark = '')", taskID).
+			Update("remark", trimmed)
+	}
 }
 
 // createTaskMessage 创建任务消息通知

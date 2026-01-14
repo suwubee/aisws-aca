@@ -14,6 +14,9 @@ export interface TerminalSession {
     status: string
     running_command?: string
     task_id?: string
+    server_id?: string
+    server_name?: string
+    server_host?: string
     ai_assistant?: {
       type: string
       display_name: string
@@ -47,13 +50,22 @@ export const useTerminalStore = defineStore('terminal', () => {
         ...t,
         connected: false
       }))
+      if (terminals.value.length === 0) {
+        activeTerminalId.value = null
+        return
+      }
+
+      const current = activeTerminalId.value
+      if (!current || !terminals.value.some(t => t.id === current)) {
+        activeTerminalId.value = terminals.value[0].id
+      }
     } finally {
       loading.value = false
     }
   }
 
-  async function createTerminal(title?: string, taskId?: string) {
-    const { data } = await terminalApi.create({ title, task_id: taskId })
+  async function createTerminal(payload: { server_id: string; title?: string; task_id?: string }) {
+    const { data } = await terminalApi.create(payload)
     const newTerminal: TerminalTab = {
       ...data.item,
       connected: false

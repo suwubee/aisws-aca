@@ -86,6 +86,7 @@ type Task struct {
 	ProjectID   *string    `gorm:"index" json:"project_id"`
 	Title       string     `gorm:"not null" json:"title"`
 	Description string     `json:"description"`
+	Remark      string     `json:"remark"`
 	Status      string     `gorm:"default:todo;index" json:"status"` // todo, in_progress, done, archived
 	Priority    int        `gorm:"default:0;index" json:"priority"`  // 0-3
 	OrderIndex  float64    `gorm:"index" json:"order_index"`

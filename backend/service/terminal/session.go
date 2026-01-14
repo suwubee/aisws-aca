@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -157,6 +158,8 @@ type Session struct {
 	recentLogsMu     sync.Mutex
 	recentLogs       map[string]time.Time // 最近记录的日志内容 -> 时间
 	recentLogsWindow time.Duration        // 去重时间窗口
+
+	commandRunMu sync.Mutex
 }
 
 type sessionBackend interface {
@@ -969,11 +972,19 @@ func (s *Session) wait() {
 
 // Subscribe 订阅会话事件
 func (s *Session) Subscribe() (string, chan StreamEvent) {
+	return s.SubscribeWithBuffer(256)
+}
+
+// SubscribeWithBuffer 订阅会话事件（可指定缓冲区大小）。
+func (s *Session) SubscribeWithBuffer(buffer int) (string, chan StreamEvent) {
 	s.subMutex.Lock()
 	defer s.subMutex.Unlock()
 
 	id := uuid.New().String()
-	ch := make(chan StreamEvent, 256)
+	if buffer <= 0 {
+		buffer = 256
+	}
+	ch := make(chan StreamEvent, buffer)
 	s.subscribers[id] = ch
 	return id, ch
 }
@@ -1163,6 +1174,258 @@ func (s *Session) Metadata() *SessionMetadata {
 	defer s.metaMutex.RUnlock()
 	meta := *s.metadata
 	return &meta
+}
+
+// RunCommand 在当前终端会话中执行命令，并通过标记符采集命令输出。
+// 注意：该方法会将命令“真实输入”到终端里（用户可实时看到），并返回命令输出与退出码。
+func (s *Session) RunCommand(command, workDir string, timeout time.Duration) (string, int, error) {
+	if s == nil {
+		return "", -1, errors.New("terminal session is nil")
+	}
+
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return "", -1, errors.New("command is required")
+	}
+
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+
+	s.commandRunMu.Lock()
+	defer s.commandRunMu.Unlock()
+
+	select {
+	case <-s.done:
+		return "", -1, errors.New("terminal session already closed")
+	default:
+	}
+
+	id := strings.ReplaceAll(uuid.New().String(), "-", "")
+	startMarker := "__ACA_CMD_BEGIN_" + id + "__"
+	endMarkerPrefix := "__ACA_CMD_END_" + id + "__:"
+	heredocMarker := "ACA_EOF_" + id
+	scriptFile := ".aca_cmd_" + id + ".sh"
+
+	subID, events := s.SubscribeWithBuffer(4096)
+	defer s.Unsubscribe(subID)
+
+	lines := buildRunCommandLines(startMarker, endMarkerPrefix, heredocMarker, scriptFile, cmd, strings.TrimSpace(workDir))
+	for _, line := range lines {
+		if err := s.Write([]byte(line + "\r")); err != nil {
+			return "", -1, err
+		}
+		// 模拟人类输入节奏，避免远端 shell/网络缓冲导致丢字符
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	started := false
+	exitCode := -1
+	truncated := false
+
+	const maxCapturedBytes = 200_000
+	var captured strings.Builder
+	captured.Grow(16 * 1024)
+
+	pending := ""
+
+	appendCaptured := func(chunk string) {
+		if truncated || chunk == "" {
+			return
+		}
+		remaining := maxCapturedBytes - captured.Len()
+		if remaining <= 0 {
+			truncated = true
+			return
+		}
+		if len(chunk) <= remaining {
+			captured.WriteString(chunk)
+			return
+		}
+		captured.WriteString(chunk[:remaining])
+		truncated = true
+	}
+
+	findOutputLineMarker := func(text, marker string) (int, bool) {
+		searchFrom := 0
+		for {
+			idx := strings.Index(text[searchFrom:], marker)
+			if idx == -1 {
+				return -1, false
+			}
+			abs := searchFrom + idx
+			nextPos := abs + len(marker)
+			if nextPos >= len(text) {
+				return abs, true
+			}
+			next := text[nextPos]
+			if next == '\n' || next == '\r' {
+				return abs, true
+			}
+			searchFrom = abs + 1
+			if searchFrom >= len(text) {
+				return -1, false
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-timer.C:
+			out := strings.ToValidUTF8(stripANSI(captured.String()), "")
+			if truncated {
+				out = out + "\n…(truncated)…"
+			}
+			return strings.TrimSpace(out), exitCode, fmt.Errorf("command timeout after %s", timeout)
+		case <-s.done:
+			out := strings.ToValidUTF8(stripANSI(captured.String()), "")
+			if truncated {
+				out = out + "\n…(truncated)…"
+			}
+			return strings.TrimSpace(out), exitCode, errors.New("terminal session closed")
+		case event, ok := <-events:
+			if !ok {
+				out := strings.ToValidUTF8(stripANSI(captured.String()), "")
+				if truncated {
+					out = out + "\n…(truncated)…"
+				}
+				return strings.TrimSpace(out), exitCode, errors.New("terminal subscription closed")
+			}
+			if event.Type != StreamEventData || strings.TrimSpace(event.Data) == "" {
+				continue
+			}
+			raw, err := base64.StdEncoding.DecodeString(event.Data)
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			pending += string(raw)
+
+			if !started {
+				idx, ok := findOutputLineMarker(pending, startMarker)
+				if !ok {
+					// 保留尾部，避免 marker 跨 chunk 丢失
+					keep := len(startMarker) + 64
+					if len(pending) > keep {
+						pending = pending[len(pending)-keep:]
+					}
+					continue
+				}
+				pending = pending[idx+len(startMarker):]
+				pending = strings.TrimLeft(pending, "\r\n")
+				started = true
+			}
+
+			endIdx := strings.Index(pending, endMarkerPrefix)
+			if endIdx == -1 {
+				keep := len(endMarkerPrefix) + 64
+				if len(pending) > keep {
+					appendCaptured(pending[:len(pending)-keep])
+					pending = pending[len(pending)-keep:]
+				}
+				continue
+			}
+
+			appendCaptured(pending[:endIdx])
+
+			rest := pending[endIdx+len(endMarkerPrefix):]
+			rest = strings.TrimLeft(rest, " \t\r\n")
+			codeStr := ""
+			for _, r := range rest {
+				if r < '0' || r > '9' {
+					break
+				}
+				codeStr += string(r)
+				if len(codeStr) > 6 {
+					break
+				}
+			}
+			if codeStr != "" {
+				if code, err := strconv.Atoi(codeStr); err == nil {
+					exitCode = code
+				}
+			} else {
+				exitCode = 0
+			}
+
+			out := strings.ToValidUTF8(stripANSI(captured.String()), "")
+			if truncated {
+				out = out + "\n…(truncated)…"
+			}
+			out = strings.TrimSpace(out)
+
+			if exitCode != 0 {
+				return out, exitCode, fmt.Errorf("command exit code %d", exitCode)
+			}
+			return out, exitCode, nil
+		}
+	}
+}
+
+func buildRunCommandLines(startMarker, endMarkerPrefix, heredocMarker, scriptFile, command, workDir string) []string {
+	snippet := strings.ReplaceAll(command, "\r\n", "\n")
+	snippet = strings.ReplaceAll(snippet, "\r", "\n")
+	snippetLines := strings.Split(snippet, "\n")
+
+	scriptLines := make([]string, 0, len(snippetLines)+2)
+	if workDir != "" {
+		scriptLines = append(scriptLines, "cd -- "+quoteShellPathForTerminal(workDir))
+	}
+	scriptLines = append(scriptLines, snippetLines...)
+
+	lines := make([]string, 0, 8+len(scriptLines))
+	lines = append(lines, "echo '"+startMarker+"'")
+	lines = append(lines, fmt.Sprintf("cat > %s <<'%s'", scriptFile, heredocMarker))
+	lines = append(lines, scriptLines...)
+	lines = append(lines, heredocMarker)
+	lines = append(lines, fmt.Sprintf("bash %s; ACA_CODE=$?; echo '%s'$ACA_CODE; unset ACA_CODE; rm -f %s", scriptFile, endMarkerPrefix, scriptFile))
+	return lines
+}
+
+func quoteShellPathForTerminal(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "''"
+	}
+
+	if trimmed == "~" {
+		return "\"$HOME\""
+	}
+	if strings.HasPrefix(trimmed, "~/") {
+		rest := strings.TrimPrefix(trimmed, "~/")
+		return "\"$HOME/" + escapeDoubleQuotedForTerminal(rest) + "\""
+	}
+
+	return "'" + strings.ReplaceAll(trimmed, "'", "'\\''") + "'"
+}
+
+func escapeDoubleQuotedForTerminal(text string) string {
+	escaped := strings.ReplaceAll(text, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	escaped = strings.ReplaceAll(escaped, "$", "\\$")
+	escaped = strings.ReplaceAll(escaped, "`", "\\`")
+	return escaped
+}
+
+// InjectOutput 将文本注入到终端输出流（仅用于展示/观测，不会写入到底层 PTY/SSH）。
+// 典型用途：AI 托管后台执行的命令/结果，需要在工作台终端实时可见。
+func (s *Session) InjectOutput(data []byte) {
+	if s == nil {
+		return
+	}
+	if len(data) == 0 {
+		return
+	}
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+
+	s.scrollback.Write(data)
+	s.batchBroadcastData(data)
 }
 
 // BroadcastAILog 广播AI日志事件

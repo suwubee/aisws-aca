@@ -27,6 +27,10 @@ func (a terminalManagerAdapter) RenameSession(id, title string) error {
 	return a.manager.RenameSession(id, title)
 }
 
+func (a terminalManagerAdapter) LinkTask(id string, taskID *string) error {
+	return a.manager.LinkTask(id, taskID)
+}
+
 func (a terminalManagerAdapter) GetOrResumeSession(id string) (terminalSession, error) {
 	session, err := a.manager.GetOrResumeSession(id)
 	if err != nil || session == nil {

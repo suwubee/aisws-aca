@@ -68,12 +68,21 @@ func (m *TaskMonitor) StartMonitoring(taskID, terminalID string) (MonitorDecisio
 
 	limit := 200
 
-	logText, err := m.loadTerminalLogs(strings.TrimSpace(taskID), tid, limit)
+	taskID = strings.TrimSpace(taskID)
+	var taskModel *model.Task
+	if taskID != "" {
+		var t model.Task
+		if err := model.DB.First(&t, "id = ?", taskID).Error; err == nil {
+			taskModel = &t
+		}
+	}
+
+	logText, err := m.loadTerminalLogs(taskID, tid, limit)
 	if err != nil {
 		return MonitorDecision{}, err
 	}
 
-	analysis, analyzeErr := m.AnalyzeLogs(logText)
+	analysis, analyzeErr := m.AnalyzeLogs(taskModel, logText)
 	decision := m.MakeDecision(analysis)
 	return decision, analyzeErr
 }
@@ -117,13 +126,14 @@ func (m *TaskMonitor) loadTerminalLogs(taskID, terminalID string, limit int) (st
 }
 
 // AnalyzeLogs 使用AI Provider分析终端日志（失败时自动降级为启发式分析）
-func (m *TaskMonitor) AnalyzeLogs(logs string) (*LogAnalysis, error) {
+// task 用于提供任务目标/结束条件等上下文，帮助判断“是否真的完成”。
+func (m *TaskMonitor) AnalyzeLogs(task *model.Task, logs string) (*LogAnalysis, error) {
 	if m == nil {
 		return nil, errors.New("task monitor is nil")
 	}
 
 	text := strings.TrimSpace(logs)
-	fallback := heuristicAnalyzeLogs(text)
+	fallback := heuristicAnalyzeLogs(task, text)
 	if text == "" {
 		return fallback, nil
 	}
@@ -145,10 +155,23 @@ func (m *TaskMonitor) AnalyzeLogs(logs string) (*LogAnalysis, error) {
 	if text != "" {
 		lineCount = strings.Count(text, "\n") + 1
 	}
-	systemPrompt, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyTaskMonitorSystemPrompt, map[string]any{
-		"log_limit":     lineCount,
-		"max_log_chars": maxLogChars,
-	})
+	vars := map[string]any{
+		"log_limit":             lineCount,
+		"max_log_chars":         maxLogChars,
+		"task_title":            "",
+		"task_description":      "",
+		"task_initial_prompt":   "",
+		"task_ai_prompt":        "",
+		"task_ai_end_condition": "",
+	}
+	if task != nil {
+		vars["task_title"] = strings.TrimSpace(task.Title)
+		vars["task_description"] = strings.TrimSpace(task.Description)
+		vars["task_initial_prompt"] = strings.TrimSpace(task.InitialPrompt)
+		vars["task_ai_prompt"] = strings.TrimSpace(task.AIPrompt)
+		vars["task_ai_end_condition"] = strings.TrimSpace(task.AIEndCondition)
+	}
+	systemPrompt, err := promptsvc.RenderTemplate(promptsvc.TemplateKeyTaskMonitorSystemPrompt, vars)
 	if err != nil {
 		// AI 提示词模板不可用时，使用启发式分析，不返回错误
 		return fallback, nil
@@ -210,7 +233,7 @@ func extractJSONObject(s string) string {
 	return strings.TrimSpace(s[start : end+1])
 }
 
-func heuristicAnalyzeLogs(logs string) *LogAnalysis {
+func heuristicAnalyzeLogs(task *model.Task, logs string) *LogAnalysis {
 	text := strings.ToLower(strings.TrimSpace(logs))
 	if text == "" {
 		return &LogAnalysis{
@@ -237,6 +260,12 @@ func heuristicAnalyzeLogs(logs string) *LogAnalysis {
 		"all done", "operation completed", "successfully completed",
 		"build complete", "test complete", "deployment complete",
 	)
+	if !completed && task != nil {
+		endCond := strings.TrimSpace(task.AIEndCondition)
+		if endCond != "" && strings.Contains(text, strings.ToLower(endCond)) {
+			completed = true
+		}
+	}
 	hasError := containsAny(text, "error", "failed", "fatal", "panic", "traceback", "exception", "permission denied", "no such file", "command not found", "构建失败", "测试失败")
 	retryable := hasError && containsAny(text, "timeout", "connection reset", "connection refused", "rate limit", "429", "502", "503", "504", "超时", "重试")
 

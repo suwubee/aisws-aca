@@ -68,6 +68,7 @@ const projectFilter = ref<string | null>(contextStore.projectId)
 const newTask = reactive({
   title: '',
   description: '',
+  remark: '',
   priority: 1,
   server_id: null as string | null,
   project_id: null as string | null,
@@ -158,6 +159,7 @@ async function handleCreateTask() {
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
+      remark: newTask.remark,
       priority: newTask.priority,
       server_id: (newTask.automation_mode === 'script' || newTask.automation_mode === 'agent') ? undefined : (newTask.server_id || undefined),
       project_id: newTask.project_id || undefined,
@@ -189,6 +191,7 @@ async function handleCreateTask() {
         const result = await taskStore.startTask(task.id)
         if (result.terminal_id) {
           await terminalStore.fetchTerminals()
+          terminalStore.setActiveTerminal(result.terminal_id)
         }
         if (result?.needs_user_action) {
           message.warning(result.user_action_hint || '任务已启动但需要用户确认')
@@ -201,7 +204,7 @@ async function handleCreateTask() {
     }
 
     Object.assign(newTask, {
-      title: '', description: '', priority: 1, server_id: null, project_id: null,
+      title: '', description: '', remark: '', priority: 1, server_id: null, project_id: null,
       automation_mode: 'none', target_server_ids: [], script: '',
       work_dir: '', cli_type: 'claude', initial_prompt: '',
       auto_create_dir: true, auto_start: false, return_to_workbench: false,

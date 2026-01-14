@@ -142,6 +142,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useRouter } from 'vue-router'
+import { terminalApi } from '@/api'
 import { useTaskStore, type Task } from '@/stores/task'
 import { useTerminalStore } from '@/stores/terminal'
 import { useIsMobile } from '@/utils/useIsMobile'
@@ -224,6 +225,9 @@ onMounted(() => {
   if (!taskStore.loading && taskStore.tasks.length === 0) {
     taskStore.fetchTasks().catch(() => {})
   }
+  if (terminalStore.terminals.length === 0) {
+    terminalStore.fetchTerminals().catch(() => {})
+  }
 })
 
 function handleDragStart(event: DragEvent, task: Task) {
@@ -280,21 +284,94 @@ async function handleDeleteTask(task: Task) {
   }
 }
 
-async function handleOpenTerminal(task: Task) {
-  // 优先切换到该任务已存在的终端（避免重复创建）
-  const related = terminalStore.terminals
-    .filter(t => t.task_id === task.id)
-    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+type OpenTerminalPayload = { task: Task; terminalId?: string }
+type TerminalLike = { id: string; status?: string; created_at?: number; metadata?: any; hidden?: boolean }
 
-  if (related.length > 0) {
-    terminalStore.setActiveTerminal(related[0].id)
-    message.success('已切换到关联终端')
+function desiredServerIDs(task: Task) {
+  const ids = new Set<string>()
+  const add = (v?: string | null) => {
+    const s = String(v || '').trim()
+    if (s) ids.add(s)
+  }
+  add(task.server_id)
+  if (Array.isArray(task.target_server_ids)) {
+    task.target_server_ids.forEach(add)
+  }
+  return ids
+}
+
+function pickBestTerminal(task: Task, terminals: TerminalLike[]) {
+  if (!Array.isArray(terminals) || terminals.length === 0) return null
+
+  const desired = desiredServerIDs(task)
+  const sorted = terminals.slice().sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0))
+
+  const running = sorted.filter(t => String(t.status || '').toLowerCase() === 'running')
+  const candidates = running.length > 0 ? running : sorted
+
+  if (desired.size > 0) {
+    const matched = candidates.find(t => {
+      const sid = String(t.metadata?.server_id || '').trim()
+      return sid && desired.has(sid)
+    })
+    if (matched) return matched
+  }
+
+  return candidates[0] || null
+}
+
+async function handleOpenTerminal(payload: OpenTerminalPayload) {
+  const task = payload.task
+  const explicitTerminalId = String(payload.terminalId || '').trim()
+
+  try {
+    await terminalStore.fetchTerminals()
+  } catch {
+    // ignore
+  }
+
+  if (explicitTerminalId) {
+    router.push({ path: '/', query: { terminal: explicitTerminalId } })
     return
   }
 
+  // 1) 优先使用已加载的关联终端（避免重复创建）
+  const related = terminalStore.terminals
+    .filter(t => t.task_id === task.id)
+    .sort((a, b) => (Number(b.created_at || 0) - Number(a.created_at || 0)))
+
+  const pickedFromStore = pickBestTerminal(task, related)
+  if (pickedFromStore) {
+    router.push({ path: '/', query: { terminal: pickedFromStore.id } })
+    return
+  }
+
+  // 2) 若终端被隐藏/列表未命中，查询后端（包含 hidden）
   try {
-    await terminalStore.createTerminal(task.title, task.id)
+    const { data } = await terminalApi.list({ task_id: task.id, show_hidden: true })
+    const items = Array.isArray(data.items) ? data.items : []
+    const picked = pickBestTerminal(task, items)
+    if (picked?.id) {
+      if (picked.hidden) {
+        await terminalApi.hide(picked.id, false).catch(() => {})
+      }
+      router.push({ path: '/', query: { terminal: picked.id } })
+      return
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3) 没有任何关联终端：新建一个 SSH 终端并关联任务
+  try {
+    const serverId = task.server_id || task.target_server_ids?.[0]
+    if (!serverId) {
+      message.error('请先为任务选择服务器')
+      return
+    }
+    const created = await terminalStore.createTerminal({ server_id: serverId, title: task.title, task_id: task.id })
     message.success('终端已创建并关联任务')
+    router.push({ path: '/', query: { terminal: created.id } })
   } catch (error) {
     message.error('创建终端失败')
   }
@@ -312,6 +389,7 @@ async function handleStartTask(task: Task) {
     if (result.terminal_id) {
       await terminalStore.fetchTerminals()
       terminalStore.setActiveTerminal(result.terminal_id)
+      router.push({ path: '/', query: { terminal: result.terminal_id } })
     }
   } catch (error: any) {
     message.error(error.response?.data?.error || '启动任务失败')

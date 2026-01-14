@@ -7,6 +7,9 @@
       <n-form-item label="描述">
         <n-input v-model:value="form.description" type="textarea" placeholder="任务描述" />
       </n-form-item>
+      <n-form-item label="备注">
+        <n-input v-model:value="form.remark" type="textarea" placeholder="可用于临时提醒/记录关键结论" />
+      </n-form-item>
       <n-form-item label="优先级">
         <n-radio-group v-model:value="form.priority">
           <n-radio :value="0">低</n-radio>
@@ -202,6 +205,7 @@ const saving = ref(false)
 const form = reactive({
   title: '',
   description: '',
+  remark: '',
   priority: 1,
   server_id: null as string | null,
   project_id: null as string | null,
@@ -242,6 +246,7 @@ function syncFormFromTask(task: Task | null) {
   form.automation_mode = modeRaw || 'cli'
   form.title = task?.title ?? ''
   form.description = task?.description ?? ''
+  form.remark = task?.remark ?? ''
   const priority = typeof task?.priority === 'number' ? task.priority : 1
   form.priority = Math.min(3, Math.max(0, priority))
   form.server_id = task?.server_id ?? null
@@ -311,6 +316,7 @@ async function save() {
     const updated = await taskStore.updateTask(props.task.id, {
       title: form.title,
       description: form.description,
+      remark: form.remark,
       priority: form.priority,
       project_id: form.project_id,
       automation_mode: form.automation_mode,

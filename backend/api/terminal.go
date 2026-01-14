@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
@@ -31,8 +32,9 @@ func (ctrl *TerminalController) SetDemoMode(enabled bool) {
 }
 
 type CreateTerminalRequest struct {
-	Title  string  `json:"title"`
-	TaskID *string `json:"task_id"`
+	Title    string  `json:"title"`
+	TaskID   *string `json:"task_id"`
+	ServerID string  `json:"server_id"`
 }
 
 type TerminalResponse struct {
@@ -53,10 +55,25 @@ func (ctrl *TerminalController) CreateTerminal(c *fiber.Ctx) error {
 		req = CreateTerminalRequest{}
 	}
 
-	session, err := ctrl.manager.CreateSession(req.Title, req.TaskID)
+	serverID := strings.TrimSpace(req.ServerID)
+	if serverID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Server is required (local must be configured in Servers)"})
+	}
+
+	session, err := ctrl.manager.CreateSSHSession(serverID)
 	if err != nil {
 		utils.Error("Failed to create terminal", zap.Error(err))
+		if strings.Contains(err.Error(), "server not found") {
+			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
+		}
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create terminal"})
+	}
+
+	if req.TaskID != nil && strings.TrimSpace(*req.TaskID) != "" {
+		_ = ctrl.manager.LinkTask(session.ID(), req.TaskID)
+	}
+	if strings.TrimSpace(req.Title) != "" {
+		_ = ctrl.manager.RenameSession(session.ID(), strings.TrimSpace(req.Title))
 	}
 
 	return c.JSON(fiber.Map{
@@ -75,8 +92,9 @@ func (ctrl *TerminalController) CreateTerminal(c *fiber.Ctx) error {
 
 // ListTerminals 获取终端列表
 func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
-	taskID := c.Query("task_id")
+	taskID := strings.TrimSpace(c.Query("task_id"))
 	showHidden := c.Query("show_hidden") == "true"
+	includeHistory := c.Query("include_history") == "true"
 	var taskIDPtr *string
 	if taskID != "" {
 		taskIDPtr = &taskID
@@ -90,17 +108,25 @@ func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
 	}
 
 	type terminalHiddenRow struct {
-		ID     string `gorm:"column:id"`
-		Hidden bool   `gorm:"column:hidden"`
+		ID        string    `gorm:"column:id"`
+		Hidden    bool      `gorm:"column:hidden"`
+		Status    string    `gorm:"column:status"`
+		TaskID    *string   `gorm:"column:task_id"`
+		ServerID  *string   `gorm:"column:server_id"`
+		Title     string    `gorm:"column:title"`
+		PID       int       `gorm:"column:p_id"`
+		CreatedAt time.Time `gorm:"column:created_at"`
 	}
 	hiddenByID := map[string]bool{}
+	dbByID := map[string]terminalHiddenRow{}
 	if len(ids) > 0 {
 		var rows []terminalHiddenRow
-		if err := model.DB.Model(&model.TerminalSession{}).Select("id", "hidden").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		if err := model.DB.Model(&model.TerminalSession{}).Select("id", "hidden", "status", "task_id", "server_id", "title", "p_id", "created_at").Where("id IN ?", ids).Find(&rows).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to query terminal visibility"})
 		}
 		for _, r := range rows {
 			hiddenByID[r.ID] = r.Hidden
+			dbByID[r.ID] = r
 		}
 	}
 
@@ -110,45 +136,171 @@ func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
 		if hidden && !showHidden {
 			continue
 		}
+		meta := s.Metadata()
+		if row, ok := dbByID[s.ID()]; ok {
+			if meta != nil {
+				if meta.TaskID == nil && row.TaskID != nil {
+					meta.TaskID = row.TaskID
+				}
+				if meta.ServerID == nil && row.ServerID != nil {
+					meta.ServerID = row.ServerID
+				}
+				if strings.TrimSpace(meta.Title) == "" && strings.TrimSpace(row.Title) != "" {
+					meta.Title = row.Title
+				}
+				if meta.PID == 0 && row.PID != 0 {
+					meta.PID = row.PID
+				}
+				if strings.TrimSpace(meta.Status) == "" && strings.TrimSpace(row.Status) != "" {
+					meta.Status = row.Status
+				}
+			}
+		}
+
+		taskID := s.TaskID()
+		if taskID == nil && meta != nil && meta.TaskID != nil {
+			taskID = meta.TaskID
+		}
 		items = append(items, TerminalResponse{
 			ID:        s.ID(),
 			Title:     s.Title(),
-			TaskID:    s.TaskID(),
+			TaskID:    taskID,
 			Status:    s.Status(),
 			Hidden:    hidden,
-			PID:       s.Metadata().PID,
-			Metadata:  s.Metadata(),
+			PID:       meta.PID,
+			Metadata:  meta,
 			CreatedAt: s.CreatedAt().Unix(),
 		})
 	}
 
-	return c.JSON(fiber.Map{"items": items})
+	if !includeHistory {
+		return c.JSON(fiber.Map{"items": items})
+	}
+
+	// include_history=true: merge DB terminal sessions (including exited/hidden) with in-memory sessions for live metadata.
+	query := model.DB.Model(&model.TerminalSession{})
+	if taskID != "" {
+		query = query.Where("task_id = ?", taskID)
+	}
+	if !showHidden {
+		query = query.Where("hidden = ?", false)
+	}
+	query = query.Order("created_at desc")
+
+	var dbSessions []model.TerminalSession
+	if err := query.Find(&dbSessions).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list terminal sessions"})
+	}
+
+	type memTerminal struct {
+		resp TerminalResponse
+	}
+	memByID := map[string]memTerminal{}
+	for _, it := range items {
+		memByID[it.ID] = memTerminal{resp: it}
+	}
+
+	merged := make([]TerminalResponse, 0, len(dbSessions)+len(items))
+	seen := map[string]struct{}{}
+
+	for _, dbs := range dbSessions {
+		id := strings.TrimSpace(dbs.ID)
+		if id == "" {
+			continue
+		}
+		if mem, ok := memByID[id]; ok {
+			merged = append(merged, mem.resp)
+		} else {
+			meta := &terminal.SessionMetadata{
+				Title:    dbs.Title,
+				PID:      dbs.PID,
+				Status:   dbs.Status,
+				TaskID:   dbs.TaskID,
+				ServerID: dbs.ServerID,
+			}
+			merged = append(merged, TerminalResponse{
+				ID:        id,
+				Title:     dbs.Title,
+				TaskID:    dbs.TaskID,
+				Status:    dbs.Status,
+				Hidden:    dbs.Hidden,
+				PID:       dbs.PID,
+				Metadata:  meta,
+				CreatedAt: dbs.CreatedAt.Unix(),
+			})
+		}
+		seen[id] = struct{}{}
+	}
+
+	// Include any in-memory sessions that are missing from DB (legacy), keeping existing order.
+	for _, it := range items {
+		if _, ok := seen[it.ID]; ok {
+			continue
+		}
+		merged = append(merged, it)
+	}
+
+	return c.JSON(fiber.Map{"items": merged})
 }
 
 // GetTerminal 获取终端详情
 func (ctrl *TerminalController) GetTerminal(c *fiber.Ctx) error {
 	id := c.Params("id")
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+
+	var dbSession model.TerminalSession
+	err := model.DB.First(&dbSession, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query terminal"})
+	}
+
 	session := ctrl.manager.GetSession(id)
 	if session == nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+		// Best-effort resume for tmux-based sessions.
+		if resumed, resumeErr := ctrl.manager.GetOrResumeSession(id); resumeErr == nil && resumed != nil {
+			session = resumed
+		}
 	}
 
-	hidden := false
-	var dbSession model.TerminalSession
-	if err := model.DB.Select("hidden").First(&dbSession, "id = ?", id).Error; err == nil {
-		hidden = dbSession.Hidden
+	if session != nil {
+		return c.JSON(fiber.Map{
+			"item": TerminalResponse{
+				ID:        session.ID(),
+				Title:     session.Title(),
+				TaskID:    session.TaskID(),
+				Status:    session.Status(),
+				Hidden:    dbSession.Hidden,
+				PID:       session.Metadata().PID,
+				Metadata:  session.Metadata(),
+				CreatedAt: session.CreatedAt().Unix(),
+			},
+		})
 	}
 
+	// Session is not active (e.g., SSH session after restart). Still return DB snapshot for logs/UX.
+	meta := &terminal.SessionMetadata{
+		Title:    dbSession.Title,
+		PID:      dbSession.PID,
+		Status:   dbSession.Status,
+		TaskID:   dbSession.TaskID,
+		ServerID: dbSession.ServerID,
+	}
 	return c.JSON(fiber.Map{
 		"item": TerminalResponse{
-			ID:        session.ID(),
-			Title:     session.Title(),
-			TaskID:    session.TaskID(),
-			Status:    session.Status(),
-			Hidden:    hidden,
-			PID:       session.Metadata().PID,
-			Metadata:  session.Metadata(),
-			CreatedAt: session.CreatedAt().Unix(),
+			ID:        dbSession.ID,
+			Title:     dbSession.Title,
+			TaskID:    dbSession.TaskID,
+			Status:    dbSession.Status,
+			Hidden:    dbSession.Hidden,
+			PID:       dbSession.PID,
+			Metadata:  meta,
+			CreatedAt: dbSession.CreatedAt.Unix(),
 		},
 	})
 }
@@ -260,7 +412,17 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		return
 	}
 
+	sessionID = strings.TrimSpace(sessionID)
 	session := ctrl.manager.GetSession(sessionID)
+	if session == nil {
+		// Allow reconnect after backend restart for tmux-backed sessions.
+		resumed, err := ctrl.manager.GetOrResumeSession(sessionID)
+		if err != nil {
+			c.WriteJSON(WSMessage{Type: "error", Message: "Failed to resume session"})
+			return
+		}
+		session = resumed
+	}
 	if session == nil {
 		c.WriteJSON(WSMessage{Type: "error", Message: "Session not found"})
 		return

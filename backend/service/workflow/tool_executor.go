@@ -87,6 +87,11 @@ func (e *ToolExecutor) selectServer(args map[string]any, sessionCtx map[string]a
 
 	sessionCtx["current_server_id"] = serverID
 	sessionCtx["current_server_name"] = server.Name
+
+	execMode := strings.ToLower(strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode")))
+	if execMode == "terminal" && e.terminal != nil {
+		_ = e.ensureTerminalForServer(sessionCtx, serverID)
+	}
 	return &ToolResult{
 		Success: true,
 		Output:  fmt.Sprintf("已选择服务器: %s (%s)", server.Name, server.Host),
@@ -206,6 +211,9 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 	}
 
 	workDir, _ := args["work_dir"].(string)
+	if strings.TrimSpace(workDir) == "" {
+		workDir = strings.TrimSpace(getStringFromMap(sessionCtx, "work_dir"))
+	}
 	serverID, _ := args["server_id"].(string)
 	if serverID == "" {
 		if sid, ok := sessionCtx["current_server_id"].(string); ok {
@@ -216,6 +224,49 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 	if strings.TrimSpace(serverID) == "" {
 		return &ToolResult{Success: false, Error: "server_id is required (local must be configured in Servers)"}
 	}
+
+	execMode := strings.ToLower(strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode")))
+	if execMode == "" {
+		execMode = "backend"
+	}
+
+	// 优先使用“终端执行模式”：让 AI 真正在工作台可见的终端里敲命令，便于实时观察/接管。
+	if execMode == "terminal" && e.terminal != nil {
+		terminalID := e.ensureTerminalForServer(sessionCtx, serverID)
+		if strings.TrimSpace(terminalID) != "" {
+			displayCmd := strings.TrimSpace(command)
+			if workDir != "" {
+				displayCmd = fmt.Sprintf("cd %s && %s", strings.TrimSpace(workDir), strings.TrimSpace(command))
+			}
+			e.emitTerminalAILog(sessionCtx, "action", fmt.Sprintf("[%s] $ %s", strings.TrimSpace(serverID), displayCmd), "command", strings.TrimSpace(displayCmd))
+
+			session, err := e.terminal.GetOrResumeSession(terminalID)
+			if err == nil && session != nil {
+				output, exitCode, runErr := session.RunCommand(command, workDir, 0)
+				if runErr != nil {
+					msg := fmt.Sprintf("[%s] 命令执行失败: %v", strings.TrimSpace(serverID), runErr)
+					if strings.TrimSpace(output) != "" {
+						msg = msg + "\n" + strings.TrimRight(output, "\n")
+					} else if exitCode >= 0 {
+						msg = msg + fmt.Sprintf(" (exit=%d)", exitCode)
+					}
+					e.emitTerminalAILog(sessionCtx, "error", msg, "", "")
+					return &ToolResult{Success: false, Error: runErr.Error(), Output: output}
+				}
+
+				out := strings.TrimRight(output, "\n")
+				if strings.TrimSpace(out) == "" {
+					e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] （无输出）", strings.TrimSpace(serverID)), "", "")
+				} else {
+					e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s]\n%s", strings.TrimSpace(serverID), out), "", "")
+				}
+
+				return &ToolResult{Success: true, Output: output}
+			}
+		}
+		// 终端不可用时降级到后端执行
+	}
+
 	if e.sshManager == nil {
 		return &ToolResult{Success: false, Error: "ssh manager is not configured"}
 	}
@@ -226,10 +277,27 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 		fullCmd = fmt.Sprintf("cd %s && %s", workDir, command)
 	}
 
+	displayCmd := strings.TrimSpace(command)
+	if workDir != "" {
+		displayCmd = fmt.Sprintf("cd %s && %s", strings.TrimSpace(workDir), strings.TrimSpace(command))
+	}
+	e.emitTerminalAILog(sessionCtx, "action", fmt.Sprintf("[%s] $ %s", strings.TrimSpace(serverID), displayCmd), "command", fullCmd)
+
 	// Execute on server or locally
 	output, err := e.sshManager.ExecuteCommand(serverID, fullCmd)
 	if err != nil {
+		msg := fmt.Sprintf("[%s] 命令执行失败: %v", strings.TrimSpace(serverID), err)
+		if strings.TrimSpace(output) != "" {
+			msg = msg + "\n" + strings.TrimRight(output, "\n")
+		}
+		e.emitTerminalAILog(sessionCtx, "error", msg, "", "")
 		return &ToolResult{Success: false, Error: err.Error(), Output: output}
+	}
+	out := strings.TrimRight(output, "\n")
+	if strings.TrimSpace(out) == "" {
+		e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] （无输出）", strings.TrimSpace(serverID)), "", "")
+	} else {
+		e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s]\n%s", strings.TrimSpace(serverID), out), "", "")
 	}
 	return &ToolResult{Success: true, Output: output}
 }
@@ -303,6 +371,8 @@ func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[s
 		return &ToolResult{Success: false, Error: "ssh manager is not configured"}
 	}
 
+	e.emitTerminalAILog(sessionCtx, "action", fmt.Sprintf("批量执行 %d 台服务器: %s", len(unique), strings.TrimSpace(command)), "command", fullCmd)
+
 	type resultItem struct {
 		Output string `json:"output"`
 		Error  string `json:"error,omitempty"`
@@ -336,6 +406,21 @@ func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[s
 			success = false
 		}
 
+		entry := fmt.Sprintf("=== %s ===", p.id)
+		if p.res.Error != "" {
+			entry = entry + "\nERROR: " + p.res.Error
+		}
+		if strings.TrimSpace(p.res.Output) != "" {
+			entry = entry + "\n" + strings.TrimRight(p.res.Output, "\n")
+		}
+		if p.res.Error != "" {
+			e.emitTerminalAILog(sessionCtx, "error", entry, "", "")
+		} else if strings.TrimSpace(p.res.Output) == "" {
+			e.emitTerminalAILog(sessionCtx, "info", entry+"\n（无输出）", "", "")
+		} else {
+			e.emitTerminalAILog(sessionCtx, "info", entry, "", "")
+		}
+
 		sb.WriteString("=== ")
 		sb.WriteString(p.id)
 		sb.WriteString(" ===\n")
@@ -356,6 +441,230 @@ func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[s
 		Output:  strings.TrimSpace(sb.String()),
 		Data:    results,
 	}
+}
+
+func (e *ToolExecutor) emitTerminalAILog(sessionCtx map[string]any, logType, message, inputType, inputData string) {
+	if e == nil || sessionCtx == nil {
+		return
+	}
+
+	terminalID := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id"))
+	if terminalID == "" {
+		return
+	}
+
+	taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
+	var taskIDPtr *string
+	if taskID != "" {
+		taskIDCopy := taskID
+		taskIDPtr = &taskIDCopy
+	}
+
+	text := strings.TrimSpace(message)
+	if text == "" {
+		return
+	}
+	if strings.TrimSpace(inputData) != "" {
+		label := strings.TrimSpace(inputType)
+		if label == "" {
+			label = "input"
+		}
+		text = text + "\n" + label + ": " + strings.TrimSpace(inputData)
+	}
+
+	// 1) 写入数据库，便于回溯/导出（system 类型不会影响终端输入/输出分组）
+	if model.DB != nil {
+		now := time.Now()
+		content := fmt.Sprintf("[AI][%s] %s", strings.TrimSpace(logType), text)
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		terminalCopy := terminalID
+		_ = model.DB.Create(&model.Log{
+			ID:         uuid.New().String(),
+			TerminalID: &terminalCopy,
+			TaskID:     taskIDPtr,
+			LogType:    "system",
+			Content:    content,
+			CreatedAt:  now,
+		}).Error
+	}
+
+	// 2) 实时广播到终端订阅者（工作台/审批面板的 AI 日志）
+	if e.terminal == nil {
+		return
+	}
+	session, err := e.terminal.GetOrResumeSession(terminalID)
+	if err != nil || session == nil {
+		return
+	}
+	if strings.TrimSpace(inputData) != "" || strings.TrimSpace(inputType) != "" {
+		session.BroadcastAILogWithInput(logType, text, inputType, inputData)
+	} else {
+		session.BroadcastAILog(logType, text)
+	}
+
+	execMode := strings.ToLower(strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode")))
+	if execMode == "terminal" {
+		return
+	}
+
+	// 3) 注入到终端输出流，让工作台终端“看起来”与 AI 执行一致（仅用于后端执行模式）
+	display := strings.TrimRight(text, "\n")
+	display = strings.ReplaceAll(display, "\n", "\r\n")
+
+	if display != "" {
+		label := strings.ToLower(strings.TrimSpace(logType))
+		prefix := "[AI]"
+		color := "\x1b[90m" // gray
+		switch label {
+		case "action":
+			prefix = "[AI][action]"
+			color = "\x1b[32m"
+		case "error":
+			prefix = "[AI][error]"
+			color = "\x1b[31m"
+		case "warning":
+			prefix = "[AI][warning]"
+			color = "\x1b[33m"
+		case "decision":
+			prefix = "[AI][decision]"
+			color = "\x1b[35m"
+		case "info":
+			prefix = "[AI][info]"
+			color = "\x1b[36m"
+		}
+
+		const maxRunes = 8000
+		runes := []rune(display)
+		if len(runes) > maxRunes {
+			display = string(runes[:maxRunes]) + "\r\n…(truncated)…"
+		}
+
+		out := "\r\n" + color + prefix + "\x1b[0m " + display + "\r\n"
+		session.InjectOutput([]byte(out))
+	}
+}
+
+func (e *ToolExecutor) ensureTerminalForServer(sessionCtx map[string]any, serverID string) string {
+	if e == nil || e.terminal == nil || sessionCtx == nil {
+		return ""
+	}
+
+	sid := strings.TrimSpace(serverID)
+	if sid == "" {
+		return ""
+	}
+
+	terminalByServer := getStringMapFromContext(sessionCtx, "terminal_ids_by_server")
+	if terminalByServer == nil {
+		terminalByServer = map[string]string{}
+	}
+
+	if existing := strings.TrimSpace(terminalByServer[sid]); existing != "" {
+		if sess, err := e.terminal.GetOrResumeSession(existing); err == nil && sess != nil {
+			sessionCtx["terminal_id"] = existing
+			return existing
+		}
+		delete(terminalByServer, sid)
+	}
+
+	// 如果上下文已带 terminal_id（例如 StartTaskAgent 创建并由前端打开的默认终端），
+	// 且该终端绑定的 server_id 与当前选择的服务器一致，则优先复用，避免创建第二个终端导致“AI 在后台跑，工作台终端静止”。
+	if current := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id")); current != "" && model.DB != nil {
+		var t model.TerminalSession
+		if err := model.DB.Select("id", "server_id").First(&t, "id = ?", current).Error; err == nil {
+			if t.ServerID != nil && strings.TrimSpace(*t.ServerID) == sid {
+				if sess, err := e.terminal.GetOrResumeSession(current); err == nil && sess != nil {
+					terminalByServer[sid] = current
+					sessionCtx["terminal_ids_by_server"] = terminalByServer
+					sessionCtx["terminal_id"] = current
+					return current
+				}
+			}
+		}
+	}
+
+	session, err := e.terminal.CreateSSHSession(sid)
+	if err != nil || session == nil {
+		return ""
+	}
+
+	terminalID := session.ID()
+	taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
+	if taskID != "" {
+		taskIDCopy := taskID
+		_ = e.terminal.LinkTask(terminalID, &taskIDCopy)
+	}
+
+	title := "AI托管"
+	if label := resolveServerLabelForWorkflow(sid); label != "" {
+		title = fmt.Sprintf("AI托管: %s", label)
+	}
+	_ = e.terminal.RenameSession(terminalID, title)
+
+	terminalByServer[sid] = terminalID
+	sessionCtx["terminal_ids_by_server"] = terminalByServer
+	sessionCtx["terminal_id"] = terminalID
+	return terminalID
+}
+
+func getStringMapFromContext(ctx map[string]any, key string) map[string]string {
+	if ctx == nil {
+		return nil
+	}
+	raw, ok := ctx[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, s := range v {
+			if strings.TrimSpace(k) == "" || strings.TrimSpace(s) == "" {
+				continue
+			}
+			out[strings.TrimSpace(k)] = strings.TrimSpace(s)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for k, value := range v {
+			ks := strings.TrimSpace(k)
+			if ks == "" {
+				continue
+			}
+			if s, ok := value.(string); ok {
+				vs := strings.TrimSpace(s)
+				if vs != "" {
+					out[ks] = vs
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func resolveServerLabelForWorkflow(serverID string) string {
+	id := strings.TrimSpace(serverID)
+	if id == "" || model.DB == nil {
+		return ""
+	}
+
+	var server model.SSHServer
+	if err := model.DB.Select("id", "name", "host").First(&server, "id = ?", id).Error; err != nil {
+		return id
+	}
+	if strings.TrimSpace(server.Name) != "" {
+		return strings.TrimSpace(server.Name)
+	}
+	if strings.TrimSpace(server.Host) != "" {
+		return strings.TrimSpace(server.Host)
+	}
+	return id
 }
 
 // gitOperation executes git operations

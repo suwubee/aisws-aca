@@ -55,6 +55,10 @@ func RunMigrations(db *gorm.DB) error {
 			id: "20260109_add_projects_group_id",
 			up: migrateAddProjectGroupID,
 		},
+		{
+			id: "20260114_add_remark_fields",
+			up: migrateAddRemarkFields,
+		},
 	}
 
 	for _, m := range migrations {
@@ -175,4 +179,30 @@ func migrateAddProjectGroupID(db *gorm.DB) error {
 	}
 
 	return db.Exec("CREATE INDEX IF NOT EXISTS idx_projects_group_id ON projects(group_id)").Error
+}
+
+func migrateAddRemarkFields(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+
+	if db.Migrator().HasTable(&Task{}) && !db.Migrator().HasColumn(&Task{}, "Remark") {
+		if err := db.Migrator().AddColumn(&Task{}, "Remark"); err != nil {
+			return err
+		}
+	}
+
+	if db.Migrator().HasTable(&Project{}) && !db.Migrator().HasColumn(&Project{}, "Remark") {
+		if err := db.Migrator().AddColumn(&Project{}, "Remark"); err != nil {
+			return err
+		}
+	}
+
+	if db.Migrator().HasTable(&ProjectGroup{}) && !db.Migrator().HasColumn(&ProjectGroup{}, "Remark") {
+		if err := db.Migrator().AddColumn(&ProjectGroup{}, "Remark"); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

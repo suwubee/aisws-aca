@@ -59,6 +59,16 @@
         </button>
         <button
           class="action-btn"
+          :class="{ active: showWorkflow }"
+          @click="toggleWorkflow"
+          title="AI工作流会话"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M12 2a7 7 0 0 0-4 12.74V22l4-2 4 2v-7.26A7 7 0 0 0 12 2zm0 2a5 5 0 0 1 2.67 9.25l-.67.4V18.4l-2-1-2 1v-4.75l-.67-.4A5 5 0 0 1 12 4z"/>
+          </svg>
+        </button>
+        <button
+          class="action-btn"
           :class="{ active: isFloating }"
           @click="toggleFloating"
           title="浮层显示"
@@ -92,7 +102,7 @@
     </div>
 
     <!-- Terminal Content -->
-    <div class="terminal-content" :class="{ 'with-logs': showLogs || showApprovals }">
+    <div class="terminal-content" :class="{ 'with-logs': showLogs || showApprovals || showWorkflow }">
       <div class="terminal-main">
         <div
           v-for="terminal in terminals"
@@ -128,9 +138,13 @@
           </n-empty>
         </div>
       </div>
-      <div v-if="(showLogs || showApprovals) && activeTerminalId" class="logs-panel">
+      <div v-if="(showLogs || showApprovals || showWorkflow) && activeTerminalId" class="logs-panel">
         <TerminalLogs v-if="showLogs" :session-id="activeTerminalId" />
-        <TerminalApprovals v-else :terminal-id="activeTerminalId" />
+        <TerminalApprovals v-else-if="showApprovals" :terminal-id="activeTerminalId" />
+        <template v-else>
+          <AIWorkflowSessionPanel v-if="activeWorkflowSessionId" :session-id="activeWorkflowSessionId" />
+          <n-empty v-else description="该终端未关联 AI 托管会话" />
+        </template>
       </div>
     </div>
 
@@ -165,9 +179,19 @@
             placeholder="选择要关联的任务（建议）"
           />
         </n-form-item>
+        <n-form-item label="服务器" required>
+          <n-select
+            v-model:value="createTerminalForm.serverId"
+            :options="serverOptions"
+            placeholder="选择服务器（必选，包含本机需先在服务器中配置）"
+          />
+        </n-form-item>
       </n-form>
       <n-text depth="3">
         未关联任务的终端会不便于追踪，建议选择一个任务进行关联。
+      </n-text>
+      <n-text v-if="serverOptions.length === 0" depth="3" style="display: block; margin-top: 8px">
+        还没有可用服务器，请先到「服务器」中添加配置。
       </n-text>
     </n-modal>
   </div>
@@ -178,15 +202,18 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
 import { useTaskStore } from '@/stores/task'
+import { useServerStore } from '@/stores/server'
 import { useKeyBindingsStore } from '@/stores/keyBindings'
 import Terminal from './Terminal.vue'
 import TerminalLogs from './TerminalLogs.vue'
 import TerminalApprovals from './TerminalApprovals.vue'
 import TerminalRuleConfig from './TerminalRuleConfig.vue'
+import AIWorkflowSessionPanel from './AIWorkflowSessionPanel.vue'
 
 const message = useMessage()
 const terminalStore = useTerminalStore()
 const taskStore = useTaskStore()
+const serverStore = useServerStore()
 const keyBindingsStore = useKeyBindingsStore()
 
 const terminals = computed(() => terminalStore.terminals)
@@ -195,6 +222,7 @@ const activeTerminal = computed(() => terminals.value.find(t => t.id === activeT
 const taskOptions = computed(() =>
   taskStore.tasks.map(t => ({ label: t.title, value: t.id }))
 )
+const serverOptions = computed(() => serverStore.serverOptions)
 const taskTitleMap = computed(() => {
   const map = new Map<string, string>()
   taskStore.tasks.forEach(t => map.set(t.id, t.title))
@@ -206,15 +234,19 @@ const isFullscreen = ref(false)
 const isFloating = ref(false)
 const showLogs = ref(false)
 const showApprovals = ref(false)
+const showWorkflow = ref(false)
 const showRuleConfig = ref(false)
 const showCreateTerminal = ref(false)
 const createTerminalForm = reactive({
   title: '',
-  taskId: null as string | null
+  taskId: null as string | null,
+  serverId: null as string | null
 })
 
 onMounted(() => {
   void keyBindingsStore.fetchAll()
+  void serverStore.fetchServers()
+  void taskStore.fetchTasks().catch(() => {})
 })
 
 const quickInputOrder = [
@@ -236,6 +268,13 @@ const quickInputButtons = computed(() => {
       label: item!.label,
       title: item!.description || item!.id
     }))
+})
+
+const activeWorkflowSessionId = computed(() => {
+  const taskId = activeTerminal.value?.task_id
+  if (!taskId) return ''
+  const task = taskStore.tasks.find(t => t.id === taskId)
+  return (task?.agent_session_id || '').trim()
 })
 
 // Terminal 组件引用
@@ -288,6 +327,7 @@ function toggleLogs() {
   showLogs.value = !showLogs.value
   if (showLogs.value) {
     showApprovals.value = false
+    showWorkflow.value = false
   }
 }
 
@@ -295,6 +335,15 @@ function toggleApprovals() {
   showApprovals.value = !showApprovals.value
   if (showApprovals.value) {
     showLogs.value = false
+    showWorkflow.value = false
+  }
+}
+
+function toggleWorkflow() {
+  showWorkflow.value = !showWorkflow.value
+  if (showWorkflow.value) {
+    showLogs.value = false
+    showApprovals.value = false
   }
 }
 
@@ -306,9 +355,22 @@ function closeDisplayMode() {
 watch(activeTerminalId, () => {
   fitActiveTerminal()
   focusActiveTerminal()
+
+  // AI托管任务：默认展示会话详情，避免“终端静止/无感知”
+  if (!showLogs.value && !showApprovals.value && !showWorkflow.value) {
+    if (activeWorkflowSessionId.value) {
+      showWorkflow.value = true
+    }
+  }
 })
 
-watch([showLogs, showApprovals, isFullscreen, isFloating], () => {
+watch(activeWorkflowSessionId, (id) => {
+  if (!id) return
+  if (showLogs.value || showApprovals.value || showWorkflow.value) return
+  showWorkflow.value = true
+})
+
+watch([showLogs, showApprovals, showWorkflow, isFullscreen, isFloating], () => {
   fitActiveTerminal()
 })
 
@@ -341,13 +403,20 @@ async function createNewTerminal() {
 
 async function confirmCreateTerminal() {
   try {
-    const created = await terminalStore.createTerminal(
-      createTerminalForm.title,
-      createTerminalForm.taskId || undefined
-    )
+    const serverId = createTerminalForm.serverId?.trim()
+    if (!serverId) {
+      message.error('请选择服务器')
+      return
+    }
+    const created = await terminalStore.createTerminal({
+      server_id: serverId,
+      title: createTerminalForm.title,
+      task_id: createTerminalForm.taskId || undefined
+    })
     showCreateTerminal.value = false
     createTerminalForm.title = ''
     createTerminalForm.taskId = null
+    createTerminalForm.serverId = null
 
     if (created.task_id) {
       message.success('终端已创建并关联任务')
@@ -358,6 +427,18 @@ async function confirmCreateTerminal() {
     message.error('创建终端失败')
   }
 }
+
+watch(
+  () => createTerminalForm.taskId,
+  (taskId) => {
+    if (!taskId) return
+    const task = taskStore.tasks.find(t => t.id === taskId)
+    const preferred = task?.server_id || task?.target_server_ids?.[0] || null
+    if (preferred && !createTerminalForm.serverId) {
+      createTerminalForm.serverId = preferred
+    }
+  }
+)
 
 async function hideTerminal(id: string) {
   try {

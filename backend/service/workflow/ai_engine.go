@@ -182,7 +182,7 @@ func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *
 	return true
 }
 
-// ResumeWorkflow appends a user message and resumes a paused workflow session.
+// ResumeWorkflow appends a user message and resumes a workflow session.
 func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string, userMessage string) (*AIWorkflowSession, error) {
 	if e == nil {
 		return nil, errors.New("engine is nil")
@@ -204,9 +204,11 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 	}
 
 	status := strings.ToLower(strings.TrimSpace(session.Status))
-	if status != "paused" {
-		return nil, errors.New("session is not paused")
+	resumable := status == "paused" || status == "completed" || status == "failed" || status == "cancelled" || status == "timeout"
+	if !resumable {
+		return nil, errors.New("session is not resumable")
 	}
+	shouldRestartTaskMonitor := status == "completed" || status == "failed" || status == "cancelled" || status == "timeout"
 
 	aiConfig, err := e.aiProvider.GetDefaultConfig()
 	if err != nil {
@@ -231,6 +233,17 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 
 	if !e.startExecution(session, aiConfig) {
 		return session, errors.New("workflow session already running")
+	}
+
+	if shouldRestartTaskMonitor {
+		taskID := strings.TrimSpace(session.WorkflowID)
+		if taskID == "" {
+			taskID = strings.TrimSpace(getStringFromMap(session.Context, "task_id"))
+		}
+		if taskID != "" {
+			updateTaskStatus(taskID, "in_progress")
+			go e.monitorTaskAgent(taskID, session.ID)
+		}
 	}
 
 	return session, nil

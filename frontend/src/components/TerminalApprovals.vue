@@ -91,7 +91,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, h } from 'vue'
 import { NButton, NEmpty, NIcon, NTag } from 'naive-ui'
-import { automationApi } from '@/api'
+import { automationApi, terminalApi } from '@/api'
 
 const RefreshIcon = () => h('span', { style: 'font-size: 14px' }, '↻')
 
@@ -165,8 +165,8 @@ function connectAILogWs() {
       const msg = JSON.parse(event.data)
       if (msg.type === 'ai_log' && msg.ai_log?.type && msg.ai_log?.message) {
         aiLogs.value.push({ type: msg.ai_log.type, message: msg.ai_log.message, time: new Date() })
-        if (aiLogs.value.length > 100) {
-          aiLogs.value = aiLogs.value.slice(-100)
+        if (aiLogs.value.length > 200) {
+          aiLogs.value = aiLogs.value.slice(-200)
         }
       }
     } catch (e) {
@@ -187,6 +187,64 @@ function connectAILogWs() {
 }
 
 const hasMore = computed(() => records.value.length < total.value)
+
+interface TerminalLogItem {
+  id: string
+  log_type: string
+  content: string
+  created_at: string
+}
+
+function parseAILogFromSystemLog(content: string) {
+  const text = (content || '').trim()
+  const match = text.match(/^\[AI\]\[([a-zA-Z_]+)\]\s*/i)
+  if (!match) return null
+  const rawType = (match[1] || '').toLowerCase()
+  const type = (['thinking', 'action', 'decision', 'error', 'info'] as const).includes(rawType as any)
+    ? (rawType as AILogEntry['type'])
+    : 'info'
+  const message = text.replace(/^\[AI\]\[[a-zA-Z_]+\]\s*/i, '').trim()
+  return { type, message }
+}
+
+async function fetchPersistedAILogs(replace = true) {
+  if (!props.terminalId) return
+  try {
+    const { data } = await terminalApi.logs(props.terminalId, {
+      limit: 200,
+      offset: 0,
+      type: 'system',
+      order: 'asc'
+    })
+    const items = (data?.items || []) as TerminalLogItem[]
+    const parsed: AILogEntry[] = []
+    for (const item of items) {
+      if (!item?.content) continue
+      const parsedLog = parseAILogFromSystemLog(item.content)
+      if (!parsedLog) continue
+      const t = new Date(item.created_at)
+      parsed.push({
+        type: parsedLog.type,
+        message: parsedLog.message,
+        time: Number.isNaN(t.getTime()) ? new Date() : t
+      })
+    }
+    if (replace) {
+      aiLogs.value = parsed
+    } else if (parsed.length > 0) {
+      const signature = new Set(aiLogs.value.map(l => `${l.type}|${l.message}`))
+      for (const item of parsed) {
+        const key = `${item.type}|${item.message}`
+        if (signature.has(key)) continue
+        signature.add(key)
+        aiLogs.value.push(item)
+      }
+    }
+    if (aiLogs.value.length > 200) aiLogs.value = aiLogs.value.slice(-200)
+  } catch (e) {
+    console.error('Failed to fetch persisted AI logs:', e)
+  }
+}
 
 async function fetchRecords(append = false) {
   if (loading.value) return
@@ -215,7 +273,11 @@ async function fetchRecords(append = false) {
 }
 
 function refresh() {
-  fetchRecords(false)
+  if (activeTab.value === 'approvals') {
+    fetchRecords(false)
+    return
+  }
+  fetchPersistedAILogs(true)
 }
 
 function loadMore() {
@@ -277,7 +339,10 @@ watch(() => props.terminalId, (newId) => {
     aiLogWs = null
   }
   aiLogs.value = []
-  if (newId) connectAILogWs()
+  if (newId) {
+    void fetchPersistedAILogs(true)
+    connectAILogWs()
+  }
 }, { immediate: true })
 
 let refreshTimer: number | null = null
@@ -470,6 +535,7 @@ onUnmounted(() => {
 .log-message {
   color: #ddd;
   word-break: break-all;
+  white-space: pre-wrap;
 }
 
 .ai-log-item.error .log-message {

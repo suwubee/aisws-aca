@@ -148,7 +148,7 @@ function handleCreateTerminalOption(label: string): SelectOption {
 async function loadTerminals() {
   loadingTerminals.value = true
   try {
-    const { data } = await terminalApi.list({ show_hidden: true })
+    const { data } = await terminalApi.list({ show_hidden: true, include_history: true })
     const items = (data.items || []) as TerminalItem[]
     terminalOptions.value = items
       .filter(item => item?.id)

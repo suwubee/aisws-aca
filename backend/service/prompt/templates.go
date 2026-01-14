@@ -45,7 +45,7 @@ var builtinTemplates = []builtinTemplate{
 		Key:         TemplateKeyTaskMonitorSystemPrompt,
 		Name:        "任务监控：系统提示词",
 		Description: "用于任务监控（终端日志分析/状态判断）的系统提示词模板。",
-		Variables:   []string{"log_limit", "max_log_chars"},
+		Variables:   []string{"log_limit", "max_log_chars", "task_title", "task_description", "task_initial_prompt", "task_ai_prompt", "task_ai_end_condition"},
 		File:        "defaults/task_monitor_system_prompt.tmpl",
 	},
 	{
@@ -342,6 +342,19 @@ func ensureDefaultTemplate(db *gorm.DB, key string) error {
 		if err := db.Model(&model.PromptTemplate{}).
 			Where("key = ?", def.Key).
 			Update("active_preset_id", defaultPreset.ID).Error; err != nil {
+			return err
+		}
+	}
+
+	// 如果当前仍在使用“默认预设”，则同步更新为最新内置默认模板（用于发布后的缺陷修复/体验优化）。
+	if strings.TrimSpace(existing.ActivePresetID) == strings.TrimSpace(defaultPreset.ID) &&
+		strings.TrimSpace(existing.Template) != strings.TrimSpace(defaultText) {
+		if err := db.Model(&model.PromptTemplate{}).
+			Where("key = ?", def.Key).
+			Updates(map[string]any{
+				"template":   defaultText,
+				"updated_at": time.Now(),
+			}).Error; err != nil {
 			return err
 		}
 	}

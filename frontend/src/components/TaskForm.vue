@@ -12,6 +12,15 @@
         :disabled="disabled"
       />
     </n-form-item>
+    <n-form-item label="备注">
+      <n-input
+        v-model:value="model.remark"
+        type="textarea"
+        :rows="2"
+        placeholder="可用于临时提醒/记录关键结论（可选）"
+        :disabled="disabled"
+      />
+    </n-form-item>
     <n-grid :cols="2" :x-gap="12">
       <n-gi>
         <n-form-item label="优先级">
@@ -219,6 +228,7 @@ import { useProjectStore } from '@/stores/project'
 export interface TaskFormModel {
   title: string
   description: string
+  remark: string
   priority: number
   server_id: string | null
   project_id: string | null

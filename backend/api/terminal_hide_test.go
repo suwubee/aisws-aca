@@ -27,28 +27,11 @@ func TestTerminalHide_PersistsAndDoesNotDeleteSession(t *testing.T) {
 
 	token := loginForToken(t, app, "admin", "admin123")
 
-	// create terminal via API
-	createReq := httptest.NewRequest("POST", "/api/terminals", bytes.NewBufferString(`{}`))
-	createReq.Header.Set("Authorization", "Bearer "+token)
-	createReq.Header.Set("Content-Type", "application/json")
-	createResp, err := app.Test(createReq)
+	session, err := manager.CreateSession("test", nil)
 	if err != nil {
-		t.Fatalf("create terminal request failed: %v", err)
+		t.Fatalf("create terminal session failed: %v", err)
 	}
-	defer createResp.Body.Close()
-	if createResp.StatusCode != 200 {
-		t.Fatalf("expected create status 200, got %d", createResp.StatusCode)
-	}
-
-	var createBody struct {
-		Item struct {
-			ID string `json:"id"`
-		} `json:"item"`
-	}
-	if err := json.NewDecoder(createResp.Body).Decode(&createBody); err != nil {
-		t.Fatalf("decode create response failed: %v", err)
-	}
-	terminalID := createBody.Item.ID
+	terminalID := session.ID()
 	if terminalID == "" {
 		t.Fatalf("expected terminal id")
 	}
@@ -130,4 +113,3 @@ func TestTerminalHide_PersistsAndDoesNotDeleteSession(t *testing.T) {
 		t.Fatalf("expected hidden terminal to appear when show_hidden=true")
 	}
 }
-

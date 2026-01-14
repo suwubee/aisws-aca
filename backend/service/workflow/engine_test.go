@@ -115,6 +115,17 @@ func (s *fakeTerminalSession) Write(data []byte) error {
 	return nil
 }
 
+func (s *fakeTerminalSession) BroadcastAILog(logType, message string) {}
+
+func (s *fakeTerminalSession) BroadcastAILogWithInput(logType, message, inputType, inputData string) {
+}
+
+func (s *fakeTerminalSession) InjectOutput([]byte) {}
+
+func (s *fakeTerminalSession) RunCommand(command, workDir string, timeout time.Duration) (string, int, error) {
+	return "", 0, nil
+}
+
 type fakeTerminalManager struct {
 	localSessionsCreated int
 	sshSessionsCreated   int
@@ -155,6 +166,10 @@ func (m *fakeTerminalManager) RenameSession(id, title string) error {
 		terminalID string
 		title      string
 	}{terminalID: id, title: title})
+	return nil
+}
+
+func (m *fakeTerminalManager) LinkTask(id string, taskID *string) error {
 	return nil
 }
 
@@ -276,8 +291,8 @@ func TestWorkflowEngine_RunWorkflow_OpsStepExecutesGitThenCommand(t *testing.T) 
 			output string
 			err    error
 		}{
-			"git -C /repo pull":          {output: "already up to date\n"},
-			"cd /repo && echo hi":        {output: "hi\n"},
+			"git -C /repo pull":   {output: "already up to date\n"},
+			"cd /repo && echo hi": {output: "hi\n"},
 		},
 	}
 

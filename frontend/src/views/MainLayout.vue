@@ -66,16 +66,6 @@
               演示模式
             </n-tag>
             <ProjectContextSelector />
-            <n-button
-              v-if="pinTargetKey"
-              quaternary
-              size="small"
-              class="pin-btn"
-              :title="isPinnedCurrent ? '取消置顶' : '置顶到常用'"
-              @click="togglePinCurrent"
-            >
-              {{ isPinnedCurrent ? '⭐' : '☆' }}
-            </n-button>
             <ApprovalCenter />
             <n-badge :value="unreadCount" :max="99" :show="unreadCount > 0">
               <n-button quaternary size="small" @click="$router.push('/messages')">
@@ -135,7 +125,6 @@
 import { ref, onMounted, computed, h, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useNavStore } from '@/stores/nav'
 import { useIsMobile } from '@/utils/useIsMobile'
 import ApprovalCenter from '@/components/ApprovalCenter.vue'
 import ProjectContextSelector from '@/components/ProjectContextSelector.vue'
@@ -162,7 +151,6 @@ import { automationApi } from '@/api'
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const navStore = useNavStore()
 
 const collapsed = ref(false)
 const unreadCount = ref(0)
@@ -170,7 +158,8 @@ const user = computed(() => authStore.user)
 const isDemoMode = computed(() => authStore.isDemoMode)
 const showMobileMenu = ref(false)
 const { isMobile } = useIsMobile()
-const expandedKeys = ref<string[]>([])
+const DEFAULT_EXPANDED_PARENT_KEYS = ['work', 'automation', 'ops', 'observe'] as const
+const expandedKeys = ref<string[]>([...DEFAULT_EXPANDED_PARENT_KEYS])
 
 const parentKeyByMenuKey: Record<string, string> = {
   'work-items': 'work',
@@ -288,50 +277,7 @@ const baseMenuOptions: MenuOption[] = [
   }
 ]
 
-const menuOptions = computed<MenuOption[]>(() => {
-  const pinned = navStore.pinnedKeys.filter(k => !!leafMenu[k])
-  const pinnedSet = new Set(pinned)
-  const recent = navStore.recentKeys.filter(k => !!leafMenu[k] && !pinnedSet.has(k))
-
-  const quickChildren: MenuOption[] = []
-  if (pinned.length > 0) {
-    quickChildren.push({
-      label: '常用',
-      key: 'quick-pinned',
-      type: 'group',
-      children: pinned.map((key) => ({
-        label: leafMenu[key].label,
-        key: `quick:${key}`,
-        icon: icon(leafMenu[key].icon)
-      }))
-    })
-  }
-
-  if (recent.length > 0) {
-    quickChildren.push({
-      label: '最近访问',
-      key: 'quick-recent',
-      type: 'group',
-      children: recent.map((key) => ({
-        label: leafMenu[key].label,
-        key: `quick:${key}`,
-        icon: icon(leafMenu[key].icon)
-      }))
-    })
-  }
-
-  if (quickChildren.length === 0) return baseMenuOptions
-
-  return [
-    {
-      label: '常用/最近',
-      key: 'quick',
-      icon: icon('⭐'),
-      children: quickChildren
-    },
-    ...baseMenuOptions
-  ]
-})
+const menuOptions = computed<MenuOption[]>(() => baseMenuOptions)
 
 const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
   { key: 'dashboard', label: '工作台', icon: '🏠' },
@@ -382,8 +328,7 @@ const currentPageName = computed(() => {
 })
 
 function handleMenuChange(key: string) {
-  const normalized = key.startsWith('quick:') ? key.slice('quick:'.length) : key
-  const target = leafMenu[normalized]
+  const target = leafMenu[key]
   if (!target) return
   router.push(target.path)
 }
@@ -428,34 +373,12 @@ watch(
 )
 
 watch(activeMenu, (key) => {
-  if (leafMenu[key]) {
-    navStore.recordVisit(key)
-  }
   const parent = parentKeyByMenuKey[key]
   if (!parent) return
   if (!expandedKeys.value.includes(parent)) {
     expandedKeys.value = [...expandedKeys.value, parent]
   }
 }, { immediate: true })
-
-const pinTargetKey = computed(() => (leafMenu[activeMenu.value] ? activeMenu.value : null))
-const isPinnedCurrent = computed(() => (pinTargetKey.value ? navStore.isPinned(pinTargetKey.value) : false))
-
-function togglePinCurrent() {
-  if (!pinTargetKey.value) return
-  navStore.togglePin(pinTargetKey.value)
-}
-
-watch(
-  () => menuOptions.value.some(opt => opt.key === 'quick'),
-  (hasQuick) => {
-    if (!hasQuick) return
-    if (!expandedKeys.value.includes('quick')) {
-      expandedKeys.value = ['quick', ...expandedKeys.value]
-    }
-  },
-  { immediate: true }
-)
 
 watch(isMobile, (mobile) => {
   if (!mobile) showMobileMenu.value = false

@@ -54,6 +54,28 @@
             <n-descriptions-item v-if="task.description" label="描述" :span="2">
               {{ task.description }}
             </n-descriptions-item>
+            <n-descriptions-item label="备注" :span="2">
+              <n-space vertical :size="6" style="width: 100%">
+                <n-input
+                  v-model:value="remarkDraft"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="可用于临时提醒/记录关键结论（可选）"
+                  :disabled="isDemoMode"
+                />
+                <n-space justify="end" :size="6">
+                  <n-button
+                    size="small"
+                    type="primary"
+                    :loading="savingRemark"
+                    :disabled="isDemoMode"
+                    @click="saveRemark"
+                  >
+                    保存备注
+                  </n-button>
+                </n-space>
+              </n-space>
+            </n-descriptions-item>
           </n-descriptions>
         </n-card>
 
@@ -222,6 +244,8 @@ const loading = ref(true)
 const task = ref<Task | null>(null)
 const terminals = ref<TerminalSession[]>([])
 const showCreateTask = ref(false)
+const remarkDraft = ref('')
+const savingRemark = ref(false)
 
 const linkedTerminal = computed(() => {
   return terminals.value.find(t => t.status === 'running')
@@ -336,6 +360,7 @@ async function loadTaskDetail() {
     terminals.value = detail.terminals || []
     logs.value = detail.logs || []
     approvals.value = detail.approvals || []
+    remarkDraft.value = detail.task?.remark || ''
 
     const firstServerId = detail.task.target_server_ids?.[0] || detail.task.server_id
     void ensureServerLoaded(firstServerId)
@@ -343,6 +368,25 @@ async function loadTaskDetail() {
     message.error('加载任务详情失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function saveRemark() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!task.value) return
+  if (savingRemark.value) return
+  savingRemark.value = true
+  try {
+    const updated = await taskStore.updateTask(task.value.id, { remark: remarkDraft.value })
+    task.value.remark = updated.remark
+    message.success('备注已保存')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '保存备注失败')
+  } finally {
+    savingRemark.value = false
   }
 }
 
@@ -390,7 +434,7 @@ async function handleStartTask() {
     if (result.terminal_id) {
       await terminalStore.fetchTerminals()
       terminalStore.setActiveTerminal(result.terminal_id)
-      router.push('/')
+      router.push({ path: '/', query: { terminal: result.terminal_id } })
     } else {
       await loadTaskDetail()
     }
@@ -405,7 +449,12 @@ async function handleCreateTerminal() {
     return
   }
   try {
-    await terminalStore.createTerminal(task.value?.title || 'Terminal', taskId.value)
+    const serverId = task.value?.server_id || task.value?.target_server_ids?.[0] || null
+    if (!serverId) {
+      message.error('请先为任务选择服务器')
+      return
+    }
+    await terminalStore.createTerminal({ server_id: serverId, title: task.value?.title || 'Terminal', task_id: taskId.value })
     message.success('终端已创建')
     await loadTaskDetail()
   } catch (error) {
@@ -414,8 +463,7 @@ async function handleCreateTerminal() {
 }
 
 function handleOpenTerminal(terminalId: string) {
-  terminalStore.setActiveTerminal(terminalId)
-  router.push('/')
+  router.push({ path: '/', query: { terminal: terminalId } })
 }
 
 async function handleStopTask() {

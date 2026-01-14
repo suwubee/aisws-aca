@@ -31,12 +31,12 @@
           {{ session.summary }}
         </n-alert>
 
-        <div v-if="safeText(session.status).toLowerCase() === 'paused'" class="resume-panel">
+        <div v-if="canResume(session.status)" class="resume-panel">
           <n-input
             v-model:value="resumeMessage"
             type="textarea"
             :autosize="{ minRows: 2, maxRows: 4 }"
-            placeholder="补充信息/确认后继续（Ctrl+Enter 发送）"
+            :placeholder="resumePlaceholder(session.status)"
             :disabled="isDemoMode"
             @keydown.ctrl.enter.prevent="resume"
           />
@@ -48,7 +48,7 @@
               :disabled="isDemoMode || !resumeMessage.trim()"
               @click="resume"
             >
-              继续执行
+              {{ resumeButtonLabel(session.status) }}
             </n-button>
           </n-space>
         </div>
@@ -104,6 +104,7 @@ const resuming = ref(false)
 const resumeMessage = ref('')
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled'])
+const resumableStatuses = new Set(['paused', 'completed', 'failed', 'cancelled'])
 const pollIntervalMs = 2000
 
 let pollTimer: number | null = null
@@ -133,6 +134,22 @@ function statusTagType(status: string) {
 
 function isTerminalStatus(status: string) {
   return terminalStatuses.has(safeText(status).toLowerCase())
+}
+
+function canResume(status: string) {
+  return resumableStatuses.has(safeText(status).toLowerCase())
+}
+
+function resumeButtonLabel(status: string) {
+  const s = safeText(status).toLowerCase()
+  if (s === 'paused') return '继续执行'
+  return '继续对话'
+}
+
+function resumePlaceholder(status: string) {
+  const s = safeText(status).toLowerCase()
+  if (s === 'paused') return '补充信息/确认后继续（Ctrl+Enter 发送）'
+  return '追加要求/复查说明（Ctrl+Enter 发送）'
 }
 
 function stopPolling() {
@@ -258,4 +275,3 @@ onUnmounted(() => {
   word-break: break-word;
 }
 </style>
-

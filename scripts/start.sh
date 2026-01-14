@@ -289,8 +289,9 @@ display_backend_url() {
 
 display_frontend_url() {
     local port="${ACA_FRONTEND_PORT:-}"
-    log_info "Frontend dev bind: 0.0.0.0:${port}"
-    print_access_urls "Frontend dev" "0.0.0.0" "${port}" "/"
+    local host="${ACA_FRONTEND_HOST:-0.0.0.0}"
+    log_info "Frontend dev bind: ${host}:${port}"
+    print_access_urls "Frontend dev" "${host}" "${port}" "/"
 }
 
 load_env() {
@@ -315,6 +316,7 @@ init_dev_env() {
     # Vite dev server proxy variables (see frontend/vite.config.ts)
     export ACA_BACKEND_HOST="${ACA_BACKEND_HOST:-localhost}"
     export ACA_BACKEND_PORT="${ACA_BACKEND_PORT:-$SERVER_PORT}"
+    export ACA_FRONTEND_HOST="${ACA_FRONTEND_HOST:-0.0.0.0}"
     export ACA_FRONTEND_PORT="${ACA_FRONTEND_PORT:-34001}"
 
     mkdir -p "$LOG_DIR" "$PID_DIR"
@@ -437,7 +439,7 @@ start_frontend() {
 
     log_info "Starting frontend..."
     cd "$FRONTEND_DIR"
-    nohup npm run dev -- --host 0.0.0.0 --port "$ACA_FRONTEND_PORT" --strictPort > "$FRONTEND_LOG" 2>&1 &
+    nohup npm run dev -- --host "$ACA_FRONTEND_HOST" --port "$ACA_FRONTEND_PORT" --strictPort > "$FRONTEND_LOG" 2>&1 &
     echo $! > "$FRONTEND_PID_FILE"
     sleep 3
 

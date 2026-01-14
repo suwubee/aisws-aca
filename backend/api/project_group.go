@@ -19,12 +19,14 @@ func NewProjectGroupController() *ProjectGroupController {
 type CreateProjectGroupRequest struct {
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
+	Remark      string  `json:"remark"`
 	ParentID    *string `json:"parent_id"`
 }
 
 type UpdateProjectGroupRequest struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
+	Remark      *string `json:"remark"`
 	ParentID    *string `json:"parent_id"`
 }
 
@@ -68,6 +70,7 @@ func (ctrl *ProjectGroupController) CreateProjectGroup(c *fiber.Ctx) error {
 		ID:          uuid.New().String(),
 		Name:        name,
 		Description: strings.TrimSpace(req.Description),
+		Remark:      strings.TrimSpace(req.Remark),
 		ParentID:    parentID,
 	}
 
@@ -108,6 +111,9 @@ func (ctrl *ProjectGroupController) UpdateProjectGroup(c *fiber.Ctx) error {
 	}
 	if req.Description != nil {
 		updates["description"] = strings.TrimSpace(*req.Description)
+	}
+	if req.Remark != nil {
+		updates["remark"] = strings.TrimSpace(*req.Remark)
 	}
 	if req.ParentID != nil {
 		trimmed := strings.TrimSpace(*req.ParentID)
@@ -169,4 +175,3 @@ func (ctrl *ProjectGroupController) RegisterRoutes(app fiber.Router) {
 	groups.Put("/:id", ctrl.UpdateProjectGroup)
 	groups.Delete("/:id", ctrl.DeleteProjectGroup)
 }
-

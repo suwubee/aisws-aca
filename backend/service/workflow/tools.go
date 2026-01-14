@@ -193,10 +193,29 @@ func ParseAIResponse(response string) (*ParsedResponse, error) {
 	completeStart := strings.Index(response, "<complete>")
 	completeEnd := strings.Index(response, "</complete>")
 	if completeStart != -1 && completeEnd != -1 && completeEnd > completeStart {
-		completeJSON := strings.TrimSpace(response[completeStart+10 : completeEnd])
+		completeBody := strings.TrimSpace(response[completeStart+10 : completeEnd])
 		var complete CompleteCall
-		if err := json.Unmarshal([]byte(completeJSON), &complete); err == nil {
+
+		// 1) 标准 JSON
+		if err := json.Unmarshal([]byte(completeBody), &complete); err == nil {
 			result.Complete = &complete
+			return result, nil
+		}
+
+		// 2) 宽松解析：尝试从文本中提取 JSON 对象（例如 ```json ...``` 或混入多余文本）
+		if obj := extractJSONObject(completeBody); obj != "" {
+			if err := json.Unmarshal([]byte(obj), &complete); err == nil {
+				result.Complete = &complete
+				return result, nil
+			}
+		}
+
+		// 3) 最后兜底：允许 <complete> 内为纯文本（将其作为 summary）
+		if summary := strings.TrimSpace(completeBody); summary != "" {
+			result.Complete = &CompleteCall{
+				Status:  "success",
+				Summary: summary,
+			}
 			return result, nil
 		}
 	}
@@ -214,6 +233,15 @@ func ParseAIResponse(response string) (*ParsedResponse, error) {
 	}
 
 	return result, nil
+}
+
+func extractJSONObject(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end < 0 || end <= start {
+		return ""
+	}
+	return strings.TrimSpace(s[start : end+1])
 }
 
 // FormatObservation formats tool execution result as observation

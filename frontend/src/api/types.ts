@@ -107,6 +107,7 @@ export interface Task {
   user_id?: string
   title: string
   description: string
+  remark?: string
   status: TaskStatus | string
   priority: number
   order_index: number
@@ -165,6 +166,7 @@ export interface GetTasksByStatusResponse {
 export interface CreateTaskRequest {
   title: string
   description?: string
+  remark?: string
   priority?: number
   status?: TaskStatus | string
   rule_set_id?: string | null
@@ -188,6 +190,7 @@ export interface CreateTaskRequest {
 export interface UpdateTaskRequest {
   title?: string
   description?: string
+  remark?: string
   status?: string
   priority?: number
   rule_set_id?: string | null
@@ -266,6 +269,9 @@ export interface TerminalSessionMetadata {
   status: string
   running_command?: string
   task_id?: string | null
+  server_id?: string | null
+  server_name?: string
+  server_host?: string
   ai_assistant?: TerminalAIAssistant
   automation_mode?: string
   tmux_session?: string
@@ -284,6 +290,7 @@ export interface Terminal {
 }
 
 export interface CreateTerminalRequest {
+  server_id: string
   title?: string
   task_id?: string
 }

@@ -6,6 +6,7 @@ export interface Project {
   id: string
   name: string
   description?: string
+  remark?: string
   type: ProjectType
   group_id?: string | null
   local_path?: string

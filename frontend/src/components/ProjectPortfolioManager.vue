@@ -36,6 +36,9 @@
         <n-form-item label="描述">
           <n-input v-model:value="projectForm.description" placeholder="可选" />
         </n-form-item>
+        <n-form-item label="备注">
+          <n-input v-model:value="projectForm.remark" type="textarea" :rows="2" placeholder="可选：临时提醒/关键结论" />
+        </n-form-item>
         <n-form-item label="项目集">
           <n-select
             v-model:value="projectForm.group_id"
@@ -83,11 +86,11 @@
     <n-modal
       v-model:show="showGroupModal"
       preset="dialog"
-      title="新建项目集"
-      positive-text="创建"
+      :title="groupModalTitle"
+      :positive-text="groupPrimaryText"
       negative-text="取消"
       style="width: min(520px, 94vw)"
-      @positive-click="createGroup"
+      @positive-click="saveGroup"
     >
       <n-form ref="groupFormRef" :model="groupForm" :rules="groupRules" label-placement="left" label-width="90">
         <n-form-item label="名称" path="name">
@@ -95,6 +98,9 @@
         </n-form-item>
         <n-form-item label="描述">
           <n-input v-model:value="groupForm.description" placeholder="可选" />
+        </n-form-item>
+        <n-form-item label="备注">
+          <n-input v-model:value="groupForm.remark" type="textarea" :rows="2" placeholder="可选：临时提醒/关键结论" />
         </n-form-item>
       </n-form>
     </n-modal>
@@ -129,7 +135,7 @@ import { useServerStore } from '@/stores/server'
 import type { Project } from '@/api/project'
 import { createProject, deleteProject, updateProject } from '@/api/project'
 import type { ProjectGroup } from '@/api/project-group'
-import { createProjectGroup, deleteProjectGroup } from '@/api/project-group'
+import { createProjectGroup, deleteProjectGroup, updateProjectGroup } from '@/api/project-group'
 
 type Mode = 'projects' | 'groups' | 'both'
 
@@ -292,18 +298,24 @@ const projectColumns: DataTableColumns<any> = [
 const groupColumns: DataTableColumns<any> = [
   { title: '名称', key: 'name', ellipsis: { tooltip: true } },
   { title: '描述', key: 'description', ellipsis: { tooltip: true } },
+  { title: '备注', key: 'remark', ellipsis: { tooltip: true } },
   {
     title: '操作',
     key: 'actions',
-    width: 140,
+    width: 170,
     render(row) {
-      return h(NPopconfirm, {
-        positiveText: '删除',
-        negativeText: '取消',
-        onPositiveClick: () => removeGroup(row)
-      }, {
-        trigger: () => h(NButton, { size: 'small', type: 'error', disabled: isDemoMode.value }, { default: () => '删除' }),
-        default: () => `确定删除项目集「${row.name}」吗？（会自动解绑关联项目）`
+      return h(NSpace, { size: 'small' }, {
+        default: () => [
+          h(NButton, { size: 'small', disabled: isDemoMode.value, onClick: () => openEditGroup(row) }, { default: () => '编辑' }),
+          h(NPopconfirm, {
+            positiveText: '删除',
+            negativeText: '取消',
+            onPositiveClick: () => removeGroup(row)
+          }, {
+            trigger: () => h(NButton, { size: 'small', type: 'error', disabled: isDemoMode.value }, { default: () => '删除' }),
+            default: () => `确定删除项目集「${row.name}」吗？（会自动解绑关联项目）`
+          })
+        ]
       })
     }
   }
@@ -335,6 +347,7 @@ const projectForm = reactive({
   id: '',
   name: '',
   description: '',
+  remark: '',
   type: 'local',
   group_id: null as string | null,
   server_id: null as string | null,
@@ -356,6 +369,7 @@ function resetProjectForm() {
     id: '',
     name: '',
     description: '',
+    remark: '',
     type: 'local',
     group_id: null,
     server_id: null,
@@ -386,6 +400,7 @@ function openEditProject(project: Project) {
     id: project.id,
     name: project.name,
     description: project.description || '',
+    remark: project.remark || '',
     type: project.type || 'local',
     group_id: project.group_id || null,
     server_id: project.server_id || null,
@@ -410,6 +425,7 @@ async function saveProject() {
     const payload = {
       name: projectForm.name,
       description: projectForm.description,
+      remark: projectForm.remark,
       type: projectForm.type,
       group_id: projectForm.group_id,
       server_id: projectForm.server_id,
@@ -457,7 +473,8 @@ async function removeProject(project: Project) {
 // ===== Group modal =====
 const showGroupModal = ref(false)
 const groupFormRef = ref<FormInst | null>(null)
-const groupForm = reactive({ name: '', description: '' })
+const groupFormMode = ref<'create' | 'edit'>('create')
+const groupForm = reactive({ id: '', name: '', description: '', remark: '' })
 const groupRules: FormRules = { name: { required: true, message: '请输入项目集名称', trigger: ['input', 'blur'] } }
 
 function openCreateGroup() {
@@ -465,20 +482,44 @@ function openCreateGroup() {
     message.warning('演示模式：只读')
     return
   }
-  groupForm.name = ''
-  groupForm.description = ''
+  groupFormMode.value = 'create'
+  Object.assign(groupForm, { id: '', name: '', description: '', remark: '' })
   showGroupModal.value = true
 }
 
-async function createGroup() {
+function openEditGroup(group: ProjectGroup) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  groupFormMode.value = 'edit'
+  Object.assign(groupForm, {
+    id: group.id,
+    name: group.name || '',
+    description: group.description || '',
+    remark: group.remark || ''
+  })
+  showGroupModal.value = true
+}
+
+const groupModalTitle = computed(() => (groupFormMode.value === 'create' ? '新建项目集' : '编辑项目集'))
+const groupPrimaryText = computed(() => (groupFormMode.value === 'create' ? '创建' : '保存'))
+
+async function saveGroup() {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
     return false
   }
   try {
     await groupFormRef.value?.validate()
-    await createProjectGroup({ name: groupForm.name, description: groupForm.description })
-    message.success('项目集已创建')
+    const payload = { name: groupForm.name, description: groupForm.description, remark: groupForm.remark }
+    if (groupFormMode.value === 'create') {
+      await createProjectGroup(payload)
+      message.success('项目集已创建')
+    } else {
+      await updateProjectGroup(groupForm.id, payload)
+      message.success('项目集已更新')
+    }
     showGroupModal.value = false
     fetchAll()
   } catch (e: any) {
