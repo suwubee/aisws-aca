@@ -305,6 +305,88 @@ func TestSSHManager_PasswordAuth_ConnectReuseAndSession(t *testing.T) {
 	}
 }
 
+func TestSSHManager_GetPinnedSession_PreventsIdleReap(t *testing.T) {
+	serverConfig := newServerConfig(t, "tester", "p@ss", nil)
+
+	dsn := fmt.Sprintf("file:ssh_manager_pinned_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	if err := model.InitDB(dsn); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+
+	key := secretservice.DeriveKey("test-master-key")
+	encryptedPassword, err := secretservice.EncryptAESGCMBase64(key, "p@ss")
+	if err != nil {
+		t.Fatalf("encrypt password: %v", err)
+	}
+
+	server := model.SSHServer{
+		ID:         "srv-1",
+		Name:       "srv",
+		Host:       "example",
+		Port:       22,
+		Username:   "tester",
+		AuthType:   "password",
+		Password:   encryptedPassword,
+		LastStatus: "unknown",
+	}
+	if err := model.DB.Create(&server).Error; err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+
+	manager := NewSSHManagerWithKey(key)
+	defer manager.Close()
+	manager.dialFunc = pipeDialer(serverConfig)
+	manager.idleTimeout = 10 * time.Millisecond
+
+	session, release, err := manager.GetPinnedSession("srv-1")
+	if err != nil {
+		t.Fatalf("GetPinnedSession error: %v", err)
+	}
+	if release == nil {
+		t.Fatalf("expected release func")
+	}
+	defer func() {
+		_ = session.Close()
+		release()
+	}()
+
+	loaded, ok := manager.connections.Load("srv-1")
+	if !ok {
+		t.Fatalf("expected pooled connection to exist")
+	}
+	entry := loaded.(*pooledClient)
+
+	entry.mu.Lock()
+	entry.lastUsed = time.Now().Add(-time.Hour)
+	entry.mu.Unlock()
+
+	manager.cleanupIdleConnections(time.Now())
+
+	loaded, ok = manager.connections.Load("srv-1")
+	if !ok {
+		t.Fatalf("expected pinned connection to survive idle reap")
+	}
+	entry = loaded.(*pooledClient)
+	entry.mu.Lock()
+	clientAlive := entry.client != nil
+	active := entry.activeSessions
+	entry.mu.Unlock()
+	if !clientAlive || active == 0 {
+		t.Fatalf("expected active pinned client (clientAlive=%v active=%d)", clientAlive, active)
+	}
+
+	// Unpin and verify that idle reap can clean it up.
+	release()
+	entry.mu.Lock()
+	entry.lastUsed = time.Now().Add(-time.Hour)
+	entry.mu.Unlock()
+
+	manager.cleanupIdleConnections(time.Now())
+	if _, ok := manager.connections.Load("srv-1"); ok {
+		t.Fatalf("expected idle connection to be reaped after unpin")
+	}
+}
+
 func TestSSHManager_KeyAuth_WithPassphrase(t *testing.T) {
 	userKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

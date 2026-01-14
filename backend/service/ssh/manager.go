@@ -17,6 +17,9 @@ type pooledClient struct {
 	mu       sync.Mutex
 	client   *cryptossh.Client
 	lastUsed time.Time
+	// activeSessions tracks long-lived interactive sessions (e.g., terminal tabs).
+	// When >0, we must not reap/Disconnect the underlying SSH client.
+	activeSessions int
 }
 
 type ExecuteResult struct {
@@ -107,7 +110,7 @@ func (m *SSHManager) Connect(serverID string) (*cryptossh.Client, error) {
 	defer entry.mu.Unlock()
 
 	if entry.client != nil {
-		if m.idleTimeout > 0 && now.Sub(entry.lastUsed) > m.idleTimeout {
+		if entry.activeSessions == 0 && m.idleTimeout > 0 && now.Sub(entry.lastUsed) > m.idleTimeout {
 			_ = entry.client.Close()
 			entry.client = nil
 		} else {
@@ -188,6 +191,12 @@ func (m *SSHManager) GetSession(serverID string) (*cryptossh.Session, error) {
 		return session, nil
 	}
 
+	// If there are active interactive sessions, do not tear down the shared
+	// connection: that would kill existing terminals.
+	if m.hasActiveSessions(serverID) {
+		return nil, err
+	}
+
 	m.Disconnect(serverID)
 
 	client, err = m.Connect(serverID)
@@ -196,6 +205,49 @@ func (m *SSHManager) GetSession(serverID string) (*cryptossh.Session, error) {
 	}
 
 	return client.NewSession()
+}
+
+// GetPinnedSession returns a session and a release func.
+// The pinned client won't be closed by idle reaping while pinned.
+func (m *SSHManager) GetPinnedSession(serverID string) (*cryptossh.Session, func(), error) {
+	session, err := m.GetSession(serverID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	id := strings.TrimSpace(serverID)
+	if id == "" {
+		return session, func() {}, nil
+	}
+
+	loaded, ok := m.connections.Load(id)
+	if !ok {
+		return session, func() {}, nil
+	}
+
+	entry, ok := loaded.(*pooledClient)
+	if !ok {
+		return session, func() {}, nil
+	}
+
+	entry.mu.Lock()
+	entry.activeSessions++
+	entry.lastUsed = time.Now()
+	entry.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			entry.mu.Lock()
+			if entry.activeSessions > 0 {
+				entry.activeSessions--
+			}
+			entry.lastUsed = time.Now()
+			entry.mu.Unlock()
+		})
+	}
+
+	return session, release, nil
 }
 
 func (m *SSHManager) reapIdleConnections() {
@@ -225,7 +277,7 @@ func (m *SSHManager) cleanupIdleConnections(now time.Time) {
 		}
 
 		entry.mu.Lock()
-		expired := entry.client != nil && now.Sub(entry.lastUsed) > m.idleTimeout
+		expired := entry.client != nil && entry.activeSessions == 0 && now.Sub(entry.lastUsed) > m.idleTimeout
 		client := entry.client
 		if expired {
 			entry.client = nil
@@ -241,6 +293,30 @@ func (m *SSHManager) cleanupIdleConnections(now time.Time) {
 
 		return true
 	})
+}
+
+func (m *SSHManager) hasActiveSessions(serverID string) bool {
+	if m == nil {
+		return false
+	}
+	id := strings.TrimSpace(serverID)
+	if id == "" {
+		return false
+	}
+
+	loaded, ok := m.connections.Load(id)
+	if !ok {
+		return false
+	}
+	entry, ok := loaded.(*pooledClient)
+	if !ok {
+		return false
+	}
+
+	entry.mu.Lock()
+	active := entry.activeSessions > 0
+	entry.mu.Unlock()
+	return active
 }
 
 func (m *SSHManager) loadServer(serverID string) (*model.SSHServer, error) {

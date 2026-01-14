@@ -202,22 +202,42 @@ func (m *Manager) CreateSSHSession(serverID string) (*Session, error) {
 		return nil, err
 	}
 
-	sshSession, err := sshManager.GetSession(serverID)
+	var sshSession *cryptossh.Session
+	var releasePinned func()
+	if pinned, ok := sshManager.(interface {
+		GetPinnedSession(serverID string) (*cryptossh.Session, func(), error)
+	}); ok {
+		sshSession, releasePinned, err = pinned.GetPinnedSession(serverID)
+	} else {
+		sshSession, err = sshManager.GetSession(serverID)
+	}
 	if err != nil {
+		if releasePinned != nil {
+			releasePinned()
+		}
 		return nil, err
 	}
 	if sshSession == nil {
+		if releasePinned != nil {
+			releasePinned()
+		}
 		return nil, errors.New("failed to create ssh session")
 	}
 
 	stdinReader, stdinWriter, err := os.Pipe()
 	if err != nil {
+		if releasePinned != nil {
+			releasePinned()
+		}
 		_ = sshSession.Close()
 		return nil, err
 	}
 
 	stdoutReader, stdoutWriter, err := os.Pipe()
 	if err != nil {
+		if releasePinned != nil {
+			releasePinned()
+		}
 		_ = stdinReader.Close()
 		_ = stdinWriter.Close()
 		_ = sshSession.Close()
@@ -235,11 +255,17 @@ func (m *Manager) CreateSSHSession(serverID string) (*Session, error) {
 		cryptossh.TTY_OP_ISPEED: 14400,
 		cryptossh.TTY_OP_OSPEED: 14400,
 	}); err != nil {
+		if releasePinned != nil {
+			releasePinned()
+		}
 		_ = adapter.Close()
 		return nil, err
 	}
 
 	if err := sshSession.Shell(); err != nil {
+		if releasePinned != nil {
+			releasePinned()
+		}
 		_ = adapter.Close()
 		return nil, err
 	}
@@ -251,7 +277,7 @@ func (m *Manager) CreateSSHSession(serverID string) (*Session, error) {
 	session.loadAutomationConfig()
 	go session.readPTY()
 	go session.flushLogs()
-	go m.waitSSHSession(session, adapter)
+	go m.waitSSHSession(session, adapter, releasePinned)
 
 	m.sessions.Store(id, session)
 
@@ -269,7 +295,13 @@ func (m *Manager) CreateSSHSession(serverID string) (*Session, error) {
 	return session, nil
 }
 
-func (m *Manager) waitSSHSession(session *Session, adapter *sshservice.SSHTerminalSession) {
+func (m *Manager) waitSSHSession(session *Session, adapter *sshservice.SSHTerminalSession, releasePinned func()) {
+	defer func() {
+		if releasePinned != nil {
+			releasePinned()
+		}
+	}()
+
 	err := adapter.Session.Wait()
 
 	exitCode := 0
