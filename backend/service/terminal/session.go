@@ -1198,12 +1198,11 @@ func (s *Session) RunCommand(command, workDir string, timeout time.Duration) (st
 	startMarker := "__ACA_CMD_BEGIN_" + id + "__"
 	endMarkerPrefix := "__ACA_CMD_END_" + id + "__:"
 	heredocMarker := "ACA_EOF_" + id
-	scriptFile := ".aca_cmd_" + id + ".sh"
 
 	subID, events := s.SubscribeWithBuffer(4096)
 	defer s.Unsubscribe(subID)
 
-	lines := buildRunCommandLines(startMarker, endMarkerPrefix, heredocMarker, scriptFile, cmd, strings.TrimSpace(workDir))
+	lines := buildRunCommandLines(startMarker, endMarkerPrefix, heredocMarker, cmd, strings.TrimSpace(workDir))
 	for _, line := range lines {
 		if err := s.Write([]byte(line + "\r")); err != nil {
 			return "", -1, err
@@ -1357,23 +1356,31 @@ func (s *Session) RunCommand(command, workDir string, timeout time.Duration) (st
 	}
 }
 
-func buildRunCommandLines(startMarker, endMarkerPrefix, heredocMarker, scriptFile, command, workDir string) []string {
+func buildRunCommandLines(startMarker, endMarkerPrefix, heredocMarker, command, workDir string) []string {
 	snippet := strings.ReplaceAll(command, "\r\n", "\n")
 	snippet = strings.ReplaceAll(snippet, "\r", "\n")
+	snippet = strings.TrimRight(snippet, "\n")
+
 	snippetLines := strings.Split(snippet, "\n")
+	singleLine := len(snippetLines) == 1 && strings.TrimSpace(workDir) == ""
 
-	scriptLines := make([]string, 0, len(snippetLines)+2)
-	if workDir != "" {
-		scriptLines = append(scriptLines, "cd -- "+quoteShellPathForTerminal(workDir))
-	}
-	scriptLines = append(scriptLines, snippetLines...)
-
-	lines := make([]string, 0, 8+len(scriptLines))
+	lines := make([]string, 0, 4+len(snippetLines))
 	lines = append(lines, "echo '"+startMarker+"'")
-	lines = append(lines, fmt.Sprintf("cat > %s <<'%s'", scriptFile, heredocMarker))
-	lines = append(lines, scriptLines...)
+
+	if singleLine {
+		lines = append(lines, snippetLines[0])
+		lines = append(lines, fmt.Sprintf("ACA_CODE=$?; echo '%s'$ACA_CODE; unset ACA_CODE", endMarkerPrefix))
+		return lines
+	}
+
+	// 多行命令 / 指定 workDir 时：使用 heredoc 交给子 bash 执行，避免改变交互 shell 的工作目录/环境。
+	lines = append(lines, fmt.Sprintf("bash <<'%s'", heredocMarker))
+	if strings.TrimSpace(workDir) != "" {
+		lines = append(lines, "cd -- "+quoteShellPathForTerminal(workDir))
+	}
+	lines = append(lines, snippetLines...)
 	lines = append(lines, heredocMarker)
-	lines = append(lines, fmt.Sprintf("bash %s; ACA_CODE=$?; echo '%s'$ACA_CODE; unset ACA_CODE; rm -f %s", scriptFile, endMarkerPrefix, scriptFile))
+	lines = append(lines, fmt.Sprintf("ACA_CODE=$?; echo '%s'$ACA_CODE; unset ACA_CODE", endMarkerPrefix))
 	return lines
 }
 
