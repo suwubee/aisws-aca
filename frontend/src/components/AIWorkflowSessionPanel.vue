@@ -174,10 +174,20 @@ function isNearBottom(threshold = 80) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
 }
 
-function scrollToBottom() {
+function nextAnimationFrame() {
+  return new Promise<void>(resolve => {
+    requestAnimationFrame(() => resolve())
+  })
+}
+
+async function scrollToBottom() {
   const el = stepsContainer.value
   if (!el) return
-  el.scrollTop = el.scrollHeight
+  await nextTick()
+  await nextAnimationFrame()
+  await nextAnimationFrame()
+  const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight)
+  el.scrollTop = maxScrollTop
   showScrollToBottom.value = false
 }
 
@@ -197,8 +207,7 @@ async function refresh(silent = true) {
     if (seq !== requestSeq) return
     session.value = (data?.session as AIWorkflowSession) || null
     if (shouldStick) {
-      await nextTick()
-      scrollToBottom()
+      await scrollToBottom()
     } else {
       await nextTick()
       showScrollToBottom.value = !isNearBottom()
@@ -257,10 +266,10 @@ watch(
   async (len, prev) => {
     if (!len) return
     const shouldStick = prev === 0 || !showScrollToBottom.value || isNearBottom()
-    await nextTick()
     if (shouldStick) {
-      scrollToBottom()
+      await scrollToBottom()
     } else {
+      await nextTick()
       showScrollToBottom.value = !isNearBottom()
     }
   }

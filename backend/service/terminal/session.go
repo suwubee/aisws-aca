@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
-	"unsafe"
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/approval"
@@ -209,7 +208,7 @@ func (b *pipeShellBackend) Close() error {
 		}
 
 		if b.cmd != nil && b.cmd.Process != nil {
-			_ = b.cmd.Process.Signal(syscall.SIGTERM)
+			_ = b.cmd.Process.Signal(os.Interrupt)
 			time.Sleep(100 * time.Millisecond)
 			_ = b.cmd.Process.Kill()
 		}
@@ -377,7 +376,7 @@ func (s *Session) startDirectShell() error {
 
 	ptmx, err := ptyStart(cmd)
 	if err != nil {
-		if os.IsPermission(err) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		if os.IsPermission(err) || errors.Is(err, pty.ErrUnsupported) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
 			// pty.Start may mutate SysProcAttr; create a fresh cmd for pipe mode to avoid ENOTTY.
 			return s.startPipeShell(newCmd())
 		}
@@ -1071,21 +1070,15 @@ func (s *Session) Resize(cols, rows uint16) error {
 	if s.pty == nil {
 		return nil
 	}
-	ws := &struct {
-		Row    uint16
-		Col    uint16
-		Xpixel uint16
-		Ypixel uint16
-	}{Row: rows, Col: cols}
-
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		s.pty.Fd(),
-		syscall.TIOCSWINSZ,
-		uintptr(unsafe.Pointer(ws)),
-	)
-	if errno != 0 {
-		return errno
+	err := pty.Setsize(s.pty, &pty.Winsize{
+		Rows: rows,
+		Cols: cols,
+	})
+	if errors.Is(err, pty.ErrUnsupported) {
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -1105,9 +1098,9 @@ func (s *Session) Close() error {
 	}
 
 	if s.cmd != nil && s.cmd.Process != nil {
-		s.cmd.Process.Signal(syscall.SIGTERM)
+		_ = s.cmd.Process.Signal(os.Interrupt)
 		time.Sleep(100 * time.Millisecond)
-		s.cmd.Process.Kill()
+		_ = s.cmd.Process.Kill()
 	}
 	if s.pty != nil {
 		s.pty.Close()
