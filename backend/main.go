@@ -28,14 +28,13 @@ import (
 	"github.com/ai-coding-assistant/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
 	"go.uber.org/zap"
 )
 
-//go:embed static/*
+//go:embed static
 var staticFiles embed.FS
 
 func main() {
@@ -235,6 +234,7 @@ func main() {
 	// 静态文件服务
 	var staticRoot http.FileSystem
 	staticSource := "none"
+	var embeddedStaticFS fs.FS
 
 	// Prefer disk `static/` next to the executable so frontend rebuilds don't require rebuilding the binary.
 	if exePath, err := os.Executable(); err == nil {
@@ -248,18 +248,13 @@ func main() {
 	// Fallback to embedded static assets.
 	if staticRoot == nil {
 		if staticFS, err := fs.Sub(staticFiles, "static"); err == nil {
+			embeddedStaticFS = staticFS
 			staticRoot = http.FS(staticFS)
 			staticSource = "embedded"
 		}
 	}
 
-	if staticRoot != nil {
-		app.Use("/", filesystem.New(filesystem.Config{
-			Root:         staticRoot,
-			Index:        "index.html",
-			NotFoundFile: "index.html",
-		}))
-	}
+	registerStaticRoutes(app, staticRoot)
 
 	// 启动服务器
 	addr := cfg.Server.Host + ":" + cfg.Server.Port
@@ -267,6 +262,11 @@ func main() {
 	log.Printf("Server listening on %s\n", addr)
 	if staticSource != "none" {
 		log.Printf("Frontend static: %s\n", staticSource)
+	}
+	if staticSource == "embedded" && embeddedStaticFS != nil {
+		if entries, err := fs.ReadDir(embeddedStaticFS, "assets"); err != nil || len(entries) == 0 {
+			log.Printf("[WARN] Embedded frontend assets missing. Did you build the frontend into backend/static?\n")
+		}
 	}
 	printAccessURLs(cfg.Server.Host, cfg.Server.Port)
 
