@@ -1,0 +1,50 @@
+[
+  {
+    "title": "用户认证模块开发",
+    "description": "实现JWT认证和OAuth2.0集成",
+    "priority": 1,
+    "status": "todo"
+  },
+  {
+    "title": "商品搜索优化",
+    "description": "优化Elasticsearch搜索性能",
+    "priority": 2,
+    "status": "todo"
+  },
+  {
+    "title": "订单系统重构",
+    "description": "将订单模块拆分为微服务",
+    "priority": 1,
+    "status": "in_progress"
+  },
+  {
+    "title": "支付接口对接",
+    "description": "集成支付宝和微信支付",
+    "priority": 2,
+    "status": "todo"
+  },
+  {
+    "title": "API文档生成",
+    "description": "使用Swagger生成API文档",
+    "priority": 3,
+    "status": "done"
+  },
+  {
+    "title": "数据库性能优化",
+    "description": "添加索引和查询优化",
+    "priority": 1,
+    "status": "in_progress"
+  },
+  {
+    "title": "单元测试覆盖",
+    "description": "提高测试覆盖率到80%",
+    "priority": 2,
+    "status": "todo"
+  },
+  {
+    "title": "日志系统升级",
+    "description": "集成ELK日志分析平台",
+    "priority": 3,
+    "status": "todo"
+  }
+]
