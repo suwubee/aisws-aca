@@ -1,0 +1,18 @@
+{{- if .task_initial_prompt -}}
+## 任务目标
+{{.task_initial_prompt}}
+{{ end -}}
+{{- if .task_ai_prompt }}
+
+## 执行规则
+{{.task_ai_prompt}}
+{{- end }}
+{{- if .task_ai_end_condition }}
+
+## 完成条件
+{{.task_ai_end_condition}}
+
+{{- end }}
+
+## 完成标记
+当你确认任务目标已完成（或已满足完成条件）时，请在输出中包含标记: {{.task_done_marker}}

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "代码审查流程",
+    "description": "自动化代码审查，包含静态分析、安全扫描和代码规范检查",
+    "status": "active",
+    "nodes": "[{\"id\":\"cr-1\",\"type\":\"task\",\"name\":\"代码拉取\"},{\"id\":\"cr-2\",\"type\":\"task\",\"name\":\"静态分析\"},{\"id\":\"cr-3\",\"type\":\"task\",\"name\":\"安全扫描\"}]",
+    "edges": "[{\"id\":\"e1\",\"source\":\"cr-1\",\"target\":\"cr-2\"},{\"id\":\"e2\",\"source\":\"cr-2\",\"target\":\"cr-3\"}]"
+  },
+  {
+    "name": "CI/CD流水线",
+    "description": "持续集成和部署流水线，自动构建、测试和部署",
+    "status": "active",
+    "nodes": "[{\"id\":\"ci-1\",\"type\":\"task\",\"name\":\"构建\"},{\"id\":\"ci-2\",\"type\":\"task\",\"name\":\"单元测试\"},{\"id\":\"ci-3\",\"type\":\"task\",\"name\":\"部署\"}]",
+    "edges": "[{\"id\":\"e1\",\"source\":\"ci-1\",\"target\":\"ci-2\"},{\"id\":\"e2\",\"source\":\"ci-2\",\"target\":\"ci-3\"}]"
+  },
+  {
+    "name": "数据ETL流程",
+    "description": "数据抽取、转换和加载自动化流程",
+    "status": "active",
+    "nodes": "[{\"id\":\"etl-1\",\"type\":\"task\",\"name\":\"数据抽取\"},{\"id\":\"etl-2\",\"type\":\"task\",\"name\":\"数据清洗\"},{\"id\":\"etl-3\",\"type\":\"task\",\"name\":\"数据加载\"}]",
+    "edges": "[{\"id\":\"e1\",\"source\":\"etl-1\",\"target\":\"etl-2\"},{\"id\":\"e2\",\"source\":\"etl-2\",\"target\":\"etl-3\"}]"
+  },
+  {
+    "name": "服务器巡检",
+    "description": "定期服务器健康检查和性能监控",
+    "status": "active",
+    "nodes": "[{\"id\":\"s1\",\"type\":\"task\",\"name\":\"CPU检查\"},{\"id\":\"s2\",\"type\":\"task\",\"name\":\"内存检查\"},{\"id\":\"s3\",\"type\":\"task\",\"name\":\"磁盘检查\"}]",
+    "edges": "[{\"id\":\"e1\",\"source\":\"s1\",\"target\":\"s2\"},{\"id\":\"e2\",\"source\":\"s2\",\"target\":\"s3\"}]"
+  }
+]

@@ -1,0 +1,22 @@
+请在“AI 托管(动态)”模式下完成以下目标。
+
+用户目标：
+{{.user_goal}}
+
+任务信息：
+- 标题：{{.task_title}}
+- 描述：{{.task_description}}
+- 目标/需求：{{.task_initial_prompt}}
+- AI 补充要求：{{.task_ai_prompt}}
+- 结束条件：{{.task_ai_end_condition}}
+- 错误处理偏好：{{.task_ai_error_handling}}
+- 默认工作目录：{{.work_dir}}
+
+目标服务器：
+{{- if .target_servers}}
+{{- range .target_servers}}
+- {{.name}} (id={{.id}}, host={{.host}})
+{{- end}}
+{{- else}}
+- （无）表示本地执行
+{{- end}}

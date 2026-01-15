@@ -1,0 +1,34 @@
+[
+  {
+    "name": "电商平台",
+    "description": "基于微服务架构的电商平台，包含用户、商品、订单、支付等核心模块",
+    "type": "local",
+    "local_path": "/projects/ecommerce-platform"
+  },
+  {
+    "name": "AI助手后端",
+    "description": "智能对话助手的后端服务，支持多模型接入和会话管理",
+    "type": "git",
+    "git_repo": "https://github.com/example/ai-assistant-backend",
+    "git_branch": "main"
+  },
+  {
+    "name": "数据分析平台",
+    "description": "企业级数据分析和可视化平台，支持多数据源接入",
+    "type": "local",
+    "local_path": "/projects/data-analytics"
+  },
+  {
+    "name": "移动端App",
+    "description": "跨平台移动应用，使用React Native开发",
+    "type": "git",
+    "git_repo": "https://github.com/example/mobile-app",
+    "git_branch": "develop"
+  },
+  {
+    "name": "运维自动化工具",
+    "description": "服务器运维自动化脚本和监控工具集",
+    "type": "local",
+    "local_path": "/projects/devops-tools"
+  }
+]
