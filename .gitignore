@@ -62,6 +62,8 @@ backend/.gocache/
 .gocache/
 .gomodcache/
 
-# Release binaries (tracked for easy download)
+# Release binaries and data (tracked for easy download)
 !release/ai-coding-assistant
 !release/ai-coding-assistant.exe
+!release/data/
+!release/data/*
