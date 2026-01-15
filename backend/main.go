@@ -119,8 +119,9 @@ func main() {
 	// 健康检查（不需要认证）
 	apiGroup.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"version": "1.0.0",
+			"status":    "ok",
+			"version":   "1.0.0",
+			"demo_mode": cfg.App.DemoMode,
 		})
 	})
 
