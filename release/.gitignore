@@ -1,6 +1,4 @@
 # Generated artifacts (created by ./scripts/build_release.sh)
-ai-coding-assistant
-ai-coding-assistant.exe
 static/
 
 # Runtime
