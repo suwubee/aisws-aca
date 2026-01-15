@@ -1471,17 +1471,35 @@ func (s *Session) SetTitle(title string) {
 
 func (s *Session) SetTaskID(taskID *string) {
 	s.metaMutex.Lock()
-	s.taskID = taskID
-	s.metadata.TaskID = taskID
+	// NOTE: fiber/fasthttp may return strings backed by an internal buffer (zero-copy).
+	// Do not retain those string headers/pointers beyond the request lifecycle.
+	// Always copy the value we store in the session to avoid later corruption.
+	if taskID == nil || strings.TrimSpace(*taskID) == "" {
+		s.taskID = nil
+		s.metadata.TaskID = nil
+		s.metaMutex.Unlock()
+		return
+	}
+
+	copied := strings.Clone(strings.TrimSpace(*taskID))
+	s.taskID = &copied
+	s.metadata.TaskID = s.taskID
 	s.metaMutex.Unlock()
 }
 
 func (s *Session) SetServerInfo(serverID *string, name, host string) {
 	s.metaMutex.Lock()
-	s.serverID = serverID
-	s.metadata.ServerID = serverID
-	s.metadata.ServerName = strings.TrimSpace(name)
-	s.metadata.ServerHost = strings.TrimSpace(host)
+	// Same reason as SetTaskID: copy values to avoid retaining unsafe string headers.
+	if serverID == nil || strings.TrimSpace(*serverID) == "" {
+		s.serverID = nil
+		s.metadata.ServerID = nil
+	} else {
+		copied := strings.Clone(strings.TrimSpace(*serverID))
+		s.serverID = &copied
+		s.metadata.ServerID = s.serverID
+	}
+	s.metadata.ServerName = strings.Clone(strings.TrimSpace(name))
+	s.metadata.ServerHost = strings.Clone(strings.TrimSpace(host))
 	s.metaMutex.Unlock()
 }
 
