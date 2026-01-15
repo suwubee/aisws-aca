@@ -18,6 +18,12 @@ AISWS-ACA 是 AISWS（AI SUPER WORKSTATION / AI超站）品牌下的开源产品
 ./scripts/build_release.sh
 ```
 
+如需“单文件”分发（不生成 `release/static/`，前端由 Go embed 提供）：
+
+```bash
+./scripts/build_release.sh --single-binary
+```
+
 2) 运行（Release 目录不依赖 Node；后端负责提供前端静态资源）：
 
 ```bash

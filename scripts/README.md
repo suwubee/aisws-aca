@@ -7,5 +7,6 @@
 - `./scripts/start.sh`：开发便捷脚本（前后端分别启动/停止/查看状态/日志）
 - `./scripts/start.bat`：Windows 启动脚本（内置前端模式无需 Node；提供分步引导/端口接管/URL 输出）
 - `./scripts/build_release.sh`：生成 `release/` 分发目录（后端二进制 + 前端静态资源 + 一键启动脚本）
+  - `./scripts/build_release.sh --single-binary`：单文件模式（不生成 `release/static/`，前端由 Go embed 提供）
 
 详细说明见：`docs/engineering/SCRIPTS.md`

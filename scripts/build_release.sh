@@ -5,6 +5,7 @@
 #   ./scripts/build_release.sh
 #   ./scripts/build_release.sh --skip-frontend
 #   ./scripts/build_release.sh --skip-windows
+#   ./scripts/build_release.sh --single-binary
 #
 set -euo pipefail
 
@@ -17,6 +18,7 @@ GOMODCACHE_DIR="$BACKEND_DIR/.gomodcache"
 
 SKIP_FRONTEND=0
 SKIP_WINDOWS=0
+SINGLE_BINARY=0
 
 log() { echo "[build_release] $*"; }
 die() { echo "[build_release][ERROR] $*" >&2; exit 1; }
@@ -31,6 +33,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_WINDOWS=1
       shift
       ;;
+    --single-binary)
+      SINGLE_BINARY=1
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
 Usage: ./scripts/build_release.sh [options]
@@ -38,6 +44,7 @@ Usage: ./scripts/build_release.sh [options]
 Options:
   --skip-frontend   Do not run frontend build (assumes backend/static already up-to-date)
   --skip-windows    Do not build windows .exe
+  --single-binary   Do not copy static/ into release/ (use embedded frontend in the Go binary)
 EOF
       exit 0
       ;;
@@ -84,9 +91,14 @@ if [[ ! -d "$BACKEND_DIR/static" ]]; then
   die "Missing backend/static (frontend build output)."
 fi
 
-log "Syncing static assets -> release/static ..."
-rm -rf "$RELEASE_DIR/static"
-cp -R "$BACKEND_DIR/static" "$RELEASE_DIR/static"
+if [[ "$SINGLE_BINARY" == "1" ]]; then
+  log "Single-binary mode: removing release/static (frontend served from embedded assets) ..."
+  rm -rf "$RELEASE_DIR/static"
+else
+  log "Syncing static assets -> release/static ..."
+  rm -rf "$RELEASE_DIR/static"
+  cp -R "$BACKEND_DIR/static" "$RELEASE_DIR/static"
+fi
 
 log "Syncing env example -> release/.env.example ..."
 if [[ -f "$PROJECT_ROOT/.env.example" ]]; then
