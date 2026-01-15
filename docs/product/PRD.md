@@ -1,9 +1,9 @@
-# AI Coding Assistant - 产品需求文档 (PRD)
+# AISWS-ACA（AI超站）- 产品需求文档 (PRD)
 
 ## 1. 产品概述
 
 ### 1.1 产品名称
-**AI Coding Assistant** (简称 ACA)
+**AISWS-ACA**（AISWS 品牌 / 中文：AI超站，简称 ACA）
 
 ### 1.2 产品定位
 一个可视化多任务并行的AI编程助手管理平台，用于统一管理和监控多个AI编程代理（如Claude Code、Codex、Gemini CLI等）的执行状态，提供自动化审批、日志记录和任务进度可视化功能。

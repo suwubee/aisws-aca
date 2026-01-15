@@ -1,4 +1,4 @@
-# Release 包（离线一键启动）
+# AISWS-ACA（AI超站）Release 包（离线一键启动）
 
 该目录用于“可复制/可压缩分发”的运行包：包含后端可执行文件 + 前端静态资源（`static/`）。
 
@@ -26,8 +26,12 @@
 
 默认端口由 `.env` 控制（未配置则使用默认值 `SERVER_PORT=34007`）。
 
+## License / Brand
+
+- License: Apache-2.0（见 `../LICENSE` / `../NOTICE`）
+- Trademarks: `../TRADEMARKS.md`
+
 ## 配置
 
 1. 复制 `.env.example` 为 `.env`
 2. 按需修改（生产环境务必更换 `JWT_SECRET` / 管理员账号密码 / 数据库路径等）
-

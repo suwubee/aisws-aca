@@ -1,9 +1,11 @@
-# ACA 功能全貌与PRD对比分析报告
+# AISWS-ACA 功能全貌与 PRD 对比分析报告
 
 日期：2026-01-10  
-范围：`ai-coding-assistant`（前端 Vue3 + 后端 Go）
+范围：本仓库实现（前端 Vue3 + 后端 Go）
 
 > 说明：本报告基于当前代码与 `docs/product/PRD.md` 进行对照整理，并给出“智能运维/Runbook”视角的节点设计建议与 Sprint 落地清单。
+>
+> 术语：文中 “ACA” 指 AISWS-ACA（AI超站）。
 
 ---
 
@@ -65,31 +67,14 @@
 
 ---
 
-## 2. AI 审核与 AI 托管流程梳理（端到端）
+## 2. AI 审核与 AI 托管流程（端到端）
 
-### 2.1 AI 审核（审批）流程
-1) **检测触发**：终端输出进入 detector，识别为 `waiting_approval` 后触发审批评估  
-2) **规则评估**：黑/白名单匹配（危险操作阻止；安全模式可放行）  
-3) **AI 辅助（可选）**：按系统提示词模板（`approval.system_prompt`）+ 规则注入变量进行判断  
-4) **输出决策**：`approve/reject/wait/input` + 输入内容  
-5) **执行输入**：自动通过时优先 `tmux send-keys`，否则 PTY 写入；手动处理在审批中心可发送  
-6) **记录审计**：审批记录/AI 决策理由落库，前端可回看
+端到端流程与实现细节请以 `docs/product/AI_AUDIT_AND_MANAGED_FLOW.md` 为准。本报告仅保留“影响体验闭环”的关键点：
 
-关键体验点：
-- **Enter（CR）与 Newline（LF）必须区分**：Claude Code 的信任/选择提示属于“Enter to confirm”，必须发送 Enter（CR）。  
-- **按键统一封装**：应以系统 Key Bindings 的 action（enter/esc/ctrl_c/1/2…）作为“全局一套”协议，避免前端输入框回车=换行的歧义。
-
-### 2.2 AI 托管（任务级托管）流程
-1) **创建任务**：配置工作目录/CLI 类型/初始目标；可开启 `AIManaged`  
-2) **创建终端**：任务启动时创建终端并关联任务  
-3) **进入工作目录 + 启动 CLI**：写入 `cd ... && claude/codex/gemini`，并做“命令不存在”快速拦截  
-4) **就绪检测**：通过 detector/元数据检测进入 `waiting_input/working`，避免把提示词当 shell 命令执行  
-5) **发送托管提示**：通过模板 `task.managed_prompt` 渲染（含动态变量）并发送  
-6) **后台监控**：周期性分析输出，判断 `complete/alert/retry/timeout`，并根据 `ai_error_handling` 决定暂停/失败/重试
-
-关键体验点：
-- **CLI 启动命令提示**：Claude Code 常见入口为 `claude` 或 `npx claude`；当环境不确定时必须“先向用户确认”，而不是盲目执行错误命令。  
-- **托管提示词/监控提示词模板化**：禁止硬编码，所有模块统一走 Prompt Templates + 变量注入。
+- **Enter（CR）与 Newline（LF）必须区分**：交互式 CLI 的 “Enter to confirm” 必须发送 Enter（CR），不能用输入框换行替代。
+- **按键统一封装**：所有自动输入/审批输入统一走系统 Key Bindings（enter/esc/ctrl_c/1/2/y/n...），避免歧义与跨 CLI 不一致。
+- **CLI 启动不确定先确认**：例如 `claude` vs `npx claude`；环境信息不精准时应 ask_user，而不是盲目执行错误入口。
+- **提示词模板化**：系统级提示词不硬编码，统一由 Prompt Templates + 变量渲染注入。
 
 ---
 

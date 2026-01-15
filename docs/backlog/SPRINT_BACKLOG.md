@@ -1,7 +1,7 @@
-# AI Coding Assistant - Sprint Backlog（更新：2026-01-09）
+# AISWS-ACA（AI超站）- Sprint Backlog（更新：2026-01-09）
 
 本文是基于当前代码实现与线上反馈（移动端可用性、resetData、终端输入稳定性、CLI 启动提示）重新整理的 backlog。  
-目标是把 ACA 从“功能齐全”推进到“可靠、可验证、可商业化”的状态。
+目标是把 AISWS-ACA（简称 ACA）从“功能齐全”推进到“可靠、可验证、可商业化”的状态。
 
 ---
 

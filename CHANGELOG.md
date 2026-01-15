@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Branding / Licensing
+- Rebrand docs as **AISWS-ACA（AI超站）** under AISWS (AI SUPER WORKSTATION / AI超站).
+- Switch project license to **Apache-2.0** (`LICENSE`) and add `NOTICE`, `TRADEMARKS.md`, `COMMERCIAL.md`.
+
+### Documentation
+- Add product overview and roadmap: `docs/product/PRODUCT_OVERVIEW.md`, `docs/product/FEATURES_AND_ROADMAP.md`.
+- Reduce duplicated content in research reports and refresh doc index: `docs/README.md`.
+
 ### v3.2.0 - Sprint 10 AI Agent编排与工作流引擎 (2026-01-08)
 
 #### Sprint 10: AI Agent编排

@@ -11,7 +11,7 @@
 - `server`：选择服务器（写入执行上下文 `currentServerID`）
 - `command`：在当前服务器或指定 `server_id` 上执行命令（可拿到输出）
 - `terminal`：创建终端会话并向 PTY 写入命令（偏交互，输出不回传给节点）
-- `task`：创建/启动 ACA 任务（可选 server/work_dir/cli_type/initial_prompt），并由 `WorkflowAgent` 监控其完成
+- `task`：创建/启动 AISWS-ACA 任务（可选 server/work_dir/cli_type/initial_prompt），并由 `WorkflowAgent` 监控其完成
 - `git`：封装 git 命令（本质仍是 command/ssh exec）
 - `condition`：支持布尔常量/布尔字符串；或执行命令，以退出码判断 true/false
 - `wait`：延迟
@@ -22,7 +22,7 @@
 ### 1.2 当前痛点（与你反馈一致）
 
 1) **“Git 节点到底在哪台机器执行？”**
-- 当前引擎逻辑：若节点/上下文有 `server_id` 则在该 SSH 服务器执行；否则在 ACA 服务端本机执行。
+- 当前引擎逻辑：若节点/上下文有 `server_id` 则在该 SSH 服务器执行；否则在 AISWS-ACA 服务端本机执行。
 - 但前端节点配置目前没有把“目标服务器/目录”显式作为必填或强提示，导致理解困难。
 
 2) **“打开服务器终端后再执行”与“直接 SSH Exec”概念混淆**

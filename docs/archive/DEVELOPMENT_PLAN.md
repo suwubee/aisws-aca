@@ -1,8 +1,8 @@
-# AI Coding Assistant - 开发计划
+# AISWS-ACA（原 AI Coding Assistant）- 开发计划（归档）
 
 ## 1. 项目概述
 
-**项目名称**: AI Coding Assistant (ACA)
+**项目名称**: AISWS-ACA（AI超站，简称 ACA；历史名称：AI Coding Assistant）
 **开发语言**: Go (后端) + Vue 3 (前端)
 **目标**: 构建一个可视化多任务并行的AI编程助手管理平台
 

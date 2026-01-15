@@ -1,14 +1,23 @@
-# ACA 文档索引（Docs Index）
+# AISWS-ACA 文档索引（Docs Index）
 
-本目录用于沉淀产品、设计、研发与测试资料。建议从下列入口开始阅读。
+AISWS-ACA 是 AISWS（AI SUPER WORKSTATION / AI超站）品牌下的开源项目之一，本目录用于沉淀产品、设计、研发与测试资料。建议从下列入口开始阅读。
 
 ## 1) 产品与规划（Product）
 
+- `docs/product/PRODUCT_OVERVIEW.md`：产品概览（定位/闭环/开源与商业化口径）
+- `docs/product/FEATURES_AND_ROADMAP.md`：功能清单与路线图（含 Windows 可视化运维方向）
 - `docs/product/PRD.md`：产品需求文档（当前版本）
 - `docs/product/AI_AUDIT_AND_MANAGED_FLOW.md`：AI 审核 / AI 托管流程梳理
 - `docs/product/UX_NAVIGATION_AND_SETTINGS.md`：主菜单与系统设置的信息架构、行为学分析与设计原则
-- `docs/research/ANALYSIS_REPORT.md`：功能全貌、PRD 对比、商业验证与路线图分析
-- `docs/research/PRD_GAP_COMPETITOR_VALUE_REPORT.md`：PRD 缺口与竞品/价值分析补充
+- `docs/research/ANALYSIS_REPORT.md`：功能全貌、PRD 对比与路线图分析
+- `docs/research/PRD_GAP_COMPETITOR_VALUE_REPORT.md`：竞品/商业价值分析（与上文避免重复，偏市场视角）
+
+## 1.1) 许可与品牌（Legal / Brand）
+
+- `LICENSE`：Apache-2.0
+- `NOTICE`：Apache NOTICE
+- `TRADEMARKS.md`：AISWS / AISWS-ACA / AI超站 商标使用说明
+- `COMMERCIAL.md`：商业化与企业支持方向（非绑定）
 
 ## 2) Backlog（路线图 / Sprint）
 
