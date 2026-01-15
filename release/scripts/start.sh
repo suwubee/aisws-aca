@@ -9,6 +9,7 @@
 #   ./start.sh status          # show status
 #   ./start.sh logs            # tail logs
 #   ./start.sh setup           # run setup wizard (foreground)
+#   ./start.sh demo            # start in demo mode (uses demo.db)
 #
 set -euo pipefail
 
@@ -16,6 +17,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ENV_FILE="$ROOT/.env"
 BACKEND_BIN="$ROOT/ai-coding-assistant"
+DEMO_DB_SOURCE="$ROOT/data/demo.db"
+DATA_DIR="$ROOT/data"
 
 RUNTIME_DIR="$ROOT/.aca"
 LOG_DIR="$RUNTIME_DIR/logs"
@@ -44,6 +47,7 @@ Commands:
   restart   Restart backend
   status    Show status and URLs
   logs      Tail backend logs
+  demo      Start in demo mode (read-only, uses demo.db)
 
 Options:
   --takeover-ports   Kill any process listening on SERVER_PORT before starting
@@ -413,6 +417,36 @@ show_logs() {
   tail -n 120 "$BACKEND_LOG" 2>/dev/null || true
 }
 
+run_demo() {
+  if [[ ! -f "$DEMO_DB_SOURCE" ]]; then
+    log_error "Demo database not found: $DEMO_DB_SOURCE"
+    log_error "Please ensure data/demo.db exists in the release directory."
+    return 1
+  fi
+
+  log_info "Starting in DEMO mode..."
+
+  # Create data directory if not exists
+  mkdir -p "$DATA_DIR"
+
+  # Copy demo database to working location
+  local demo_db="$DATA_DIR/aca.db"
+  log_info "Copying demo database to $demo_db"
+  cp -f "$DEMO_DB_SOURCE" "$demo_db"
+
+  # Set demo environment variables
+  export DEMO_MODE=true
+  export DATABASE_DSN="$demo_db"
+  export AUTH_USERNAME=demo
+  export AUTH_PASSWORD=demo123
+
+  log_info "Demo credentials: demo / demo123"
+  log_info "Demo mode is READ-ONLY"
+
+  # Start backend with demo settings
+  start_backend
+}
+
 init_env
 
 COMMAND=""
@@ -453,6 +487,7 @@ case "${COMMAND}" in
   restart) stop_backend && sleep 1 && start_backend ;;
   status) status ;;
   logs) show_logs ;;
+  demo) run_demo ;;
   *) usage ; exit 1 ;;
 esac
 

@@ -14,6 +14,7 @@ type Config struct {
 	Auth     AuthConfig
 	Terminal TerminalConfig
 	Log      LogConfig
+	CORS     CORSConfig
 }
 
 type AppConfig struct {
@@ -50,6 +51,12 @@ type LogConfig struct {
 	File  string
 }
 
+type CORSConfig struct {
+	AllowOrigins string
+	AllowMethods string
+	AllowHeaders string
+}
+
 func Load() *Config {
 	return &Config{
 		App: AppConfig{
@@ -79,6 +86,11 @@ func Load() *Config {
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
 			File:  getEnv("LOG_FILE", ""),
+		},
+		CORS: CORSConfig{
+			AllowOrigins: getEnv("CORS_ALLOW_ORIGINS", "*"),
+			AllowMethods: getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS"),
+			AllowHeaders: getEnv("CORS_ALLOW_HEADERS", "Origin,Content-Type,Accept,Authorization"),
 		},
 	}
 }

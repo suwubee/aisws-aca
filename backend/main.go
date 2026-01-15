@@ -99,9 +99,9 @@ func main() {
 		Format: "${time} ${status} ${method} ${path} ${latency}\n",
 	}))
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
+		AllowOrigins: cfg.CORS.AllowOrigins,
+		AllowMethods: cfg.CORS.AllowMethods,
+		AllowHeaders: cfg.CORS.AllowHeaders,
 	}))
 
 	// WebSocket升级检查
