@@ -67,3 +67,5 @@ backend/.gocache/
 !release/ai-coding-assistant.exe
 !release/data/
 !release/data/*
+!release/static/
+!release/static/**
