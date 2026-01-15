@@ -1,6 +1,3 @@
-# Generated artifacts (created by ./scripts/build_release.sh)
-static/
-
 # Runtime
 .aca/
 .env
