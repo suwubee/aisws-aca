@@ -17,11 +17,13 @@ import (
 type TaskController struct {
 	automationService *task.AutomationService
 	aiWorkflowEngine  *workflow.AIWorkflowEngine
+	terminalManager   *terminal.Manager
 }
 
 func NewTaskController(tm *terminal.Manager) *TaskController {
 	return &TaskController{
 		automationService: task.NewAutomationService(tm),
+		terminalManager:   tm,
 	}
 }
 
@@ -1091,6 +1093,105 @@ func (ctrl *TaskController) GetTaskTerminals(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": terminals})
 }
 
+// BindTerminal 绑定任务的活跃终端（同任务内允许切换，不允许复用其他任务的终端）
+func (ctrl *TaskController) BindTerminal(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var req struct {
+		TerminalID string `json:"terminal_id"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	terminalID := strings.TrimSpace(req.TerminalID)
+	if terminalID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "terminal_id is required"})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id").First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	var terminalModel model.TerminalSession
+	if err := model.DB.Select("id", "task_id").First(&terminalModel, "id = ?", terminalID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	if terminalModel.TaskID != nil {
+		existing := strings.TrimSpace(*terminalModel.TaskID)
+		if existing != "" && existing != taskID {
+			return c.Status(400).JSON(fiber.Map{"error": "Terminal is already bound to another task"})
+		}
+	}
+
+	// 写回终端的 task_id（优先走 terminalManager，保证内存态/审批配置同步）
+	taskIDCopy := taskID
+	if ctrl.terminalManager != nil {
+		_ = ctrl.terminalManager.LinkTask(terminalID, &taskIDCopy)
+	} else {
+		if err := model.DB.Model(&model.TerminalSession{}).
+			Where("id = ?", terminalID).
+			Update("task_id", &taskIDCopy).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to bind terminal"})
+		}
+	}
+
+	now := time.Now()
+	if err := model.DB.Model(&model.Task{}).
+		Where("id = ?", taskID).
+		Updates(map[string]any{
+			"active_terminal_id": terminalID,
+			"updated_at":         now,
+		}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to bind terminal"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":     "Terminal bound",
+		"task_id":     taskID,
+		"terminal_id": terminalID,
+	})
+}
+
+// ResumeAI 恢复任务的 AI 执行（仅更新任务级 AI 状态）
+func (ctrl *TaskController) ResumeAI(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id", "active_terminal_id", "ai_status", "ai_pause_reason").
+		First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	if taskModel.ActiveTerminalID == nil || strings.TrimSpace(*taskModel.ActiveTerminalID) == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task has no active terminal"})
+	}
+
+	now := time.Now()
+	if err := model.DB.Model(&model.Task{}).
+		Where("id = ?", taskID).
+		Updates(map[string]any{
+			"ai_status":       "running",
+			"ai_pause_reason": "",
+			"updated_at":      now,
+		}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to resume AI"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "AI resumed",
+		"task_id": taskID,
+	})
+}
+
 // RegisterRoutes 注册路由
 func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks := app.Group("/tasks")
@@ -1103,5 +1204,7 @@ func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks.Delete("/:id", ctrl.DeleteTask)
 	tasks.Post("/:id/move", ctrl.MoveTask)
 	tasks.Post("/:id/start", ctrl.StartTask)
+	tasks.Post("/:id/resume", ctrl.ResumeAI)
+	tasks.Post("/:id/bind-terminal", ctrl.BindTerminal)
 	tasks.Get("/:id/terminals", ctrl.GetTaskTerminals)
 }

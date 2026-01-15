@@ -137,11 +137,17 @@ func (e *AIWorkflowEngine) StartTaskAgent(ctx context.Context, task *model.Task)
 	}
 
 	now := time.Now()
-	model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
+	updates := map[string]any{
 		"status":           "in_progress",
 		"agent_session_id": session.ID,
+		"ai_status":        "running",
+		"ai_pause_reason":  "",
 		"updated_at":       now,
-	})
+	}
+	if strings.TrimSpace(terminalID) != "" {
+		updates["active_terminal_id"] = strings.TrimSpace(terminalID)
+	}
+	model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(updates)
 
 	go e.monitorTaskAgent(task.ID, session.ID)
 

@@ -402,7 +402,7 @@ func TestAuthController_ResetData_DeletesTaskAndTerminalData(t *testing.T) {
 	if err := model.DB.Create(&model.AISession{
 		ID:         aiSessionID,
 		TerminalID: terminalID,
-		TaskID:     &taskID,
+		TaskID:     taskID,
 		AIType:     "codex",
 		State:      "waiting_input",
 	}).Error; err != nil {

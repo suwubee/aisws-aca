@@ -25,7 +25,7 @@ const (
 type SessionSnapshot struct {
 	AISessionID string
 	TerminalID  string
-	TaskID      *string
+	TaskID      string
 	CLIType     string
 	State       CLIState
 	SessionID   string
@@ -56,6 +56,9 @@ func NewSessionManager(terminalID string, taskID *string, cliType string) (*Sess
 	if terminalID == "" {
 		return nil, errors.New("missing terminalID")
 	}
+	if taskID == nil || *taskID == "" {
+		return nil, errors.New("missing taskID: AI session must be bound to a task")
+	}
 	if cliType == "" {
 		cliType = string(detector.AIAgentUnknown)
 	}
@@ -63,11 +66,12 @@ func NewSessionManager(terminalID string, taskID *string, cliType string) (*Sess
 		return nil, errors.New("database not initialized")
 	}
 
+	taskIDStr := *taskID
 	now := time.Now()
 	aiSession := &model.AISession{
 		ID:         uuid.New().String(),
 		TerminalID: terminalID,
-		TaskID:     taskID,
+		TaskID:     taskIDStr,
 		AIType:     cliType,
 		State:      string(CLIStateStarting),
 		CreatedAt:  now,
@@ -83,7 +87,7 @@ func NewSessionManager(terminalID string, taskID *string, cliType string) (*Sess
 		aiSession: &model.AISession{
 			ID:          aiSession.ID,
 			TerminalID:  terminalID,
-			TaskID:      taskID,
+			TaskID:      taskIDStr,
 			AIType:      cliType,
 			State:       aiSession.State,
 			SessionID:   "",

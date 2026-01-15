@@ -296,9 +296,16 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 	}
 
 	// 立即设置任务状态为 in_progress，防止重复启动（幂等性保证）
+	now := time.Now()
 	model.DB.Model(task).Updates(map[string]interface{}{
-		"status":     "in_progress",
-		"updated_at": time.Now(),
+		"status":             "in_progress",
+		"active_terminal_id": session.ID(),
+		"ai_status":          "running",
+		"ai_pause_reason":    "",
+		"expect_disconnect":  false,
+		"reconnect_attempts": 0,
+		"last_reconnect_at":  nil,
+		"updated_at":         now,
 	})
 
 	// 创建远程目录（如果需要）
@@ -595,10 +602,16 @@ func (s *AutomationService) startScriptTask(task *model.Task) (*StartTaskResult,
 	}
 
 	// 设置任务为进行中，防止重复启动
-	model.DB.Model(task).Updates(map[string]interface{}{
+	updates := map[string]interface{}{
 		"status":     "in_progress",
 		"updated_at": time.Now(),
-	})
+	}
+	if result.Terminal != nil {
+		if id := strings.TrimSpace(result.Terminal.ID()); id != "" {
+			updates["active_terminal_id"] = id
+		}
+	}
+	model.DB.Model(task).Updates(updates)
 
 	// 写入并执行脚本
 	for _, session := range sessions {

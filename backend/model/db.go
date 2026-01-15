@@ -61,10 +61,18 @@ type Task struct {
 	AutoCreateDir   bool        `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
 
 	// AI托管配置
-	AIManaged       bool   `gorm:"default:false" json:"ai_managed"` // 是否AI全程托管
-	AIPrompt        string `json:"ai_prompt"`                       // AI托管提示词
-	AIEndCondition  string `json:"ai_end_condition"`                // AI结束条件
-	AIErrorHandling string `json:"ai_error_handling"`               // AI错误处理策略
+	AIManaged       bool   `gorm:"default:false" json:"ai_managed"`   // 是否AI全程托管
+	AIPrompt        string `gorm:"column:ai_prompt" json:"ai_prompt"` // AI托管提示词
+	AIEndCondition  string `json:"ai_end_condition"`                  // AI结束条件
+	AIErrorHandling string `json:"ai_error_handling"`                 // AI错误处理策略
+
+	// AI任务绑定与终端管理
+	ActiveTerminalID  *string    `gorm:"index" json:"active_terminal_id"`               // 当前活跃终端ID
+	AIStatus          string     `gorm:"default:stopped" json:"ai_status"`              // AI执行状态: running, paused, waiting_reconnect, stopped
+	AIPauseReason     string     `gorm:"column:ai_pause_reason" json:"ai_pause_reason"` // AI暂停原因: terminal_disconnected, terminal_closed, user_paused, error
+	ExpectDisconnect  bool       `gorm:"default:false" json:"expect_disconnect"`        // 预期断开（AI执行了重启命令）
+	ReconnectAttempts int        `gorm:"default:0" json:"reconnect_attempts"`           // 重连尝试次数
+	LastReconnectAt   *time.Time `json:"last_reconnect_at"`                             // 最后重连时间
 }
 
 // TerminalSession 终端会话模型
@@ -84,17 +92,25 @@ type TerminalSession struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	ClosedAt    *time.Time `json:"closed_at"`
 	Task        *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
+
+	// 连接状态管理
+	ConnectionStatus     string     `gorm:"default:disconnected" json:"connection_status"` // connected, disconnected
+	AutoReconnect        bool       `gorm:"default:true" json:"auto_reconnect"`            // 是否启用自动重连
+	LastDisconnectAt     *time.Time `json:"last_disconnect_at"`                            // 最后断开时间
+	CloseReason          string     `json:"close_reason"`                                  // user_close, restart, error, timeout
+	ReplacedByTerminalID *string    `gorm:"index" json:"replaced_by_terminal_id"`          // 被哪个终端替换（重启链）
+	LastWorkDir          string     `json:"last_work_dir"`                                 // 最后工作目录
 }
 
 // AISession AI会话模型
 type AISession struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
 	TerminalID  string    `gorm:"not null;index" json:"terminal_id"`
-	TaskID      *string   `gorm:"index" json:"task_id"`
-	AIType      string    `gorm:"not null" json:"ai_type"`      // claude-code, codex, gemini
-	State       string    `gorm:"default:unknown" json:"state"` // unknown, waiting_input, working, waiting_approval
-	SessionID   string    `json:"session_id"`                   // AI CLI 工具的会话ID（用于 --resume）
-	SessionFile string    `json:"session_file"`                 // 会话文件路径
+	TaskID      string    `gorm:"not null;index" json:"task_id"` // 必填，严格绑定任务
+	AIType      string    `gorm:"not null" json:"ai_type"`       // claude-code, codex, gemini
+	State       string    `gorm:"default:unknown" json:"state"`  // unknown, waiting_input, working, waiting_approval, waiting_terminal, paused
+	SessionID   string    `json:"session_id"`                    // AI CLI 工具的会话ID（用于 --resume）
+	SessionFile string    `json:"session_file"`                  // 会话文件路径
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

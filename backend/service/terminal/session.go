@@ -293,6 +293,11 @@ func (s *Session) SetStartDir(dir string) {
 	s.startDir = strings.TrimSpace(dir)
 }
 
+// GetWorkDir 获取当前工作目录
+func (s *Session) GetWorkDir() string {
+	return s.startDir
+}
+
 // Start 启动会话
 func (s *Session) Start() error {
 	return s.StartWithTmux(false)

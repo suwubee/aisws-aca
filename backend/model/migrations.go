@@ -59,6 +59,18 @@ func RunMigrations(db *gorm.DB) error {
 			id: "20260114_add_remark_fields",
 			up: migrateAddRemarkFields,
 		},
+		{
+			id: "20260116_add_task_ai_binding_fields",
+			up: migrateAddTaskAIBindingFields,
+		},
+		{
+			id: "20260116_fix_task_ai_column_names",
+			up: migrateFixTaskAIColumnNames,
+		},
+		{
+			id: "20260116_add_terminal_connection_fields",
+			up: migrateAddTerminalConnectionFields,
+		},
 	}
 
 	for _, m := range migrations {
@@ -200,6 +212,141 @@ func migrateAddRemarkFields(db *gorm.DB) error {
 
 	if db.Migrator().HasTable(&ProjectGroup{}) && !db.Migrator().HasColumn(&ProjectGroup{}, "Remark") {
 		if err := db.Migrator().AddColumn(&ProjectGroup{}, "Remark"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// migrateAddTaskAIBindingFields 添加任务AI绑定相关字段
+func migrateAddTaskAIBindingFields(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&Task{}) {
+		return nil
+	}
+
+	// ActiveTerminalID
+	if !db.Migrator().HasColumn(&Task{}, "ActiveTerminalID") {
+		if err := db.Migrator().AddColumn(&Task{}, "ActiveTerminalID"); err != nil {
+			return err
+		}
+		if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_active_terminal_id ON tasks(active_terminal_id)").Error; err != nil {
+			return err
+		}
+	}
+
+	// AIStatus
+	if !db.Migrator().HasColumn(&Task{}, "AIStatus") {
+		if err := db.Migrator().AddColumn(&Task{}, "AIStatus"); err != nil {
+			return err
+		}
+	}
+
+	// AIPauseReason
+	if !db.Migrator().HasColumn(&Task{}, "AIPauseReason") {
+		if err := db.Migrator().AddColumn(&Task{}, "AIPauseReason"); err != nil {
+			return err
+		}
+	}
+
+	// ExpectDisconnect
+	if !db.Migrator().HasColumn(&Task{}, "ExpectDisconnect") {
+		if err := db.Migrator().AddColumn(&Task{}, "ExpectDisconnect"); err != nil {
+			return err
+		}
+	}
+
+	// ReconnectAttempts
+	if !db.Migrator().HasColumn(&Task{}, "ReconnectAttempts") {
+		if err := db.Migrator().AddColumn(&Task{}, "ReconnectAttempts"); err != nil {
+			return err
+		}
+	}
+
+	// LastReconnectAt
+	if !db.Migrator().HasColumn(&Task{}, "LastReconnectAt") {
+		if err := db.Migrator().AddColumn(&Task{}, "LastReconnectAt"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// migrateFixTaskAIColumnNames 修复早期版本中 AI* 字段的列名（a_iprompt/a_ipause_reason）
+// 备注：AutoMigrate 已会创建新列，这里负责把旧列数据拷贝到新列，避免丢失。
+func migrateFixTaskAIColumnNames(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	if !db.Migrator().HasTable(&Task{}) {
+		return nil
+	}
+
+	// a_iprompt -> ai_prompt
+	if db.Migrator().HasColumn("tasks", "a_iprompt") && db.Migrator().HasColumn("tasks", "ai_prompt") {
+		if err := db.Exec("UPDATE tasks SET ai_prompt = a_iprompt WHERE (ai_prompt IS NULL OR ai_prompt = '') AND a_iprompt IS NOT NULL AND a_iprompt != ''").Error; err != nil {
+			return err
+		}
+	}
+
+	// a_ipause_reason -> ai_pause_reason
+	if db.Migrator().HasColumn("tasks", "a_ipause_reason") && db.Migrator().HasColumn("tasks", "ai_pause_reason") {
+		if err := db.Exec("UPDATE tasks SET ai_pause_reason = a_ipause_reason WHERE (ai_pause_reason IS NULL OR ai_pause_reason = '') AND a_ipause_reason IS NOT NULL AND a_ipause_reason != ''").Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// migrateAddTerminalConnectionFields 添加终端连接状态相关字段
+func migrateAddTerminalConnectionFields(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&TerminalSession{}) {
+		return nil
+	}
+
+	// ConnectionStatus
+	if !db.Migrator().HasColumn(&TerminalSession{}, "ConnectionStatus") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "ConnectionStatus"); err != nil {
+			return err
+		}
+	}
+
+	// AutoReconnect
+	if !db.Migrator().HasColumn(&TerminalSession{}, "AutoReconnect") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "AutoReconnect"); err != nil {
+			return err
+		}
+	}
+
+	// LastDisconnectAt
+	if !db.Migrator().HasColumn(&TerminalSession{}, "LastDisconnectAt") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "LastDisconnectAt"); err != nil {
+			return err
+		}
+	}
+
+	// CloseReason
+	if !db.Migrator().HasColumn(&TerminalSession{}, "CloseReason") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "CloseReason"); err != nil {
+			return err
+		}
+	}
+
+	// ReplacedByTerminalID
+	if !db.Migrator().HasColumn(&TerminalSession{}, "ReplacedByTerminalID") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "ReplacedByTerminalID"); err != nil {
+			return err
+		}
+		if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_terminal_sessions_replaced_by ON terminal_sessions(replaced_by_terminal_id)").Error; err != nil {
+			return err
+		}
+	}
+
+	// LastWorkDir
+	if !db.Migrator().HasColumn(&TerminalSession{}, "LastWorkDir") {
+		if err := db.Migrator().AddColumn(&TerminalSession{}, "LastWorkDir"); err != nil {
 			return err
 		}
 	}

@@ -314,6 +314,30 @@ func (ctrl *TerminalController) CloseTerminal(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Terminal closed"})
 }
 
+// RestartTerminal 重启终端（关闭旧会话并创建新会话，保留任务绑定）
+func (ctrl *TerminalController) RestartTerminal(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+	if ctrl.manager == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
+	}
+
+	session, err := ctrl.manager.RestartSession(id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to restart terminal"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":           "Terminal restarted",
+		"old_terminal_id":   id,
+		"new_terminal_id":   session.ID(),
+		"terminal_id":       session.ID(),
+		"terminal_metadata": session.Metadata(),
+	})
+}
+
 // HideTerminal 隐藏/显示终端
 func (ctrl *TerminalController) HideTerminal(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -427,6 +451,12 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		c.WriteJSON(WSMessage{Type: "error", Message: "Session not found"})
 		return
 	}
+
+	// 更新连接状态为 connected
+	ctrl.updateConnectionStatus(sessionID, "connected", "")
+
+	// 确保断开时更新状态
+	defer ctrl.updateConnectionStatus(sessionID, "disconnected", "websocket_closed")
 
 	// 发送ready消息
 	c.WriteJSON(WSMessage{
@@ -603,6 +633,7 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Get("/stats", ctrl.GetTerminalStats)
 	terminals.Get("/:id", ctrl.GetTerminal)
 	terminals.Post("/:id/close", ctrl.CloseTerminal)
+	terminals.Post("/:id/restart", ctrl.RestartTerminal)
 	terminals.Post("/:id/hide", ctrl.HideTerminal)
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
@@ -767,4 +798,100 @@ func GetDBSessions(c *fiber.Ctx) error {
 	var sessions []model.TerminalSession
 	model.DB.Order("created_at desc").Find(&sessions)
 	return c.JSON(fiber.Map{"items": sessions})
+}
+
+// updateConnectionStatus 更新终端连接状态，并处理关联任务的AI状态
+func (ctrl *TerminalController) updateConnectionStatus(terminalID, status, reason string) {
+	if model.DB == nil {
+		return
+	}
+
+	now := time.Now()
+	updates := map[string]interface{}{
+		"connection_status": status,
+	}
+
+	if status == "disconnected" {
+		updates["last_disconnect_at"] = now
+		if reason != "" {
+			updates["close_reason"] = reason
+		}
+	}
+
+	if err := model.DB.Model(&model.TerminalSession{}).
+		Where("id = ?", terminalID).
+		Updates(updates).Error; err != nil {
+		utils.Warn("Failed to update terminal connection status",
+			zap.String("terminal_id", terminalID),
+			zap.String("status", status),
+			zap.Error(err))
+		return
+	}
+
+	// 查找关联的任务，更新AI状态
+	var terminal model.TerminalSession
+	if err := model.DB.Select("task_id").First(&terminal, "id = ?", terminalID).Error; err != nil {
+		return
+	}
+
+	if terminal.TaskID == nil {
+		return
+	}
+
+	// 更新任务的AI状态
+	ctrl.updateTaskAIStatus(terminalID, *terminal.TaskID, status)
+}
+
+// updateTaskAIStatus 根据终端连接状态更新任务的AI状态
+func (ctrl *TerminalController) updateTaskAIStatus(terminalID, taskID, connectionStatus string) {
+	if model.DB == nil {
+		return
+	}
+
+	var task model.Task
+	if err := model.DB.Select("id", "active_terminal_id", "ai_status", "ai_pause_reason").
+		First(&task, "id = ?", taskID).Error; err != nil {
+		return
+	}
+
+	// 只处理当前活跃终端的状态变化
+	if task.ActiveTerminalID == nil || *task.ActiveTerminalID != terminalID {
+		return
+	}
+
+	now := time.Now()
+	updates := map[string]interface{}{}
+
+	if connectionStatus == "disconnected" {
+		// 终端断开，暂停AI
+		if task.AIStatus == "running" {
+			updates["ai_status"] = "paused"
+			updates["ai_pause_reason"] = "terminal_disconnected"
+			updates["updated_at"] = now
+		}
+	} else if connectionStatus == "connected" {
+		// 终端重连，恢复AI（如果之前是因为终端断开而暂停）
+		if task.AIStatus == "paused" && task.AIPauseReason == "terminal_disconnected" {
+			updates["ai_status"] = "running"
+			updates["ai_pause_reason"] = ""
+			updates["updated_at"] = now
+		}
+	}
+
+	if len(updates) > 0 {
+		if err := model.DB.Model(&model.Task{}).
+			Where("id = ?", taskID).
+			Updates(updates).Error; err != nil {
+			utils.Warn("Failed to update task AI status",
+				zap.String("task_id", taskID),
+				zap.String("connection_status", connectionStatus),
+				zap.Error(err))
+		} else {
+			utils.Info("Task AI status updated",
+				zap.String("task_id", taskID),
+				zap.String("terminal_id", terminalID),
+				zap.String("connection_status", connectionStatus),
+				zap.Any("updates", updates))
+		}
+	}
 }
