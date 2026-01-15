@@ -34,7 +34,7 @@ import (
 	"go.uber.org/zap"
 )
 
-//go:embed static
+//go:embed all:static
 var staticFiles embed.FS
 
 func main() {
