@@ -23,7 +23,11 @@
         </n-button>
       </n-form>
       <template #footer>
-        <n-text depth="3">默认账号: admin / admin123</n-text>
+        <n-space vertical align="center">
+          <n-button text type="info" @click="fillDemo">
+            点击填充演示账号 (demo / demo123)
+          </n-button>
+        </n-space>
       </template>
     </n-card>
   </div>
@@ -48,6 +52,11 @@ const form = reactive({
 const rules = {
   username: { required: true, message: '请输入用户名' },
   password: { required: true, message: '请输入密码' }
+}
+
+function fillDemo() {
+  form.username = 'demo'
+  form.password = 'demo123'
 }
 
 async function handleLogin() {
