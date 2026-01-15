@@ -37,7 +37,7 @@
 
 ## License / Brand
 
-- License: Apache-2.0（见 `../LICENSE` / `../NOTICE`）
+- License: AGPL-3.0（见 `../LICENSE` / `../NOTICE`）
 - Trademarks: `../TRADEMARKS.md`
 
 ## 配置

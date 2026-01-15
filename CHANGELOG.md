@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Branding / Licensing
 - Rebrand docs as **AISWS-ACA（AI超站）** under AISWS (AI SUPER WORKSTATION / AI超站).
-- Switch project license to **Apache-2.0** (`LICENSE`) and add `NOTICE`, `TRADEMARKS.md`, `COMMERCIAL.md`.
+- Switch project license to **AGPL-3.0** (`LICENSE`) and add `NOTICE`, `TRADEMARKS.md`, `COMMERCIAL.md`.
 
 ### Documentation
 - Add product overview and roadmap: `docs/product/PRODUCT_OVERVIEW.md`, `docs/product/FEATURES_AND_ROADMAP.md`.

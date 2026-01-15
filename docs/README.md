@@ -14,8 +14,8 @@ AISWS-ACA 是 AISWS（AI SUPER WORKSTATION / AI超站）品牌下的开源项目
 
 ## 1.1) 许可与品牌（Legal / Brand）
 
-- `LICENSE`：Apache-2.0
-- `NOTICE`：Apache NOTICE
+- `LICENSE`：AGPL-3.0
+- `NOTICE`：AGPL NOTICE
 - `TRADEMARKS.md`：AISWS / AISWS-ACA / AI超站 商标使用说明
 - `COMMERCIAL.md`：商业化与企业支持方向（非绑定）
 

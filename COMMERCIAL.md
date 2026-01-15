@@ -1,10 +1,12 @@
 # Commercial Use & Enterprise
 
-AISWS-ACA（AI超站）is open source under the Apache License 2.0 (`LICENSE`).
+AISWS-ACA（AI超站）is open source under the GNU Affero General Public License v3.0 (AGPL-3.0, see `LICENSE`).
 
 ## What requires authorization
 
-Apache-2.0 allows commercial use of the code. However, **using AISWS trademarks/branding** for commercial distribution or hosting requires permission (see `TRADEMARKS.md`).
+AGPL-3.0 requires that any modified version or network service based on this code must also be open-sourced under AGPL-3.0. If you want to use this code in a **closed-source commercial product** or provide it as a **proprietary SaaS service without releasing source code**, you need to obtain a commercial license from the maintainers.
+
+Additionally, **using AISWS trademarks/branding** for commercial distribution or hosting requires permission (see `TRADEMARKS.md`).
 
 ## Suggested enterprise roadmap (non-binding)
 

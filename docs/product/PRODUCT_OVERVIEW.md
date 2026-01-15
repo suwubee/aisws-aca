@@ -28,7 +28,7 @@ Runbook 的关键是“节点契约清晰”：明确每一步 **在谁的机器
 
 ## 4) 开源与商业化（License / Brand）
 
-- 代码许可：Apache-2.0（见 `LICENSE` / `NOTICE`）
+- 代码许可：AGPL-3.0（见 `LICENSE` / `NOTICE`）
 - 商标与品牌：AISWS / AISWS-ACA / AI超站（见 `TRADEMARKS.md`）
 - 商业化与企业支持方向（非绑定）：见 `COMMERCIAL.md`
 

@@ -24,5 +24,5 @@ Thanks for your interest in contributing to **AISWS-ACA（AI超站）**.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache-2.0 license of this project (`LICENSE`).
+By contributing, you agree that your contributions will be licensed under the AGPL-3.0 license of this project (`LICENSE`).
 

@@ -4,8 +4,8 @@ AISWS-ACA（AI超站）is an open-source project under the AISWS (AI SUPER WORKS
 
 ## 1) What this means
 
-- The code is licensed under Apache-2.0 (`LICENSE`).
-- **Trademarks are not granted by the Apache-2.0 license** (see Apache-2.0 §6).
+- The code is licensed under AGPL-3.0 (`LICENSE`).
+- **Trademarks are not granted by the AGPL-3.0 license**.
 
 ## 2) AISWS trademarks
 
