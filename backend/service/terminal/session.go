@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -533,10 +534,13 @@ func (s *Session) flushDataBatchLocked() {
 		return
 	}
 
+	// 过滤掉内部命令标记（ACA_CMD_BEGIN/END）
+	filtered := filterInternalMarkers(s.dataBatchBuf)
+
 	// 发送批量数据
 	s.broadcast(StreamEvent{
 		Type: StreamEventData,
-		Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
+		Data: base64.StdEncoding.EncodeToString(filtered),
 	})
 
 	s.dataBatchBuf = s.dataBatchBuf[:0]
@@ -2065,4 +2069,34 @@ func (s *Session) doFlushLogs() {
 			utils.Warn("Failed to save terminal logs", zap.Error(err))
 		}
 	}
+}
+
+// filterInternalMarkers 过滤内部命令标记
+func filterInternalMarkers(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+
+	// 快速检查是否包含标记
+	if !bytes.Contains(data, []byte("__ACA_CMD_")) &&
+		!bytes.Contains(data, []byte("ACA_CODE=$?")) &&
+		!bytes.Contains(data, []byte("ACA_EOF_")) {
+		return data
+	}
+
+	lines := bytes.Split(data, []byte("\n"))
+	filtered := make([][]byte, 0, len(lines))
+
+	for _, line := range lines {
+		// 跳过包含内部标记的行
+		if bytes.Contains(line, []byte("__ACA_CMD_BEGIN_")) ||
+			bytes.Contains(line, []byte("__ACA_CMD_END_")) ||
+			bytes.Contains(line, []byte("ACA_CODE=$?")) ||
+			bytes.Contains(line, []byte("ACA_EOF_")) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+
+	return bytes.Join(filtered, []byte("\n"))
 }
