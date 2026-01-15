@@ -158,6 +158,8 @@
 - `reset-data` 会尝试关闭所有终端会话，并清理除 `users` 与内置 `workflow_templates` 外的全部业务数据（任务/终端/日志/审批/消息/服务器/项目/工作流/规则/AI Provider 等），避免“假重置”。
 - 所有系统级 AI 提示词从数据库模板读取（不再硬编码），并支持在系统设置中编辑、保存为方案、选择/套用方案（含变量渲染）。
 - 终端输入稳定性：前端 xterm 在容器可见时再 open/fit，初次渲染补一帧 fit；WebSocket 断线自动重连，降低“无法输入/光标错位”的概率。
+- 任务与终端绑定：同一任务内允许终端重连/重启后继续执行；不同任务禁止复用终端，避免 AI 指令串任务。新增 `POST /api/tasks/:id/bind-terminal`、`POST /api/tasks/:id/resume`。
+- 预期断开自动恢复：AI 输出重启类命令时标记 `expect_disconnect`，SSH 断开后自动重连/重启并更新任务活跃终端；连接恢复后仅在因 `terminal_disconnected` 暂停时自动恢复运行。新增 `POST /api/terminals/:id/restart`。
 - 审批/AI 日志稳定性：避免组件卸载后仍持续重连 WebSocket，减少异常更新与资源泄漏。
 - 移动端体验：Kanban/工作流/日志/AI 决策日志等长列表切换为 card 模式；移动端判定增加 coarse pointer + 横屏覆盖，菜单使用抽屉、弹窗宽度自适应。
 - 托管启动安全提示：当 CLI 命令不可用（例如 `claude` 不在 PATH）时自动暂停任务并提示用户手动确认（如尝试 `claude` 或 `npx claude`），避免把提示词误当作 shell 命令执行。
