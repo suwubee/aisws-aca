@@ -18,4 +18,3 @@ func TestEmbeddedStaticAssetsContainIndexHTML(t *testing.T) {
 		t.Fatalf("embedded index.html is empty")
 	}
 }
-

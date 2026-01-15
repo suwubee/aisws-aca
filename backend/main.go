@@ -4,9 +4,12 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/api"
@@ -87,7 +90,7 @@ func main() {
 
 	// 创建Fiber应用
 	app := fiber.New(fiber.Config{
-		AppName:      "AI Coding Assistant",
+		AppName:      "AISWS-ACA",
 		ServerHeader: "ACA",
 	})
 
@@ -231,12 +234,14 @@ func main() {
 
 	// 静态文件服务
 	var staticRoot http.FileSystem
+	staticSource := "none"
 
 	// Prefer disk `static/` next to the executable so frontend rebuilds don't require rebuilding the binary.
 	if exePath, err := os.Executable(); err == nil {
 		diskStaticDir := filepath.Join(filepath.Dir(exePath), "static")
 		if info, err := os.Stat(filepath.Join(diskStaticDir, "index.html")); err == nil && !info.IsDir() {
 			staticRoot = http.Dir(diskStaticDir)
+			staticSource = "disk:" + diskStaticDir
 		}
 	}
 
@@ -244,6 +249,7 @@ func main() {
 	if staticRoot == nil {
 		if staticFS, err := fs.Sub(staticFiles, "static"); err == nil {
 			staticRoot = http.FS(staticFS)
+			staticSource = "embedded"
 		}
 	}
 
@@ -258,10 +264,74 @@ func main() {
 	// 启动服务器
 	addr := cfg.Server.Host + ":" + cfg.Server.Port
 	utils.Info("Starting server", zap.String("address", addr))
-	log.Printf("Server starting at http://%s\n", addr)
+	log.Printf("Server listening on %s\n", addr)
+	if staticSource != "none" {
+		log.Printf("Frontend static: %s\n", staticSource)
+	}
+	printAccessURLs(cfg.Server.Host, cfg.Server.Port)
 
 	if err := app.Listen(addr); err != nil {
 		utils.Error("Server error", zap.Error(err))
 		log.Fatal(err)
 	}
+}
+
+func printAccessURLs(bindHost, bindPort string) {
+	port := strings.TrimSpace(bindPort)
+	if port == "" {
+		return
+	}
+
+	host := strings.TrimSpace(bindHost)
+	if host == "" {
+		host = "0.0.0.0"
+	}
+
+	log.Printf("App URLs:\n")
+
+	isWildcard := host == "0.0.0.0" || host == "::"
+	if isWildcard {
+		log.Printf("  - http://localhost:%s\n", port)
+		log.Printf("  - http://127.0.0.1:%s\n", port)
+		ips := listLocalIPv4()
+		for _, ip := range ips {
+			log.Printf("  - http://%s:%s\n", ip, port)
+		}
+		return
+	}
+
+	urlHost := host
+	if strings.Contains(urlHost, ":") && !strings.HasPrefix(urlHost, "[") && !strings.HasSuffix(urlHost, "]") {
+		urlHost = "[" + urlHost + "]"
+	}
+	log.Printf("  - http://%s:%s\n", urlHost, port)
+}
+
+func listLocalIPv4() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	unique := make(map[string]struct{}, 8)
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP == nil {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() {
+			continue
+		}
+		unique[ip.String()] = struct{}{}
+	}
+
+	ips := make([]string, 0, len(unique))
+	for ip := range unique {
+		ips = append(ips, ip)
+	}
+	sort.Strings(ips)
+	return ips
 }
