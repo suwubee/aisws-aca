@@ -39,6 +39,7 @@ Commands:
   backend-dev      Start backend with go run (dev)
   frontend         Start frontend only
   all              Start both (default in non-interactive mode)
+  demo             Start in demo mode (read-only, uses demo.db)
   restart          Restart both services
   stop             Stop both services
   status           Show service status
@@ -320,6 +321,43 @@ init_dev_env() {
     export ACA_FRONTEND_PORT="${ACA_FRONTEND_PORT:-34001}"
 
     mkdir -p "$LOG_DIR" "$PID_DIR"
+}
+
+# Demo mode paths
+DEMO_DB_SOURCE="$PROJECT_ROOT/release/data/demo.db"
+DATA_DIR="$BACKEND_DIR/data"
+
+# Run in demo mode
+run_demo() {
+    if [[ ! -f "$DEMO_DB_SOURCE" ]]; then
+        log_error "Demo database not found: $DEMO_DB_SOURCE"
+        log_error "Please ensure release/data/demo.db exists."
+        return 1
+    fi
+
+    log_info "Starting in DEMO mode..."
+
+    # Create data directory if not exists
+    mkdir -p "$DATA_DIR"
+
+    # Copy demo database to working location
+    local demo_db="$DATA_DIR/aca.db"
+    log_info "Copying demo database to $demo_db"
+    cp -f "$DEMO_DB_SOURCE" "$demo_db"
+
+    # Set demo environment variables
+    export DEMO_MODE=true
+    export DATABASE_DSN="$demo_db"
+    export AUTH_USERNAME=demo
+    export AUTH_PASSWORD=demo123
+
+    log_info "Demo credentials: demo / demo123"
+    log_info "Demo mode is READ-ONLY"
+
+    # Start backend with demo settings
+    start_backend
+    start_frontend
+    show_status
 }
 
 backend_mode() {
@@ -676,6 +714,9 @@ case "${COMMAND}" in
         start_backend
         start_frontend
         show_status
+        ;;
+    demo)
+        run_demo
         ;;
     restart)
         stop_backend
