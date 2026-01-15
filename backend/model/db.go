@@ -2,65 +2,19 @@ package model
 
 import (
 	"time"
-
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
-var DB *gorm.DB
-
 func InitDB(dsn string) error {
-	var err error
-	DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+	db, err := InitDatabase(DBConfig{
+		Type: "sqlite",
+		DSN:  dsn,
 	})
 	if err != nil {
 		return err
 	}
 
-	// 自动迁移
-	if err := DB.AutoMigrate(
-		&User{},
-		&LoginRecord{},
-		&Task{},
-		&Project{},
-		&ProjectGroup{},
-		&CLIProfile{},
-		&Workflow{},
-		&WorkflowTemplate{},
-		&WorkflowNode{},
-		&WorkflowRun{},
-		&AIWorkflowSession{},
-		&PromptTemplate{},
-		&PromptTemplatePreset{},
-		&KeyBinding{},
-		&ScheduledJob{},
-		&ScheduledJobRun{},
-		&Comment{},
-		&AppSetting{},
-		&Secret{},
-		&SSHServer{},
-		&ServerGroup{},
-		&TerminalSession{},
-		&AISession{},
-		&ApprovalRecord{},
-		&Log{},
-		&AIProviderConfig{},
-		&AgentConfig{},
-		&RuleSet{},
-		&Message{},
-	); err != nil {
-		return err
-	}
-
-	if err := RunMigrations(DB); err != nil {
-		return err
-	}
-
-	if err := ensureBuiltinWorkflowTemplates(DB); err != nil {
-		return err
-	}
+	DB = db
+	LogDB = db
 
 	return nil
 }
