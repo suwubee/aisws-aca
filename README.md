@@ -126,6 +126,14 @@ docs/
     └── ANALYSIS_REPORT.md       # 功能分析报告
 ```
 
+### 图片演示
+
+- 发布任务
+- ![AI任务](docs/aca_task.png)
+
+- 任务执行
+- ![AI任务](docs/aca_work.png)
+
 ## License / Brand
 
 - License: AGPL-3.0（见 `LICENSE` / `NOTICE`）
