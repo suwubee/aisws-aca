@@ -71,6 +71,10 @@ func RunMigrations(db *gorm.DB) error {
 			id: "20260116_add_terminal_connection_fields",
 			up: migrateAddTerminalConnectionFields,
 		},
+		{
+			id: "20260116_add_user_server_shares_table",
+			up: migrateAddUserServerSharesTable,
+		},
 	}
 
 	for _, m := range migrations {
@@ -352,4 +356,19 @@ func migrateAddTerminalConnectionFields(db *gorm.DB) error {
 	}
 
 	return nil
+}
+
+// migrateAddUserServerSharesTable 创建用户服务器共享表
+func migrateAddUserServerSharesTable(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+
+	// 使用 AutoMigrate 创建表
+	if err := db.AutoMigrate(&UserServerShare{}); err != nil {
+		return err
+	}
+
+	// 创建复合唯一索引防止重复共享
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_server_shares_unique ON user_server_shares(user_id, server_id)").Error
 }

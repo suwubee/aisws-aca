@@ -34,6 +34,9 @@
             <n-space size="small">
               <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
               <n-button size="small" :disabled="isDemoMode" @click="showBatchExecute = true">批量执行</n-button>
+              <n-button v-if="canManage" size="small" :disabled="isDemoMode" @click="handleExport">导出</n-button>
+              <n-button v-if="canManage" size="small" :disabled="isDemoMode" @click="triggerImport">导入</n-button>
+              <input ref="importFileInput" type="file" accept=".csv" style="display: none" @change="handleImport" />
               <n-button v-if="canManage" size="small" @click="openCreateGroup">新建分组</n-button>
               <n-button v-if="canManage" size="small" type="primary" @click="openCreate">添加服务器</n-button>
             </n-space>
@@ -126,6 +129,12 @@
     <BatchExecute
       v-model:show="showBatchExecute"
       :servers="servers"
+    />
+
+    <ServerShareModal
+      v-model:show="showShareModal"
+      :server="sharingServer"
+      @saved="fetchAll"
     />
 
     <n-modal
@@ -242,10 +251,13 @@ import {
   deleteServer,
   getServerGroups,
   getServers,
-  testConnection
+  testConnection,
+  exportServers,
+  importServers
 } from '@/api/server'
 import BatchExecute from '@/components/BatchExecute.vue'
 import ServerForm from '@/components/ServerForm.vue'
+import ServerShareModal from '@/components/ServerShareModal.vue'
 import SSHTerminal from '@/components/SSHTerminal.vue'
 import TaskForm from '@/components/TaskForm.vue'
 import type { TaskFormModel } from '@/components/TaskForm.vue'
@@ -281,6 +293,10 @@ const showBatchExecute = ref(false)
 
 const testingId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
+const importFileInput = ref<HTMLInputElement | null>(null)
+
+const showShareModal = ref(false)
+const sharingServer = ref<SSHServer | null>(null)
 
 const showCreateTask = ref(false)
 const creatingTask = ref(false)
@@ -354,6 +370,7 @@ function mobileServerActionOptions(server: SSHServer) {
 
   if (canManage.value) {
     options.push(
+      { label: '共享', key: 'share' },
       { label: '编辑', key: 'edit' },
       { label: '删除', key: 'delete' }
     )
@@ -370,6 +387,10 @@ function handleMobileServerAction(action: string | number, server: SSHServer) {
   const key = String(action)
   if (key === 'test') {
     void test(server)
+    return
+  }
+  if (key === 'share') {
+    openShareModal(server)
     return
   }
   if (key === 'edit') {
@@ -443,7 +464,7 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
   {
     title: '操作',
     key: 'actions',
-    width: canManage.value ? 360 : 260,
+    width: canManage.value ? 420 : 260,
     render: (row) => {
       const actions: any[] = [
         h(NButton, {
@@ -471,6 +492,12 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
 
       if (canManage.value) {
         actions.push(
+          h(NButton, {
+            size: 'tiny',
+            quaternary: true,
+            disabled: isDemoMode.value,
+            onClick: () => openShareModal(row)
+          }, () => '共享'),
           h(NButton, {
             size: 'tiny',
             quaternary: true,
@@ -717,6 +744,45 @@ async function fetchAll() {
   }
 }
 
+async function handleExport() {
+  try {
+    const resp = await exportServers()
+    const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'servers.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+    message.success('导出成功')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '导出失败')
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click()
+}
+
+async function handleImport(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    const resp = await importServers(file)
+    const { imported, skipped, errors } = resp.data
+    message.success(`导入完成：成功 ${imported}，跳过 ${skipped}`)
+    if (errors?.length > 0) {
+      console.warn('Import errors:', errors)
+    }
+    await fetchAll()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '导入失败')
+  } finally {
+    input.value = ''
+  }
+}
+
 function openCreate() {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
@@ -743,6 +809,19 @@ function openEdit(server: SSHServer) {
   serverFormMode.value = 'edit'
   editingServer.value = server
   showServerForm.value = true
+}
+
+function openShareModal(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
+  sharingServer.value = server
+  showShareModal.value = true
 }
 
 function handleServerSaved(server: SSHServer) {

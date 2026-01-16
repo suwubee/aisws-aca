@@ -1192,6 +1192,36 @@ func (ctrl *TaskController) ResumeAI(c *fiber.Ctx) error {
 	})
 }
 
+// PauseAI 暂停任务的 AI 执行
+func (ctrl *TaskController) PauseAI(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id", "ai_status").
+		First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	now := time.Now()
+	if err := model.DB.Model(&model.Task{}).
+		Where("id = ?", taskID).
+		Updates(map[string]any{
+			"ai_status":       "paused",
+			"ai_pause_reason": "user_paused",
+			"updated_at":      now,
+		}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to pause AI"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "AI paused",
+		"task_id": taskID,
+	})
+}
+
 // RegisterRoutes 注册路由
 func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks := app.Group("/tasks")
@@ -1205,6 +1235,7 @@ func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks.Post("/:id/move", ctrl.MoveTask)
 	tasks.Post("/:id/start", ctrl.StartTask)
 	tasks.Post("/:id/resume", ctrl.ResumeAI)
+	tasks.Post("/:id/pause", ctrl.PauseAI)
 	tasks.Post("/:id/bind-terminal", ctrl.BindTerminal)
 	tasks.Get("/:id/terminals", ctrl.GetTaskTerminals)
 }

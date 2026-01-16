@@ -47,6 +47,7 @@ func bootstrapMainDatabase(db *gorm.DB) error {
 		&Secret{},
 		&SSHServer{},
 		&ServerGroup{},
+		&UserServerShare{},
 		&TerminalSession{},
 		&AISession{},
 		&ApprovalRecord{},

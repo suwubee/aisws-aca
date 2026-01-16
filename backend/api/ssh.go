@@ -1,9 +1,12 @@
 package api
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/ai-coding-assistant/middleware"
@@ -656,6 +659,334 @@ func (ctrl *SSHServerController) CreateServerTerminal(c *fiber.Ctx) error {
 	})
 }
 
+// ExportServers 导出服务器列表为CSV（不含密码）
+func (ctrl *SSHServerController) ExportServers(c *fiber.Ctx) error {
+	var servers []model.SSHServer
+	if err := model.DB.Order("created_at desc").Find(&servers).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list servers"})
+	}
+
+	// 获取所有分组用于映射
+	var groups []model.ServerGroup
+	model.DB.Find(&groups)
+	groupMap := make(map[string]string)
+	for _, g := range groups {
+		groupMap[g.ID] = g.Name
+	}
+
+	// 构建CSV
+	var buf strings.Builder
+	buf.WriteString("name,host,port,username,auth_type,group_name,tags\n")
+	for _, s := range servers {
+		groupName := ""
+		if s.GroupID != nil {
+			groupName = groupMap[*s.GroupID]
+		}
+		// CSV转义：双引号内的双引号需要转义
+		name := strings.ReplaceAll(s.Name, "\"", "\"\"")
+		tags := strings.ReplaceAll(s.Tags, "\"", "\"\"")
+		groupName = strings.ReplaceAll(groupName, "\"", "\"\"")
+		line := fmt.Sprintf("\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\",\"%s\"\n",
+			name, s.Host, s.Port, s.Username, s.AuthType, groupName, tags)
+		buf.WriteString(line)
+	}
+
+	c.Set("Content-Type", "text/csv; charset=utf-8")
+	c.Set("Content-Disposition", "attachment; filename=servers.csv")
+	return c.SendString(buf.String())
+}
+
+// ImportServers 从CSV导入服务器
+func (ctrl *SSHServerController) ImportServers(c *fiber.Ctx) error {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "CSV file is required"})
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Failed to open file"})
+	}
+	defer file.Close()
+
+	// 读取CSV
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid CSV format"})
+	}
+
+	if len(records) < 2 {
+		return c.Status(400).JSON(fiber.Map{"error": "CSV file is empty"})
+	}
+
+	// 获取现有分组
+	var groups []model.ServerGroup
+	model.DB.Find(&groups)
+	groupNameMap := make(map[string]string) // name -> id
+	for _, g := range groups {
+		groupNameMap[g.Name] = g.ID
+	}
+
+	imported := 0
+	skipped := 0
+	errors := []string{}
+
+	for i, record := range records[1:] { // 跳过标题行
+		if len(record) < 5 {
+			errors = append(errors, fmt.Sprintf("Row %d: insufficient columns", i+2))
+			continue
+		}
+
+		name := strings.TrimSpace(record[0])
+		host := strings.TrimSpace(record[1])
+		portStr := strings.TrimSpace(record[2])
+		username := strings.TrimSpace(record[3])
+		authType := strings.TrimSpace(record[4])
+
+		if host == "" || username == "" {
+			errors = append(errors, fmt.Sprintf("Row %d: host and username required", i+2))
+			continue
+		}
+
+		port := 22
+		if portStr != "" {
+			if p, err := strconv.Atoi(portStr); err == nil && p > 0 && p < 65536 {
+				port = p
+			}
+		}
+
+		if authType == "" {
+			authType = "password"
+		}
+
+		// 检查是否已存在
+		var existing model.SSHServer
+		if err := model.DB.Where("host = ? AND port = ? AND username = ?", host, port, username).First(&existing).Error; err == nil {
+			skipped++
+			continue
+		}
+
+		// 处理分组
+		var groupID *string
+		if len(record) > 5 {
+			groupName := strings.TrimSpace(record[5])
+			if groupName != "" {
+				if gid, ok := groupNameMap[groupName]; ok {
+					groupID = &gid
+				} else {
+					// 创建新分组
+					newGroup := model.ServerGroup{
+						ID:   uuid.New().String(),
+						Name: groupName,
+					}
+					if err := model.DB.Create(&newGroup).Error; err == nil {
+						groupNameMap[groupName] = newGroup.ID
+						groupID = &newGroup.ID
+					}
+				}
+			}
+		}
+
+		tags := ""
+		if len(record) > 6 {
+			tags = strings.TrimSpace(record[6])
+		}
+
+		server := model.SSHServer{
+			ID:         uuid.New().String(),
+			Name:       name,
+			Host:       host,
+			Port:       port,
+			Username:   username,
+			AuthType:   authType,
+			GroupID:    groupID,
+			Tags:       tags,
+			LastStatus: "unknown",
+		}
+
+		if err := model.DB.Create(&server).Error; err != nil {
+			errors = append(errors, fmt.Sprintf("Row %d: %v", i+2, err))
+			continue
+		}
+		imported++
+	}
+
+	return c.JSON(fiber.Map{
+		"imported": imported,
+		"skipped":  skipped,
+		"errors":   errors,
+	})
+}
+
+// ShareServerRequest 共享服务器请求
+type ShareServerRequest struct {
+	UserIDs []string `json:"user_ids"`
+}
+
+// ListServerShares 获取服务器的共享用户列表
+func (ctrl *SSHServerController) ListServerShares(c *fiber.Ctx) error {
+	serverID := strings.TrimSpace(c.Params("id"))
+	if serverID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Server id is required"})
+	}
+
+	// 验证服务器存在
+	var server model.SSHServer
+	if err := model.DB.First(&server, "id = ?", serverID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
+	}
+
+	// 获取共享记录
+	var shares []model.UserServerShare
+	if err := model.DB.Where("server_id = ?", serverID).Find(&shares).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list shares"})
+	}
+
+	// 获取用户信息
+	userIDs := make([]string, len(shares))
+	for i, s := range shares {
+		userIDs[i] = s.UserID
+	}
+
+	type UserInfo struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Email    string `json:"email"`
+	}
+
+	var users []model.User
+	if len(userIDs) > 0 {
+		model.DB.Select("id", "username", "email").Where("id IN ?", userIDs).Find(&users)
+	}
+
+	userInfos := make([]UserInfo, len(users))
+	for i, u := range users {
+		userInfos[i] = UserInfo{ID: u.ID, Username: u.Username, Email: u.Email}
+	}
+
+	return c.JSON(fiber.Map{"items": userInfos})
+}
+
+// ShareServer 共享服务器给用户
+func (ctrl *SSHServerController) ShareServer(c *fiber.Ctx) error {
+	serverID := strings.TrimSpace(c.Params("id"))
+	if serverID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Server id is required"})
+	}
+
+	var req ShareServerRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// 验证服务器存在
+	var server model.SSHServer
+	if err := model.DB.First(&server, "id = ?", serverID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
+	}
+
+	// 验证用户存在
+	userIDs := make([]string, 0, len(req.UserIDs))
+	seen := make(map[string]struct{})
+	for _, uid := range req.UserIDs {
+		uid = strings.TrimSpace(uid)
+		if uid == "" {
+			continue
+		}
+		if _, ok := seen[uid]; ok {
+			continue
+		}
+		seen[uid] = struct{}{}
+		userIDs = append(userIDs, uid)
+	}
+
+	if len(userIDs) > 0 {
+		var users []model.User
+		if err := model.DB.Select("id").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query users"})
+		}
+		foundIDs := make(map[string]struct{})
+		for _, u := range users {
+			foundIDs[u.ID] = struct{}{}
+		}
+		for _, uid := range userIDs {
+			if _, ok := foundIDs[uid]; !ok {
+				return c.Status(400).JSON(fiber.Map{"error": "User not found: " + uid})
+			}
+		}
+	}
+
+	// 删除现有共享，重新创建
+	if err := model.DB.Where("server_id = ?", serverID).Delete(&model.UserServerShare{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update shares"})
+	}
+
+	// 创建新共享
+	for _, uid := range userIDs {
+		share := model.UserServerShare{
+			ID:       uuid.New().String(),
+			UserID:   uid,
+			ServerID: serverID,
+		}
+		if err := model.DB.Create(&share).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to create share"})
+		}
+	}
+
+	return c.JSON(fiber.Map{"message": "Server shared successfully", "user_count": len(userIDs)})
+}
+
+// UnshareServer 取消服务器共享
+func (ctrl *SSHServerController) UnshareServer(c *fiber.Ctx) error {
+	serverID := strings.TrimSpace(c.Params("id"))
+	userID := strings.TrimSpace(c.Params("userId"))
+
+	if serverID == "" || userID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Server id and user id are required"})
+	}
+
+	result := model.DB.Where("server_id = ? AND user_id = ?", serverID, userID).Delete(&model.UserServerShare{})
+	if result.Error != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove share"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Share removed"})
+}
+
+// ListSharedServers 获取用户可访问的共享服务器列表
+func (ctrl *SSHServerController) ListSharedServers(c *fiber.Ctx) error {
+	userID := c.Locals("userID").(string)
+
+	// 获取用户共享的服务器ID
+	var shares []model.UserServerShare
+	if err := model.DB.Where("user_id = ?", userID).Find(&shares).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list shares"})
+	}
+
+	if len(shares) == 0 {
+		return c.JSON(fiber.Map{"items": []model.SSHServer{}})
+	}
+
+	serverIDs := make([]string, len(shares))
+	for i, s := range shares {
+		serverIDs[i] = s.ServerID
+	}
+
+	var servers []model.SSHServer
+	if err := model.DB.Where("id IN ?", serverIDs).Order("created_at desc").Find(&servers).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list servers"})
+	}
+
+	return c.JSON(fiber.Map{"items": servers})
+}
+
 // RegisterRoutes 注册路由
 func (ctrl *SSHServerController) RegisterRoutes(app fiber.Router) {
 	servers := app.Group("/servers")
@@ -667,9 +998,17 @@ func (ctrl *SSHServerController) RegisterRoutes(app fiber.Router) {
 
 	admin := servers.Group("", middleware.RequireRole("admin"))
 	admin.Post("/", ctrl.CreateServer)
+	admin.Get("/export", ctrl.ExportServers)
+	admin.Post("/import", ctrl.ImportServers)
 	admin.Put("/:id", ctrl.UpdateServer)
 	admin.Delete("/:id", ctrl.DeleteServer)
 	admin.Post("/:id/upload-key", ctrl.UploadKey)
+	admin.Get("/:id/shares", ctrl.ListServerShares)
+	admin.Post("/:id/shares", ctrl.ShareServer)
+	admin.Delete("/:id/shares/:userId", ctrl.UnshareServer)
+
+	// 用户可访问的共享服务器
+	servers.Get("/shared/list", ctrl.ListSharedServers)
 
 	groups := app.Group("/server-groups")
 	groups.Get("/", ctrl.ListServerGroups)

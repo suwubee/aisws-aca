@@ -85,7 +85,9 @@ export const taskApi = {
   update: (id: string, data: UpdateTaskRequest) => api.put(`/tasks/${id}`, data),
   delete: (id: string) => api.delete(`/tasks/${id}`),
   move: (id: string, data: MoveTaskRequest) => api.post(`/tasks/${id}/move`, data),
-  start: (id: string) => api.post(`/tasks/${id}/start`)
+  start: (id: string) => api.post(`/tasks/${id}/start`),
+  pauseAI: (id: string) => api.post(`/tasks/${id}/pause`),
+  resumeAI: (id: string) => api.post(`/tasks/${id}/resume`)
 }
 
 // Comment API

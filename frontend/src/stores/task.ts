@@ -33,6 +33,9 @@ export interface Task {
   ai_prompt?: string
   ai_end_condition?: string
   ai_error_handling?: string
+  // AI运行状态
+  ai_status?: string
+  ai_pause_reason?: string
 }
 
 export interface TerminalSession {
@@ -117,6 +120,18 @@ export const useTaskStore = defineStore('task', () => {
     return data
   }
 
+  async function pauseAI(id: string) {
+    const { data } = await taskApi.pauseAI(id)
+    await fetchTasks()
+    return data
+  }
+
+  async function resumeAI(id: string) {
+    const { data } = await taskApi.resumeAI(id)
+    await fetchTasks()
+    return data
+  }
+
   async function createAutomationTask(params: {
     title: string
     description?: string
@@ -155,6 +170,8 @@ export const useTaskStore = defineStore('task', () => {
     moveTask,
     getTaskDetail,
     startTask,
+    pauseAI,
+    resumeAI,
     createAutomationTask
   }
 })
