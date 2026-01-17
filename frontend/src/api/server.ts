@@ -118,7 +118,11 @@ export function exportServers() {
 export function importServers(file: File) {
   const formData = new FormData()
   formData.append('file', file)
-  return api.post('/servers/import', formData)
+  return api.post('/servers/import', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
 }
 
 // 服务器共享相关API

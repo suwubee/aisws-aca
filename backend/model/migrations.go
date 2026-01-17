@@ -75,6 +75,10 @@ func RunMigrations(db *gorm.DB) error {
 			id: "20260116_add_user_server_shares_table",
 			up: migrateAddUserServerSharesTable,
 		},
+		{
+			id: "20260117_add_multi_user_isolation_fields",
+			up: migrateAddMultiUserIsolationFields,
+		},
 	}
 
 	for _, m := range migrations {
@@ -371,4 +375,91 @@ func migrateAddUserServerSharesTable(db *gorm.DB) error {
 
 	// 创建复合唯一索引防止重复共享
 	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_server_shares_unique ON user_server_shares(user_id, server_id)").Error
+}
+
+// migrateAddMultiUserIsolationFields 为多用户隔离添加 user_id 字段
+func migrateAddMultiUserIsolationFields(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+
+	// 获取第一个管理员用户作为默认用户
+	var adminUser User
+	if err := db.Where("role = ?", "admin").First(&adminUser).Error; err != nil {
+		// 如果没有管理员，尝试获取任意用户
+		if err := db.First(&adminUser).Error; err != nil {
+			// 没有用户则跳过迁移
+			return nil
+		}
+	}
+	defaultUserID := adminUser.ID
+
+	// SSHServer 添加 user_id
+	if db.Migrator().HasTable("ssh_servers") {
+		if !db.Migrator().HasColumn(&SSHServer{}, "UserID") {
+			if err := db.Exec("ALTER TABLE ssh_servers ADD COLUMN user_id TEXT").Error; err != nil {
+				return err
+			}
+		}
+		// 更新现有记录
+		db.Exec("UPDATE ssh_servers SET user_id = ? WHERE user_id IS NULL OR user_id = ''", defaultUserID)
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_ssh_servers_user_id ON ssh_servers(user_id)")
+	}
+
+	// ServerGroup 添加 user_id
+	if db.Migrator().HasTable("server_groups") {
+		if !db.Migrator().HasColumn(&ServerGroup{}, "UserID") {
+			if err := db.Exec("ALTER TABLE server_groups ADD COLUMN user_id TEXT").Error; err != nil {
+				return err
+			}
+		}
+		db.Exec("UPDATE server_groups SET user_id = ? WHERE user_id IS NULL OR user_id = ''", defaultUserID)
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_server_groups_user_id ON server_groups(user_id)")
+	}
+
+	// Project 添加 user_id
+	if db.Migrator().HasTable("projects") {
+		if !db.Migrator().HasColumn(&Project{}, "UserID") {
+			if err := db.Exec("ALTER TABLE projects ADD COLUMN user_id TEXT").Error; err != nil {
+				return err
+			}
+		}
+		db.Exec("UPDATE projects SET user_id = ? WHERE user_id IS NULL OR user_id = ''", defaultUserID)
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id)")
+	}
+
+	// ProjectGroup 添加 user_id
+	if db.Migrator().HasTable("project_groups") {
+		if !db.Migrator().HasColumn(&ProjectGroup{}, "UserID") {
+			if err := db.Exec("ALTER TABLE project_groups ADD COLUMN user_id TEXT").Error; err != nil {
+				return err
+			}
+		}
+		db.Exec("UPDATE project_groups SET user_id = ? WHERE user_id IS NULL OR user_id = ''", defaultUserID)
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_project_groups_user_id ON project_groups(user_id)")
+	}
+
+	// AIProviderConfig 添加 user_id
+	if db.Migrator().HasTable("ai_provider_configs") {
+		if !db.Migrator().HasColumn(&AIProviderConfig{}, "UserID") {
+			if err := db.Exec("ALTER TABLE ai_provider_configs ADD COLUMN user_id TEXT").Error; err != nil {
+				return err
+			}
+		}
+		db.Exec("UPDATE ai_provider_configs SET user_id = ? WHERE user_id IS NULL OR user_id = ''", defaultUserID)
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_ai_provider_configs_user_id ON ai_provider_configs(user_id)")
+	}
+
+	// RuleSet 添加 user_id
+	if db.Migrator().HasTable("rule_sets") {
+		if !db.Migrator().HasColumn(&RuleSet{}, "UserID") {
+			if err := db.Exec("ALTER TABLE rule_sets ADD COLUMN user_id TEXT").Error; err != nil {
+				return err
+			}
+		}
+		db.Exec("UPDATE rule_sets SET user_id = ? WHERE user_id IS NULL OR user_id = ''", defaultUserID)
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_rule_sets_user_id ON rule_sets(user_id)")
+	}
+
+	return nil
 }

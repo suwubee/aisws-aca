@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -178,22 +179,24 @@ type CompleteCall struct {
 	Summary string `json:"summary"`
 }
 
+var (
+	thoughtTagRe  = regexp.MustCompile(`(?is)<thought>\s*(.*?)\s*</thought>`)
+	actionTagRe   = regexp.MustCompile(`(?is)<action>\s*(.*?)\s*</action>`)
+	completeTagRe = regexp.MustCompile(`(?is)<complete>\s*(.*?)\s*</complete>`)
+)
+
 // ParseAIResponse parses AI response in ReAct format
 func ParseAIResponse(response string) (*ParsedResponse, error) {
 	result := &ParsedResponse{RawContent: response}
 
-	// Extract thought
-	thoughtStart := strings.Index(response, "<thought>")
-	thoughtEnd := strings.Index(response, "</thought>")
-	if thoughtStart != -1 && thoughtEnd != -1 && thoughtEnd > thoughtStart {
-		result.Thought = strings.TrimSpace(response[thoughtStart+9 : thoughtEnd])
+	// Extract thought (case-insensitive, tolerant to whitespace/newlines)
+	if m := thoughtTagRe.FindStringSubmatch(response); len(m) > 1 {
+		result.Thought = strings.TrimSpace(m[1])
 	}
 
 	// Check for complete tag first
-	completeStart := strings.Index(response, "<complete>")
-	completeEnd := strings.Index(response, "</complete>")
-	if completeStart != -1 && completeEnd != -1 && completeEnd > completeStart {
-		completeBody := strings.TrimSpace(response[completeStart+10 : completeEnd])
+	if m := completeTagRe.FindStringSubmatch(response); len(m) > 1 {
+		completeBody := strings.TrimSpace(m[1])
 		var complete CompleteCall
 
 		// 1) 标准 JSON
@@ -221,15 +224,25 @@ func ParseAIResponse(response string) (*ParsedResponse, error) {
 	}
 
 	// Extract action
-	actionStart := strings.Index(response, "<action>")
-	actionEnd := strings.Index(response, "</action>")
-	if actionStart != -1 && actionEnd != -1 && actionEnd > actionStart {
-		actionJSON := strings.TrimSpace(response[actionStart+8 : actionEnd])
+	if m := actionTagRe.FindStringSubmatch(response); len(m) > 1 {
+		actionJSON := strings.TrimSpace(m[1])
 		var action ActionCall
-		if err := json.Unmarshal([]byte(actionJSON), &action); err != nil {
-			return result, fmt.Errorf("invalid action JSON: %w", err)
+
+		// 1) 标准 JSON
+		if err := json.Unmarshal([]byte(actionJSON), &action); err == nil {
+			result.Action = &action
+			return result, nil
 		}
-		result.Action = &action
+
+		// 2) 宽松解析：尝试从文本中提取 JSON 对象（例如 ```json ...``` 或混入多余文本）
+		if obj := extractJSONObject(actionJSON); obj != "" {
+			if err := json.Unmarshal([]byte(obj), &action); err == nil {
+				result.Action = &action
+				return result, nil
+			}
+		}
+
+		return result, fmt.Errorf("invalid action JSON")
 	}
 
 	return result, nil

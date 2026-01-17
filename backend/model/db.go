@@ -143,11 +143,12 @@ type Log struct {
 // AIProviderConfig AI提供商配置 (OpenAI兼容格式)
 type AIProviderConfig struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
-	Name        string    `gorm:"uniqueIndex;not null" json:"name"` // 配置名称，如 "default", "gpt4", "deepseek"
-	Provider    string    `gorm:"not null" json:"provider"`         // openai, anthropic, deepseek, ollama
-	BaseURL     string    `json:"base_url"`                         // API基础URL
-	APIKey      string    `json:"-"`                                // API密钥，不返回给前端
-	Model       string    `gorm:"not null" json:"model"`            // 模型名称
+	UserID      string    `gorm:"index" json:"user_id"` // 所属用户
+	Name        string    `gorm:"not null" json:"name"`          // 配置名称，如 "default", "gpt4", "deepseek"
+	Provider    string    `gorm:"not null" json:"provider"`      // openai, anthropic, deepseek, ollama
+	BaseURL     string    `json:"base_url"`                      // API基础URL
+	APIKey      string    `json:"-"`                             // API密钥，不返回给前端
+	Model       string    `gorm:"not null" json:"model"`         // 模型名称
 	Temperature float64   `gorm:"default:0.7" json:"temperature"`
 	MaxTokens   int       `gorm:"default:2048" json:"max_tokens"`
 	IsDefault   bool      `gorm:"default:false" json:"is_default"` // 是否为默认配置
@@ -158,9 +159,10 @@ type AIProviderConfig struct {
 
 // RuleSet 规则集模型 - 可被系统、任务、终端复用
 type RuleSet struct {
-	ID   string `gorm:"primaryKey" json:"id"`
-	Name string `gorm:"not null" json:"name"`       // 规则集名称
-	Type string `gorm:"not null;index" json:"type"` // system, task, terminal
+	ID     string `gorm:"primaryKey" json:"id"`
+	UserID string `gorm:"index" json:"user_id"` // 所属用户
+	Name   string `gorm:"not null" json:"name"`          // 规则集名称
+	Type   string `gorm:"not null;index" json:"type"`    // system, task, terminal
 
 	// 审批模式: manual(手动), auto_yes(全自动yes), smart(AI辅助)
 	ApprovalMode string `gorm:"default:manual" json:"approval_mode"`

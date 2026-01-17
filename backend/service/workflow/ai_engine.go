@@ -23,7 +23,14 @@ type AIWorkflowEngine struct {
 	aiProvider    *ai.AIProvider
 	toolExecutor  *ToolExecutor
 	maxIterations int
-	inflight      sync.Map // sessionID -> struct{}
+	inflight      sync.Map // sessionID -> *runtimeSession
+}
+
+type runtimeSession struct {
+	mu       sync.Mutex
+	session  *AIWorkflowSession
+	aiConfig *model.AIProviderConfig
+	pending  []ai.ChatMessage
 }
 
 // NewAIWorkflowEngine creates a new AI workflow engine
@@ -170,13 +177,17 @@ func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *
 		return false
 	}
 
-	if _, loaded := e.inflight.LoadOrStore(id, struct{}{}); loaded {
+	rt := &runtimeSession{
+		session:  session,
+		aiConfig: aiConfig,
+	}
+	if _, loaded := e.inflight.LoadOrStore(id, rt); loaded {
 		return false
 	}
 
 	go func() {
 		defer e.inflight.Delete(id)
-		e.executeLoop(context.Background(), session, aiConfig)
+		e.executeLoop(context.Background(), rt)
 	}()
 
 	return true
@@ -198,13 +209,31 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 		return nil, errors.New("message is required")
 	}
 
+	// Fast path: if the session is currently running in-memory, allow appending messages without "resumable" gating.
+	if rtValue, ok := e.inflight.Load(id); ok {
+		if rt, ok := rtValue.(*runtimeSession); ok && rt != nil && rt.session != nil {
+			rt.mu.Lock()
+			// Preserve message ordering: queue user messages to be appended at the next loop boundary,
+			// so we don't insert a "late" user message before the assistant response of an in-flight AI call.
+			rt.pending = append(rt.pending, ai.ChatMessage{
+				Role:    "user",
+				Content: msg,
+			})
+			rt.session.Status = "running"
+			rt.session.CompletedAt = nil
+			session := rt.session
+			rt.mu.Unlock()
+			return session, nil
+		}
+	}
+
 	session, err := e.GetSession(id)
 	if err != nil {
 		return nil, err
 	}
 
 	status := strings.ToLower(strings.TrimSpace(session.Status))
-	resumable := status == "paused" || status == "completed" || status == "failed" || status == "cancelled" || status == "timeout"
+	resumable := status == "running" || status == "paused" || status == "completed" || status == "failed" || status == "cancelled" || status == "timeout"
 	if !resumable {
 		return nil, errors.New("session is not resumable")
 	}
@@ -231,9 +260,8 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 		return nil, err
 	}
 
-	if !e.startExecution(session, aiConfig) {
-		return session, errors.New("workflow session already running")
-	}
+	// Best-effort start: if it's already running (race / restarted loop), treat as success.
+	_ = e.startExecution(session, aiConfig)
 
 	if shouldRestartTaskMonitor {
 		taskID := strings.TrimSpace(session.WorkflowID)
@@ -249,19 +277,101 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 	return session, nil
 }
 
+// PauseWorkflow sets a running workflow session to paused.
+// Note: execution will stop at the next loop boundary (best-effort).
+func (e *AIWorkflowEngine) PauseWorkflow(_ context.Context, sessionID string, reason string) (*AIWorkflowSession, error) {
+	if e == nil {
+		return nil, errors.New("engine is nil")
+	}
+
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return nil, errors.New("session id required")
+	}
+
+	session, err := e.GetSession(id)
+	if err != nil {
+		return nil, err
+	}
+
+	status := strings.ToLower(strings.TrimSpace(session.Status))
+	if status == "paused" {
+		return session, nil
+	}
+	if status != "running" {
+		return nil, errors.New("session is not running")
+	}
+
+	if session.Context == nil {
+		session.Context = make(map[string]any)
+	}
+	r := strings.TrimSpace(reason)
+	if r == "" {
+		r = "user_paused"
+	}
+	session.Context["pause_reason"] = r
+	session.Status = "paused"
+	if strings.TrimSpace(session.Summary) == "" {
+		session.Summary = "用户手动暂停"
+	}
+	session.CompletedAt = nil
+
+	if err := e.saveSession(session); err != nil {
+		return nil, err
+	}
+
+	return session, nil
+}
+
+func (e *AIWorkflowEngine) applyExternalControl(session *AIWorkflowSession) bool {
+	if e == nil || session == nil || model.DB == nil {
+		return false
+	}
+	id := strings.TrimSpace(session.ID)
+	if id == "" {
+		return false
+	}
+
+	var row model.AIWorkflowSession
+	if err := model.DB.Select("status", "summary").First(&row, "id = ?", id).Error; err != nil {
+		return false
+	}
+
+	status := strings.ToLower(strings.TrimSpace(row.Status))
+	switch status {
+	case "paused", "cancelled":
+		session.Status = status
+		if s := strings.TrimSpace(row.Summary); s != "" {
+			session.Summary = s
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // executeLoop runs the ReAct loop
-func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowSession, aiConfig *model.AIProviderConfig) {
+func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) {
+	if e == nil || rt == nil || rt.session == nil || rt.aiConfig == nil {
+		return
+	}
+	session := rt.session
+	aiConfig := rt.aiConfig
 	defer func() {
 		if r := recover(); r != nil {
+			rt.mu.Lock()
 			session.Status = "failed"
 			session.Summary = fmt.Sprintf("panic: %v", r)
-			e.saveSession(session)
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
 		}
 	}()
 
 	iterationBase := 0
 	if session != nil {
+		rt.mu.Lock()
 		iterationBase = len(session.Steps)
+		rt.mu.Unlock()
 	}
 
 	for i := 0; i < e.maxIterations; i++ {
@@ -274,13 +384,31 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 		default:
 		}
 
+		// External control: if user paused/cancelled, stop best-effort (avoid overriding status back to running).
+		rt.mu.Lock()
+		if e.applyExternalControl(session) {
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
+			return
+		}
+		// Drain any queued user messages from API calls (keeps ordering with in-flight assistant responses).
+		if len(rt.pending) > 0 {
+			session.Messages = append(session.Messages, rt.pending...)
+			rt.pending = nil
+		}
+		// Take a snapshot of messages for this AI turn; user may append concurrently.
+		messages := append([]ai.ChatMessage(nil), session.Messages...)
+		rt.mu.Unlock()
+
 		// Call AI
-		resp, err := e.aiProvider.Chat(ctx, aiConfig, session.Messages)
+		resp, err := e.aiProvider.Chat(ctx, aiConfig, messages)
 		if err != nil {
 			utils.Error("AI call failed", zap.Error(err))
+			rt.mu.Lock()
 			session.Status = "failed"
 			session.Summary = fmt.Sprintf("AI调用失败: %v", err)
-			e.saveSession(session)
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
 			return
 		}
 
@@ -289,6 +417,7 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 		}
 
 		aiResponse := resp.Choices[0].Message.Content
+		rt.mu.Lock()
 		session.Messages = append(session.Messages, ai.ChatMessage{
 			Role:    "assistant",
 			Content: aiResponse,
@@ -298,6 +427,8 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 		parsed, err := ParseAIResponse(aiResponse)
 		if err != nil {
 			utils.Warn("Failed to parse AI response", zap.Error(err))
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
 			continue
 		}
 
@@ -307,7 +438,8 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 			session.Status = "completed"
 			session.Summary = parsed.Complete.Summary
 			session.CompletedAt = &now
-			e.saveSession(session)
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
 			return
 		}
 
@@ -334,11 +466,31 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 
 				session.Status = "paused"
 				session.Summary = question
-				e.saveSession(session)
+				_ = e.saveSession(session)
+				rt.mu.Unlock()
 				return
 			}
 
+			// Allow AI to complete via action tool as a fallback (some models may prefer tool-style completion).
+			if strings.EqualFold(strings.TrimSpace(parsed.Action.Tool), "complete_workflow") {
+				summary, _ := parsed.Action.Args["summary"].(string)
+				summary = strings.TrimSpace(summary)
+				if summary == "" {
+					summary = strings.TrimSpace(parsed.Thought)
+				}
+				now := time.Now()
+				session.Status = "completed"
+				session.Summary = summary
+				session.CompletedAt = &now
+				_ = e.saveSession(session)
+				rt.mu.Unlock()
+				return
+			}
+
+			// Tool execution may take long; avoid blocking user message appends while running the tool.
+			rt.mu.Unlock()
 			step := e.executeAction(ctx, session, parsed, iteration)
+			rt.mu.Lock()
 			session.Steps = append(session.Steps, step)
 
 			// Add observation to messages
@@ -352,12 +504,23 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, session *AIWorkflowS
 			})
 		}
 
-		e.saveSession(session)
+		// Respect external pause/cancel right before saving this iteration.
+		if e.applyExternalControl(session) {
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
+			return
+		}
+		_ = e.saveSession(session)
+		rt.mu.Unlock()
 	}
 
+	rt.mu.Lock()
 	session.Status = "failed"
-	session.Summary = "达到最大迭代次数"
-	e.saveSession(session)
+	if strings.TrimSpace(session.Summary) == "" {
+		session.Summary = "达到最大迭代次数"
+	}
+	_ = e.saveSession(session)
+	rt.mu.Unlock()
 }
 
 // executeAction executes a tool action

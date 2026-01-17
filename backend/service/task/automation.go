@@ -1,6 +1,8 @@
 package task
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/ai"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
@@ -945,6 +948,11 @@ func containsScriptNeedsUserSignal(logText string) bool {
 		strings.Contains(text, "restart")
 }
 
+// StartMonitoring 启动任务完成状态监控（用于中途启用AI托管的情况）
+func (s *AutomationService) StartMonitoring(taskID, terminalID string) {
+	go s.monitorTaskCompletion(taskID, terminalID)
+}
+
 // monitorTaskCompletion 后台监控任务完成状态
 func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 	monitor := NewTaskMonitor()
@@ -1042,10 +1050,38 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 				zap.String("task_id", taskID),
 				zap.String("reason", decision.Reason))
 			if task.AIManaged {
-				// AI托管模式下，暂停任务等待用户干预
-				s.updateTaskStatus(taskID, "paused", decision.Reason)
-				s.createTaskMessage(taskID, terminalID, "approval_needed", "任务需要用户干预", decision.Reason)
-				return
+				// AI托管模式下，先用AI判断是否真的需要人工审批
+				aiDecision, err := s.judgeAIApproval(taskID, terminalID, decision.Reason)
+				if err != nil {
+					utils.Error("AI approval judgment failed",
+						zap.String("task_id", taskID),
+						zap.Error(err))
+					// AI判断失败，降级为暂停等待人工处理
+					s.updateTaskStatus(taskID, "paused", decision.Reason)
+					s.createTaskMessage(taskID, terminalID, "approval_needed", "任务需要用户干预", decision.Reason)
+					return
+				}
+
+				// 根据AI判断结果处理
+				if aiDecision.IsCompleted {
+					// AI判断任务已完成
+					s.updateTaskStatus(taskID, "done", aiDecision.Reasoning)
+					utils.Info("Task completed by AI judgment",
+						zap.String("task_id", taskID),
+						zap.String("reasoning", aiDecision.Reasoning))
+					return
+				} else if aiDecision.NeedsApproval {
+					// AI判断确实需要人工审批
+					s.updateTaskStatus(taskID, "paused", aiDecision.Reasoning)
+					s.createTaskMessage(taskID, terminalID, "approval_needed", "AI判断需要人工审批", aiDecision.Reasoning)
+					return
+				} else {
+					// AI判断不需要审批，继续监控
+					utils.Info("AI judgment: continue monitoring",
+						zap.String("task_id", taskID),
+						zap.String("reasoning", aiDecision.Reasoning))
+					// 继续下一轮监控
+				}
 			}
 
 		case MonitorActionRetry:
@@ -1121,4 +1157,115 @@ func (s *AutomationService) createTaskMessage(taskID, terminalID, msgType, title
 		UpdatedAt:  time.Now(),
 	}
 	model.DB.Create(&msg)
+}
+
+// aiApprovalDecision AI审批决策结果
+type aiApprovalDecision struct {
+	NeedsApproval bool   `json:"needs_approval"` // 是否需要人工审批
+	IsCompleted   bool   `json:"is_completed"`   // 任务是否已完成
+	Reasoning     string `json:"reasoning"`      // 决策理由
+	Confidence    float64 `json:"confidence"`    // 置信度 0-1
+}
+
+// judgeAIApproval 使用AI判断是否需要人工审批
+// 在AI托管模式下，当监控判断需要用户干预时，先用AI分析是否真的需要审批
+func (s *AutomationService) judgeAIApproval(taskID, terminalID string, alertReason string) (*aiApprovalDecision, error) {
+	// 获取任务信息
+	var task model.Task
+	if err := model.DB.First(&task, "id = ?", taskID).Error; err != nil {
+		return nil, fmt.Errorf("task not found: %w", err)
+	}
+
+	// 获取最近的终端输出（最后500行）
+	var logs []model.Log
+	if err := model.DB.Where("terminal_id = ?", terminalID).
+		Order("created_at desc").
+		Limit(500).
+		Find(&logs).Error; err != nil {
+		return nil, fmt.Errorf("failed to get logs: %w", err)
+	}
+
+	// 反转日志顺序（从旧到新）
+	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
+		logs[i], logs[j] = logs[j], logs[i]
+	}
+
+	// 构建终端输出文本
+	var outputBuilder strings.Builder
+	for _, log := range logs {
+		if log.LogType == "output" {
+			outputBuilder.WriteString(log.Content)
+		}
+	}
+	terminalOutput := outputBuilder.String()
+
+	// 构建AI分析提示词
+	prompt := fmt.Sprintf(`你是一个AI任务管理助手。当前任务的监控系统检测到可能需要用户干预，但在AI托管模式下，你需要判断是否真的需要人工审批。
+
+任务信息：
+- 任务标题：%s
+- 任务描述：%s
+- 监控告警原因：%s
+
+最近的终端输出（最后500行）：
+%s
+
+请分析以下情况并给出判断：
+1. 是否存在明确的审批提示（如 yes/no, y/n, confirm 等）？
+2. 任务是否已经完成（看到成功标志、完成消息等）？
+3. 是否只是正常的进度输出或信息提示，不需要人工干预？
+
+请以JSON格式返回你的判断：
+{
+  "needs_approval": true/false,  // 是否需要人工审批
+  "is_completed": true/false,    // 任务是否已完成
+  "reasoning": "你的分析理由",
+  "confidence": 0.0-1.0          // 判断的置信度
+}`, task.Title, task.Description, alertReason, terminalOutput)
+
+	// 调用AI进行分析
+	aiProvider := ai.NewAIProvider()
+	config, err := aiProvider.GetDefaultConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get AI config: %w", err)
+	}
+
+	ctx := context.Background()
+	aiResponse, err := aiProvider.ChatSimple(ctx, config, "你是一个AI任务管理助手", prompt)
+	if err != nil {
+		return nil, fmt.Errorf("AI analysis failed: %w", err)
+	}
+
+	// 解析AI响应
+	var decision aiApprovalDecision
+	if err := parseJSONFromText(aiResponse, &decision); err != nil {
+		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+	}
+
+	utils.Info("AI approval judgment",
+		zap.String("task_id", taskID),
+		zap.Bool("needs_approval", decision.NeedsApproval),
+		zap.Bool("is_completed", decision.IsCompleted),
+		zap.Float64("confidence", decision.Confidence),
+		zap.String("reasoning", decision.Reasoning))
+
+	return &decision, nil
+}
+
+// parseJSONFromText 从文本中提取并解析JSON
+func parseJSONFromText(text string, v any) error {
+	// 尝试直接解析
+	if err := json.Unmarshal([]byte(text), v); err == nil {
+		return nil
+	}
+
+	// 尝试提取JSON代码块
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start == -1 || end == -1 || start >= end {
+		return fmt.Errorf("no JSON found in text")
+	}
+
+	jsonStr := text[start : end+1]
+	return json.Unmarshal([]byte(jsonStr), v)
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/ai-coding-assistant/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -618,6 +620,96 @@ func (ctrl *TerminalController) SendKeyAction(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Key action sent"})
 }
 
+// EmitAILog 写入并广播 AI 日志（用于“仅记录”模式下记录用户指令/备注）
+func (ctrl *TerminalController) EmitAILog(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+
+	var req struct {
+		Type    string  `json:"type"`
+		Message string  `json:"message"`
+		TaskID  *string `json:"task_id"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	logType := strings.TrimSpace(req.Type)
+	if logType == "" {
+		logType = "info"
+	}
+	text := strings.TrimSpace(req.Message)
+	if text == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Empty message"})
+	}
+
+	// clamp to avoid huge payloads
+	const maxRunes = 8000
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		text = string(runes[:maxRunes]) + "…(truncated)…"
+	}
+
+	var taskIDPtr *string
+	if req.TaskID != nil && strings.TrimSpace(*req.TaskID) != "" {
+		copied := strings.Clone(strings.TrimSpace(*req.TaskID))
+		taskIDPtr = &copied
+	}
+
+	// Try to resolve task_id from session/db when not provided.
+	var session *terminal.Session
+	if ctrl.manager != nil {
+		if s, err := ctrl.manager.GetOrResumeSession(id); err == nil && s != nil {
+			session = s
+			if taskIDPtr == nil {
+				if tid := s.TaskID(); tid != nil && strings.TrimSpace(*tid) != "" {
+					copied := strings.Clone(strings.TrimSpace(*tid))
+					taskIDPtr = &copied
+				}
+			}
+		}
+	}
+	if taskIDPtr == nil && model.DB != nil {
+		var row model.TerminalSession
+		if err := model.DB.Select("task_id").First(&row, "id = ?", id).Error; err == nil {
+			if row.TaskID != nil && strings.TrimSpace(*row.TaskID) != "" {
+				copied := strings.Clone(strings.TrimSpace(*row.TaskID))
+				taskIDPtr = &copied
+			}
+		}
+	}
+
+	// Persist as system log, keeping the existing "[AI][type]" format for UI parsing.
+	if model.DB != nil {
+		now := time.Now()
+		terminalCopy := id
+		content := fmt.Sprintf("[AI][%s] %s", logType, text)
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		_ = model.DB.Create(&model.Log{
+			ID:         uuid.New().String(),
+			TerminalID: &terminalCopy,
+			TaskID:     taskIDPtr,
+			LogType:    "system",
+			Content:    content,
+			CreatedAt:  now,
+		}).Error
+	}
+
+	// Real-time broadcast to connected clients (AI log panel).
+	if session == nil && ctrl.manager != nil {
+		session = ctrl.manager.GetSession(id)
+	}
+	if session != nil {
+		session.BroadcastAILog(logType, text)
+	}
+
+	return c.JSON(fiber.Map{"message": "AI log recorded"})
+}
+
 // GetTerminalStats 获取终端统计
 func (ctrl *TerminalController) GetTerminalStats(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
@@ -639,6 +731,7 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
 	terminals.Post("/:id/input", ctrl.SendInput)
 	terminals.Post("/:id/key-action", ctrl.SendKeyAction)
+	terminals.Post("/:id/ai-log", ctrl.EmitAILog)
 	terminals.Get("/:id/logs", ctrl.GetLogs)
 	terminals.Delete("/:id/logs", ctrl.ClearLogs)
 	terminals.Delete("/:id/logs/:logId", ctrl.DeleteLog)

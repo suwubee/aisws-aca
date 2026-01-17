@@ -113,10 +113,17 @@
                       <n-popconfirm
                         positive-text="删除"
                         negative-text="取消"
-                        @positive-click="() => { void deleteTask(task.id) }"
+                        @positive-click="() => { if (isDeletableStatus(task.status)) void deleteTask(task.id) }"
                       >
                         <template #trigger>
-                          <n-button size="small" type="error" :disabled="isDemoMode">删除</n-button>
+                          <n-button
+                            size="small"
+                            type="error"
+                            :disabled="isDemoMode || !isDeletableStatus(task.status)"
+                            :title="isDeletableStatus(task.status) ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除'"
+                          >
+                            删除
+                          </n-button>
                         </template>
                         确定删除任务「{{ task.title }}」吗？
                       </n-popconfirm>
@@ -259,6 +266,11 @@ function isStartable(task: any) {
   )
 }
 
+function isDeletableStatus(status: string) {
+  const s = String(status || '').trim().toLowerCase()
+  return s === 'done' || s === 'failed' || s === 'timeout' || s === 'archived'
+}
+
 const projectGroupOptions = computed(() => ([
   { label: '全部项目集', value: '' },
   { label: '未分组', value: '__none__' },
@@ -362,10 +374,16 @@ const columns: DataTableColumns<any> = [
       }
 
       // 删除按钮
+      const deletable = isDeletableStatus(row.status)
       buttons.push(h(NButton, {
         size: 'small',
         type: 'error',
-        onClick: () => deleteTask(row.id)
+        disabled: !deletable,
+        title: deletable ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除',
+        onClick: () => {
+          if (!deletable) return
+          void deleteTask(row.id)
+        }
       }, { default: () => '删除' }))
 
       return h(NSpace, { size: 'small' }, { default: () => buttons })
@@ -574,7 +592,7 @@ async function deleteTask(taskId: string) {
     await taskStore.deleteTask(taskId)
     message.success('任务已删除')
   } catch (e: any) {
-    message.error(e.message || '删除失败')
+    message.error(e?.response?.data?.error || e.message || '删除失败')
   }
 }
 

@@ -33,7 +33,12 @@
           </n-button>
         </template>
         <!-- 通用按钮 -->
-        <n-button type="error" :disabled="isDemoMode" @click="handleDeleteTask">
+        <n-button
+          type="error"
+          :disabled="isDemoMode || !canDeleteTask"
+          :title="canDeleteTask ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除'"
+          @click="handleDeleteTask"
+        >
           🗑 删除
         </n-button>
       </div>
@@ -275,6 +280,10 @@ const serverLoading = ref(false)
 const taskId = computed(() => route.params.id as string)
 
 const taskStatus = computed(() => task.value?.status || '')
+const canDeleteTask = computed(() => {
+  const s = String(taskStatus.value || '').trim().toLowerCase()
+  return s === 'done' || s === 'failed' || s === 'timeout' || s === 'archived'
+})
 
 const statusLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -551,13 +560,17 @@ async function handleDeleteTask() {
     message.warning('演示模式：只读')
     return
   }
+  if (!canDeleteTask.value) {
+    message.warning('仅已完成/失败/超时/归档的任务可删除')
+    return
+  }
   if (!task.value) return
   try {
     await taskStore.deleteTask(task.value.id)
     message.success('任务已删除')
     router.push('/tasks')
-  } catch (error) {
-    message.error('删除任务失败')
+  } catch (error: any) {
+    message.error(error?.response?.data?.error || error?.message || '删除任务失败')
   }
 }
 

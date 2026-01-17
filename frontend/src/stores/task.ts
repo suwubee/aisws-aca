@@ -120,6 +120,12 @@ export const useTaskStore = defineStore('task', () => {
     return data
   }
 
+  async function bindTerminal(taskId: string, terminalId: string) {
+    const { data } = await taskApi.bindTerminal(taskId, terminalId)
+    await fetchTasks()
+    return data
+  }
+
   async function pauseAI(id: string) {
     const { data } = await taskApi.pauseAI(id)
     await fetchTasks()
@@ -170,6 +176,7 @@ export const useTaskStore = defineStore('task', () => {
     moveTask,
     getTaskDetail,
     startTask,
+    bindTerminal,
     pauseAI,
     resumeAI,
     createAutomationTask

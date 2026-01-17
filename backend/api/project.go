@@ -152,6 +152,7 @@ func (ctrl *ProjectController) CreateProject(c *fiber.Ctx) error {
 
 	project := model.Project{
 		ID:          uuid.New().String(),
+		UserID:      c.Locals("userID").(string),
 		Name:        name,
 		Description: req.Description,
 		Remark:      strings.TrimSpace(req.Remark),
@@ -190,6 +191,8 @@ func (ctrl *ProjectController) GetProject(c *fiber.Ctx) error {
 // UpdateProject 更新项目
 func (ctrl *ProjectController) UpdateProject(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
 
 	var project model.Project
 	if err := model.DB.First(&project, "id = ?", id).Error; err != nil {
@@ -197,6 +200,10 @@ func (ctrl *ProjectController) UpdateProject(c *fiber.Ctx) error {
 			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
 		}
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to query project"})
+	}
+
+	if !isAdmin && project.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
 	var req UpdateProjectRequest
@@ -284,13 +291,23 @@ func (ctrl *ProjectController) UpdateProject(c *fiber.Ctx) error {
 // DeleteProject 删除项目
 func (ctrl *ProjectController) DeleteProject(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
 
-	result := model.DB.Delete(&model.Project{}, "id = ?", id)
-	if result.Error != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete project"})
+	var project model.Project
+	if err := model.DB.First(&project, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query project"})
 	}
-	if result.RowsAffected == 0 {
-		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+
+	if !isAdmin && project.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	if err := model.DB.Delete(&project).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete project"})
 	}
 
 	return c.JSON(fiber.Map{"message": "Project deleted"})

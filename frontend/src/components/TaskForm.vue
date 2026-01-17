@@ -285,7 +285,7 @@ const errorHandlingOptions = [
 ]
 
 onMounted(() => {
-  serverStore.fetchServers().catch(() => {})
+  serverStore.fetchServers({ force: true }).catch(() => {})
   projectStore.fetchAll().catch(() => {})
 })
 

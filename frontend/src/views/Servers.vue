@@ -184,50 +184,6 @@
     </n-modal>
 
     <!-- SSH Terminal Window -->
-    <n-modal
-      v-model:show="showSshTerminal"
-      preset="card"
-      :title="sshTerminalTitle"
-      style="width: min(980px, calc(100vw - 32px)); position: fixed; right: 16px; bottom: 16px; margin: 0"
-      :bordered="false"
-      :show-mask="false"
-      :block-scroll="false"
-      :mask-closable="false"
-      @close="closeAllSshTerminals"
-    >
-      <div class="ssh-terminal-window">
-        <div class="ssh-terminal-tabs">
-          <button
-            v-for="tab in sshTerminals"
-            :key="tab.key"
-            class="ssh-terminal-tab"
-            :class="{ active: tab.key === activeSshKey }"
-            @click="setActiveSshTerminal(tab.key)"
-          >
-            <span class="status-dot" :class="getSshStatusDotClass(tab.status)"></span>
-            <span class="tab-title">{{ tab.title }}</span>
-            <span class="close-btn" @click.stop="closeSshTerminal(tab.key)">×</span>
-          </button>
-        </div>
-
-        <div class="ssh-terminal-content">
-          <div
-            v-for="tab in sshTerminals"
-            :key="tab.key"
-            v-show="tab.key === activeSshKey"
-            class="ssh-terminal-wrapper"
-          >
-            <SSHTerminal
-              :server-id="tab.serverId"
-              @status-change="(s) => updateSshTerminalStatus(tab.key, s)"
-            />
-          </div>
-          <div v-if="sshTerminals.length === 0" class="empty-terminal">
-            <n-empty description="暂无SSH终端" />
-          </div>
-        </div>
-      </div>
-    </n-modal>
   </div>
 </template>
 
@@ -258,7 +214,6 @@ import {
 import BatchExecute from '@/components/BatchExecute.vue'
 import ServerForm from '@/components/ServerForm.vue'
 import ServerShareModal from '@/components/ServerShareModal.vue'
-import SSHTerminal from '@/components/SSHTerminal.vue'
 import TaskForm from '@/components/TaskForm.vue'
 import type { TaskFormModel } from '@/components/TaskForm.vue'
 import { useTaskStore } from '@/stores/task'
@@ -526,85 +481,24 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
   }
 ])
 
-type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
-
-interface SSHTerminalTab {
-  key: string
-  serverId: string
-  title: string
-  status: ConnectionStatus
-}
-
-const showSshTerminal = ref(false)
-const sshTerminals = ref<SSHTerminalTab[]>([])
-const activeSshKey = ref<string | null>(null)
-
-const sshTerminalTitle = computed(() => {
-  if (sshTerminals.value.length <= 1) return 'SSH 终端'
-  return `SSH 终端（${sshTerminals.value.length}）`
-})
-
-function getSshStatusDotClass(status: ConnectionStatus) {
-  if (status === 'connected') return 'connected'
-  if (status === 'disconnected') return 'disconnected'
-  return 'connecting'
-}
-
-function openSshTerminal(server: SSHServer) {
+async function openSshTerminal(server: SSHServer) {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
     return
   }
-  const existing = sshTerminals.value.find(t => t.serverId === server.id)
-  if (existing) {
-    activeSshKey.value = existing.key
-    showSshTerminal.value = true
-    return
+
+  try {
+    // 创建终端
+    const terminal = await terminalStore.createTerminal({
+      server_id: server.id,
+      title: server.name || server.host
+    })
+
+    // 跳转到工作台页面并指定终端
+    router.push({ path: '/', query: { terminal: terminal.id } })
+  } catch (error: any) {
+    message.error(error.response?.data?.error || '创建终端失败')
   }
-
-  const key = `${server.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  sshTerminals.value.push({
-    key,
-    serverId: server.id,
-    title: server.name || server.host,
-    status: 'connecting'
-  })
-  activeSshKey.value = key
-  showSshTerminal.value = true
-}
-
-function setActiveSshTerminal(key: string) {
-  activeSshKey.value = key
-}
-
-function updateSshTerminalStatus(key: string, status: ConnectionStatus) {
-  const tab = sshTerminals.value.find(t => t.key === key)
-  if (tab) tab.status = status
-}
-
-function closeSshTerminal(key: string) {
-  const idx = sshTerminals.value.findIndex(t => t.key === key)
-  if (idx < 0) return
-
-  sshTerminals.value.splice(idx, 1)
-
-  if (activeSshKey.value === key) {
-    activeSshKey.value =
-      sshTerminals.value[idx - 1]?.key ||
-      sshTerminals.value[idx]?.key ||
-      sshTerminals.value[0]?.key ||
-      null
-  }
-
-  if (sshTerminals.value.length === 0) {
-    closeAllSshTerminals()
-  }
-}
-
-function closeAllSshTerminals() {
-  showSshTerminal.value = false
-  sshTerminals.value = []
-  activeSshKey.value = null
 }
 
 function openCreateTask(server: SSHServer) {

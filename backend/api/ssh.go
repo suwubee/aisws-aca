@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
 	secretservice "github.com/ai-coding-assistant/service/secret"
 	sshservice "github.com/ai-coding-assistant/service/ssh"
@@ -204,6 +203,7 @@ func (ctrl *SSHServerController) CreateServer(c *fiber.Ctx) error {
 
 	server := model.SSHServer{
 		ID:         uuid.New().String(),
+		UserID:     c.Locals("userID").(string),
 		Name:       name,
 		Host:       host,
 		Port:       port,
@@ -252,6 +252,8 @@ func (ctrl *SSHServerController) GetServer(c *fiber.Ctx) error {
 // UpdateServer 更新服务器
 func (ctrl *SSHServerController) UpdateServer(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
 
 	var server model.SSHServer
 	if err := model.DB.First(&server, "id = ?", id).Error; err != nil {
@@ -259,6 +261,11 @@ func (ctrl *SSHServerController) UpdateServer(c *fiber.Ctx) error {
 			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
 		}
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
+	}
+
+	// 权限检查：只有所有者或管理员可以更新
+	if !isAdmin && server.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
 	var req UpdateSSHServerRequest
@@ -507,13 +514,24 @@ func (ctrl *SSHServerController) UploadKey(c *fiber.Ctx) error {
 // DeleteServer 删除服务器
 func (ctrl *SSHServerController) DeleteServer(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
 
-	result := model.DB.Delete(&model.SSHServer{}, "id = ?", id)
-	if result.Error != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete server"})
+	var server model.SSHServer
+	if err := model.DB.First(&server, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
 	}
-	if result.RowsAffected == 0 {
-		return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
+
+	// 权限检查：只有所有者或管理员可以删除
+	if !isAdmin && server.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	if err := model.DB.Delete(&server).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete server"})
 	}
 
 	return c.JSON(fiber.Map{"message": "Server deleted"})
@@ -558,6 +576,7 @@ func (ctrl *SSHServerController) CreateServerGroup(c *fiber.Ctx) error {
 
 	group := model.ServerGroup{
 		ID:          uuid.New().String(),
+		UserID:      c.Locals("userID").(string),
 		Name:        name,
 		Description: strings.TrimSpace(req.Description),
 		ParentID:    parentID,
@@ -642,6 +661,13 @@ func (ctrl *SSHServerController) CreateServerTerminal(c *fiber.Ctx) error {
 	if serverID == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Server id is required"})
 	}
+
+	// 验证服务器存在
+	var server model.SSHServer
+	if err := model.DB.First(&server, "id = ?", serverID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
+	}
+
 	if ctrl.terminalMgr == nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
 	}
@@ -698,6 +724,8 @@ func (ctrl *SSHServerController) ExportServers(c *fiber.Ctx) error {
 
 // ImportServers 从CSV导入服务器
 func (ctrl *SSHServerController) ImportServers(c *fiber.Ctx) error {
+	userID := c.Locals("userID").(string)
+
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "CSV file is required"})
@@ -720,9 +748,9 @@ func (ctrl *SSHServerController) ImportServers(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "CSV file is empty"})
 	}
 
-	// 获取现有分组
+	// 获取当前用户的分组
 	var groups []model.ServerGroup
-	model.DB.Find(&groups)
+	model.DB.Where("user_id = ?", userID).Find(&groups)
 	groupNameMap := make(map[string]string) // name -> id
 	for _, g := range groups {
 		groupNameMap[g.Name] = g.ID
@@ -795,6 +823,7 @@ func (ctrl *SSHServerController) ImportServers(c *fiber.Ctx) error {
 
 		server := model.SSHServer{
 			ID:         uuid.New().String(),
+			UserID:     userID,
 			Name:       name,
 			Host:       host,
 			Port:       port,
@@ -819,199 +848,24 @@ func (ctrl *SSHServerController) ImportServers(c *fiber.Ctx) error {
 	})
 }
 
-// ShareServerRequest 共享服务器请求
-type ShareServerRequest struct {
-	UserIDs []string `json:"user_ids"`
-}
-
-// ListServerShares 获取服务器的共享用户列表
-func (ctrl *SSHServerController) ListServerShares(c *fiber.Ctx) error {
-	serverID := strings.TrimSpace(c.Params("id"))
-	if serverID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Server id is required"})
-	}
-
-	// 验证服务器存在
-	var server model.SSHServer
-	if err := model.DB.First(&server, "id = ?", serverID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
-		}
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
-	}
-
-	// 获取共享记录
-	var shares []model.UserServerShare
-	if err := model.DB.Where("server_id = ?", serverID).Find(&shares).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to list shares"})
-	}
-
-	// 获取用户信息
-	userIDs := make([]string, len(shares))
-	for i, s := range shares {
-		userIDs[i] = s.UserID
-	}
-
-	type UserInfo struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Email    string `json:"email"`
-	}
-
-	var users []model.User
-	if len(userIDs) > 0 {
-		model.DB.Select("id", "username", "email").Where("id IN ?", userIDs).Find(&users)
-	}
-
-	userInfos := make([]UserInfo, len(users))
-	for i, u := range users {
-		userInfos[i] = UserInfo{ID: u.ID, Username: u.Username, Email: u.Email}
-	}
-
-	return c.JSON(fiber.Map{"items": userInfos})
-}
-
-// ShareServer 共享服务器给用户
-func (ctrl *SSHServerController) ShareServer(c *fiber.Ctx) error {
-	serverID := strings.TrimSpace(c.Params("id"))
-	if serverID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Server id is required"})
-	}
-
-	var req ShareServerRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-
-	// 验证服务器存在
-	var server model.SSHServer
-	if err := model.DB.First(&server, "id = ?", serverID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return c.Status(404).JSON(fiber.Map{"error": "Server not found"})
-		}
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to query server"})
-	}
-
-	// 验证用户存在
-	userIDs := make([]string, 0, len(req.UserIDs))
-	seen := make(map[string]struct{})
-	for _, uid := range req.UserIDs {
-		uid = strings.TrimSpace(uid)
-		if uid == "" {
-			continue
-		}
-		if _, ok := seen[uid]; ok {
-			continue
-		}
-		seen[uid] = struct{}{}
-		userIDs = append(userIDs, uid)
-	}
-
-	if len(userIDs) > 0 {
-		var users []model.User
-		if err := model.DB.Select("id").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to query users"})
-		}
-		foundIDs := make(map[string]struct{})
-		for _, u := range users {
-			foundIDs[u.ID] = struct{}{}
-		}
-		for _, uid := range userIDs {
-			if _, ok := foundIDs[uid]; !ok {
-				return c.Status(400).JSON(fiber.Map{"error": "User not found: " + uid})
-			}
-		}
-	}
-
-	// 删除现有共享，重新创建
-	if err := model.DB.Where("server_id = ?", serverID).Delete(&model.UserServerShare{}).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to update shares"})
-	}
-
-	// 创建新共享
-	for _, uid := range userIDs {
-		share := model.UserServerShare{
-			ID:       uuid.New().String(),
-			UserID:   uid,
-			ServerID: serverID,
-		}
-		if err := model.DB.Create(&share).Error; err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to create share"})
-		}
-	}
-
-	return c.JSON(fiber.Map{"message": "Server shared successfully", "user_count": len(userIDs)})
-}
-
-// UnshareServer 取消服务器共享
-func (ctrl *SSHServerController) UnshareServer(c *fiber.Ctx) error {
-	serverID := strings.TrimSpace(c.Params("id"))
-	userID := strings.TrimSpace(c.Params("userId"))
-
-	if serverID == "" || userID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Server id and user id are required"})
-	}
-
-	result := model.DB.Where("server_id = ? AND user_id = ?", serverID, userID).Delete(&model.UserServerShare{})
-	if result.Error != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove share"})
-	}
-
-	return c.JSON(fiber.Map{"message": "Share removed"})
-}
-
-// ListSharedServers 获取用户可访问的共享服务器列表
-func (ctrl *SSHServerController) ListSharedServers(c *fiber.Ctx) error {
-	userID := c.Locals("userID").(string)
-
-	// 获取用户共享的服务器ID
-	var shares []model.UserServerShare
-	if err := model.DB.Where("user_id = ?", userID).Find(&shares).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to list shares"})
-	}
-
-	if len(shares) == 0 {
-		return c.JSON(fiber.Map{"items": []model.SSHServer{}})
-	}
-
-	serverIDs := make([]string, len(shares))
-	for i, s := range shares {
-		serverIDs[i] = s.ServerID
-	}
-
-	var servers []model.SSHServer
-	if err := model.DB.Where("id IN ?", serverIDs).Order("created_at desc").Find(&servers).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to list servers"})
-	}
-
-	return c.JSON(fiber.Map{"items": servers})
-}
-
 // RegisterRoutes 注册路由
 func (ctrl *SSHServerController) RegisterRoutes(app fiber.Router) {
 	servers := app.Group("/servers")
 	servers.Get("/", ctrl.ListServers)
+	servers.Post("/", ctrl.CreateServer)
+	servers.Post("/batch-execute", ctrl.BatchExecute)
+	// 静态路由必须在 /:id 之前
+	servers.Get("/export", ctrl.ExportServers)
+	servers.Post("/import", ctrl.ImportServers)
+	// 动态路由放在最后
 	servers.Get("/:id", ctrl.GetServer)
+	servers.Put("/:id", ctrl.UpdateServer)
+	servers.Delete("/:id", ctrl.DeleteServer)
+	servers.Post("/:id/upload-key", ctrl.UploadKey)
 	servers.Post("/:id/terminal", ctrl.CreateServerTerminal)
 	servers.Post("/:id/test", ctrl.TestServerConnection)
-	servers.Post("/batch-execute", ctrl.BatchExecute)
-
-	admin := servers.Group("", middleware.RequireRole("admin"))
-	admin.Post("/", ctrl.CreateServer)
-	admin.Get("/export", ctrl.ExportServers)
-	admin.Post("/import", ctrl.ImportServers)
-	admin.Put("/:id", ctrl.UpdateServer)
-	admin.Delete("/:id", ctrl.DeleteServer)
-	admin.Post("/:id/upload-key", ctrl.UploadKey)
-	admin.Get("/:id/shares", ctrl.ListServerShares)
-	admin.Post("/:id/shares", ctrl.ShareServer)
-	admin.Delete("/:id/shares/:userId", ctrl.UnshareServer)
-
-	// 用户可访问的共享服务器
-	servers.Get("/shared/list", ctrl.ListSharedServers)
 
 	groups := app.Group("/server-groups")
 	groups.Get("/", ctrl.ListServerGroups)
-	adminGroups := groups.Group("", middleware.RequireRole("admin"))
-	adminGroups.Post("/", ctrl.CreateServerGroup)
+	groups.Post("/", ctrl.CreateServerGroup)
 }

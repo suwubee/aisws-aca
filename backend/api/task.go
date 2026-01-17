@@ -79,6 +79,7 @@ type UpdateTaskRequest struct {
 	AIPrompt        *string `json:"ai_prompt"`
 	AIEndCondition  *string `json:"ai_end_condition"`
 	AIErrorHandling *string `json:"ai_error_handling"`
+	AIStatus        *string `json:"ai_status"`
 }
 
 type MoveTaskRequest struct {
@@ -137,7 +138,7 @@ var allowedAutomationModes = map[string]struct{}{
 func normalizeAutomationMode(value string) (string, bool) {
 	s := strings.ToLower(strings.TrimSpace(value))
 	if s == "" {
-		return "cli", true
+		return "none", true  // 默认为"仅记录"模式
 	}
 	_, ok := allowedAutomationModes[s]
 	return s, ok
@@ -190,12 +191,17 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
 	}
 
+	// AI托管任务默认状态为进行中
+	if req.AIManaged && status == "todo" {
+		status = "in_progress"
+	}
+
 	automationMode, ok := normalizeAutomationMode(req.AutomationMode)
 	if !ok {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid automation_mode"})
 	}
 
-	cliType := "claude"
+	cliType := ""
 	if automationMode == "cli" {
 		if normalized, ok := normalizeCLIType(req.CLIType); ok {
 			cliType = normalized
@@ -750,6 +756,13 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	if req.AIErrorHandling != nil {
 		updates["ai_error_handling"] = *req.AIErrorHandling
 	}
+	if req.AIStatus != nil {
+		updates["ai_status"] = *req.AIStatus
+	}
+
+	// 检查是否中途启用AI托管，需要启动监控
+	aiManagedChanged := req.AIManaged != nil && *req.AIManaged && !task.AIManaged
+	wasRunning := task.Status == "in_progress"
 
 	if len(updates) > 0 {
 		updates["updated_at"] = time.Now()
@@ -757,19 +770,58 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	}
 
 	model.DB.First(&task, "id = ?", id)
+
+	// 如果中途启用AI托管，且任务正在进行中，启动监控
+	if aiManagedChanged && wasRunning {
+		terminalID := ""
+		if task.ActiveTerminalID != nil {
+			terminalID = strings.TrimSpace(*task.ActiveTerminalID)
+		}
+		if terminalID != "" && ctrl.automationService != nil {
+			ctrl.automationService.StartMonitoring(task.ID, terminalID)
+		}
+	}
+
 	return c.JSON(fiber.Map{"item": task})
 }
 
 // DeleteTask 删除任务
 func (ctrl *TaskController) DeleteTask(c *fiber.Ctx) error {
-	id := c.Params("id")
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
 
-	result := model.DB.Delete(&model.Task{}, "id = ?", id)
-	if result.RowsAffected == 0 {
+	var taskModel model.Task
+	if err := model.DB.Select("id", "status").First(&taskModel, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
 	}
 
-	return c.JSON(fiber.Map{"message": "Task deleted"})
+	status := strings.ToLower(strings.TrimSpace(taskModel.Status))
+	deletable := status == "done" || status == "failed" || status == "timeout" || status == "archived"
+	if !deletable {
+		return c.Status(409).JSON(fiber.Map{
+			"error": "Task can only be deleted when status is done/failed/timeout/archived",
+		})
+	}
+
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		// PostgreSQL 下终端会话存在外键约束：删除任务前先解绑终端，避免误报 404
+		if err := tx.Exec(`UPDATE terminal_sessions SET task_id = NULL WHERE task_id = ?`, id).Error; err != nil {
+			return err
+		}
+		// 删除评论（仅绑定 task_id，删除后无意义且无法置空）
+		_ = tx.Delete(&model.Comment{}, "task_id = ?", id).Error
+		// 最后删除任务
+		if err := tx.Delete(&model.Task{}, "id = ?", id).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "Task deleted", "task_id": id})
 }
 
 // MoveTask 移动任务（拖拽）
@@ -870,24 +922,22 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": "Target server is required (local must be configured in Servers)"})
 		}
 
-		// 幂等：任务进行中/暂停时直接返回已有会话
-		if taskModel.Status == "in_progress" || taskModel.Status == "paused" {
-			sessionID := strings.TrimSpace(taskModel.AgentSessionID)
+		// 幂等：任务进行中/暂停且已有会话时直接返回（防止历史数据出现 status=in_progress 但 session 为空导致无法启动）
+		sessionID := strings.TrimSpace(taskModel.AgentSessionID)
+		if (taskModel.Status == "in_progress" || taskModel.Status == "paused") && sessionID != "" {
 			needsUserAction := taskModel.Status == "paused"
 			userHint := ""
 			terminalID := ""
 			terminalIDs := []string{}
 
-			if sessionID != "" {
-				if session, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && session != nil {
-					if strings.EqualFold(strings.TrimSpace(session.Status), "paused") {
-						needsUserAction = true
-						userHint = strings.TrimSpace(session.Summary)
-					}
-					if session.Context != nil {
-						if v, ok := session.Context["terminal_id"].(string); ok {
-							terminalID = strings.TrimSpace(v)
-						}
+			if session, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && session != nil {
+				if strings.EqualFold(strings.TrimSpace(session.Status), "paused") {
+					needsUserAction = true
+					userHint = strings.TrimSpace(session.Summary)
+				}
+				if session.Context != nil {
+					if v, ok := session.Context["terminal_id"].(string); ok {
+						terminalID = strings.TrimSpace(v)
 					}
 				}
 			}
@@ -1166,9 +1216,48 @@ func (ctrl *TaskController) ResumeAI(c *fiber.Ctx) error {
 	}
 
 	var taskModel model.Task
-	if err := model.DB.Select("id", "active_terminal_id", "ai_status", "ai_pause_reason").
+	if err := model.DB.Select("id", "automation_mode", "agent_session_id", "active_terminal_id", "status", "ai_status", "ai_pause_reason").
 		First(&taskModel, "id = ?", taskID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	if strings.EqualFold(strings.TrimSpace(taskModel.AutomationMode), "agent") {
+		sessionID := strings.TrimSpace(taskModel.AgentSessionID)
+		if sessionID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Task has no agent session"})
+		}
+		if ctrl.aiWorkflowEngine == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
+		}
+
+		// 若已在运行，直接返回成功（避免“不可恢复”报错）
+		if s, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && s != nil {
+			if strings.EqualFold(strings.TrimSpace(s.Status), "running") {
+				now := time.Now()
+				_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+					"status":         "in_progress",
+					"ai_status":      "running",
+					"ai_pause_reason": "",
+					"updated_at":     now,
+				}).Error
+				return c.JSON(fiber.Map{"message": "AI already running", "task_id": taskID, "session_id": sessionID})
+			}
+		}
+
+		// agent 模式：用默认确认语句恢复（也允许用户在右侧输入框中提交自定义内容）
+		if _, err := ctrl.aiWorkflowEngine.ResumeWorkflow(c.Context(), sessionID, "已恢复，请继续执行。"); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		now := time.Now()
+		_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+			"status":          "in_progress",
+			"ai_status":       "running",
+			"ai_pause_reason": "",
+			"updated_at":      now,
+		}).Error
+
+		return c.JSON(fiber.Map{"message": "AI resumed", "task_id": taskID, "session_id": sessionID})
 	}
 
 	if taskModel.ActiveTerminalID == nil || strings.TrimSpace(*taskModel.ActiveTerminalID) == "" {
@@ -1200,9 +1289,40 @@ func (ctrl *TaskController) PauseAI(c *fiber.Ctx) error {
 	}
 
 	var taskModel model.Task
-	if err := model.DB.Select("id", "ai_status").
+	if err := model.DB.Select("id", "automation_mode", "agent_session_id", "status", "ai_status").
 		First(&taskModel, "id = ?", taskID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	if strings.EqualFold(strings.TrimSpace(taskModel.AutomationMode), "agent") {
+		sessionID := strings.TrimSpace(taskModel.AgentSessionID)
+		if sessionID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Task has no agent session"})
+		}
+		if ctrl.aiWorkflowEngine == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
+		}
+
+		// 若已暂停则幂等返回
+		if s, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && s != nil {
+			if strings.EqualFold(strings.TrimSpace(s.Status), "paused") {
+				return c.JSON(fiber.Map{"message": "AI paused", "task_id": taskID, "session_id": sessionID})
+			}
+		}
+
+		if _, err := ctrl.aiWorkflowEngine.PauseWorkflow(c.Context(), sessionID, "user_paused"); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		now := time.Now()
+		_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+			"status":          "paused",
+			"ai_status":       "paused",
+			"ai_pause_reason": "user_paused",
+			"updated_at":      now,
+		}).Error
+
+		return c.JSON(fiber.Map{"message": "AI paused", "task_id": taskID, "session_id": sessionID})
 	}
 
 	now := time.Now()

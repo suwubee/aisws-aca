@@ -168,10 +168,12 @@ func (ctrl *AutomationController) ListRuleSets(c *fiber.Ctx) error {
 // GetRuleSet 获取单个规则集
 func (ctrl *AutomationController) GetRuleSet(c *fiber.Ctx) error {
 	id := c.Params("id")
+
 	var ruleSet model.RuleSet
 	if err := model.DB.First(&ruleSet, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Rule set not found"})
 	}
+
 	return c.JSON(fiber.Map{"item": ruleSet})
 }
 
@@ -194,6 +196,7 @@ func (ctrl *AutomationController) CreateRuleSet(c *fiber.Ctx) error {
 	now := time.Now()
 	ruleSet := &model.RuleSet{
 		ID:                uuid.New().String(),
+		UserID:            c.Locals("userID").(string),
 		Name:              req.Name,
 		Type:              ruleType,
 		ApprovalMode:      req.ApprovalMode,
@@ -222,12 +225,19 @@ func (ctrl *AutomationController) CreateRuleSet(c *fiber.Ctx) error {
 // UpdateRuleSet 更新规则集
 func (ctrl *AutomationController) UpdateRuleSet(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
+
 	var ruleSet model.RuleSet
 	if err := model.DB.First(&ruleSet, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Rule set not found"})
 	}
 	if ruleSet.Type == "system" {
 		return c.Status(400).JSON(fiber.Map{"error": "Cannot update system rule set"})
+	}
+
+	if !isAdmin && ruleSet.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
 	var req RuleSetRequest
@@ -262,6 +272,8 @@ func (ctrl *AutomationController) UpdateRuleSet(c *fiber.Ctx) error {
 // DeleteRuleSet 删除规则集
 func (ctrl *AutomationController) DeleteRuleSet(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
 
 	// 不允许删除系统规则
 	var ruleSet model.RuleSet
@@ -272,7 +284,11 @@ func (ctrl *AutomationController) DeleteRuleSet(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Cannot delete system rule set"})
 	}
 
-	if err := model.DB.Delete(&model.RuleSet{}, "id = ?", id).Error; err != nil {
+	if !isAdmin && ruleSet.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	if err := model.DB.Delete(&ruleSet).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete rule set"})
 	}
 	return c.JSON(fiber.Map{"message": "Rule set deleted"})
@@ -391,6 +407,7 @@ func (ctrl *AutomationController) CreateTerminalCustomRule(c *fiber.Ctx) error {
 	now := time.Now()
 	ruleSet := &model.RuleSet{
 		ID:                uuid.New().String(),
+		UserID:            c.Locals("userID").(string),
 		Name:              req.Name,
 		Type:              "terminal",
 		ApprovalMode:      req.ApprovalMode,
@@ -476,6 +493,7 @@ func (ctrl *AutomationController) ListAIProviders(c *fiber.Ctx) error {
 // GetAIProvider 获取单个AI配置
 func (ctrl *AutomationController) GetAIProvider(c *fiber.Ctx) error {
 	id := c.Params("id")
+
 	var config model.AIProviderConfig
 	if err := model.DB.First(&config, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "AI provider not found"})
@@ -513,6 +531,7 @@ func (ctrl *AutomationController) CreateAIProvider(c *fiber.Ctx) error {
 
 	config := &model.AIProviderConfig{
 		ID:          uuid.New().String(),
+		UserID:      c.Locals("userID").(string),
 		Name:        req.Name,
 		Provider:    req.Provider,
 		BaseURL:     req.BaseURL,
@@ -542,9 +561,17 @@ func (ctrl *AutomationController) CreateAIProvider(c *fiber.Ctx) error {
 // UpdateAIProvider 更新AI配置
 func (ctrl *AutomationController) UpdateAIProvider(c *fiber.Ctx) error {
 	id := c.Params("id")
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
+
 	var config model.AIProviderConfig
 	if err := model.DB.First(&config, "id = ?", id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "AI provider not found"})
+	}
+
+	// 权限检查：管理员可操作全部，普通用户只能操作自己创建的
+	if !isAdmin && config.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
 	var req AIProviderConfigRequest
@@ -583,7 +610,19 @@ func (ctrl *AutomationController) UpdateAIProvider(c *fiber.Ctx) error {
 // DeleteAIProvider 删除AI配置
 func (ctrl *AutomationController) DeleteAIProvider(c *fiber.Ctx) error {
 	id := c.Params("id")
-	if err := model.DB.Delete(&model.AIProviderConfig{}, "id = ?", id).Error; err != nil {
+	userID := c.Locals("userID").(string)
+	isAdmin := c.Locals("role").(string) == "admin"
+
+	var config model.AIProviderConfig
+	if err := model.DB.First(&config, "id = ?", id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "AI provider not found"})
+	}
+
+	if !isAdmin && config.UserID != userID {
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
+
+	if err := model.DB.Delete(&config).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete AI provider"})
 	}
 	return c.JSON(fiber.Map{"message": "AI provider deleted"})
@@ -922,10 +961,10 @@ func (ctrl *AutomationController) RegisterRoutes(app fiber.Router) {
 
 	// AI Provider配置
 	automation.Get("/ai-providers", ctrl.ListAIProviders)
-	automation.Post("/ai-providers", middleware.RequireRole("admin"), ctrl.CreateAIProvider)
+	automation.Post("/ai-providers", ctrl.CreateAIProvider)
 	automation.Get("/ai-providers/:id", ctrl.GetAIProvider)
-	automation.Put("/ai-providers/:id", middleware.RequireRole("admin"), ctrl.UpdateAIProvider)
-	automation.Delete("/ai-providers/:id", middleware.RequireRole("admin"), ctrl.DeleteAIProvider)
+	automation.Put("/ai-providers/:id", ctrl.UpdateAIProvider)
+	automation.Delete("/ai-providers/:id", ctrl.DeleteAIProvider)
 
 	// 消息管理
 	automation.Get("/messages", ctrl.ListMessages)
