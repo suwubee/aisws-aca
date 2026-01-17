@@ -31,6 +31,11 @@ type runtimeSession struct {
 	session  *AIWorkflowSession
 	aiConfig *model.AIProviderConfig
 	pending  []ai.ChatMessage
+
+	// Cached identifiers for safe logging without touching the mutable Context map
+	// while tools may be executing and mutating it.
+	terminalID string
+	taskID     string
 }
 
 // NewAIWorkflowEngine creates a new AI workflow engine
@@ -181,6 +186,10 @@ func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *
 		session:  session,
 		aiConfig: aiConfig,
 	}
+	if session != nil && session.Context != nil {
+		rt.terminalID = strings.TrimSpace(getStringFromMap(session.Context, "terminal_id"))
+		rt.taskID = strings.TrimSpace(getStringFromMap(session.Context, "task_id"))
+	}
 	if _, loaded := e.inflight.LoadOrStore(id, rt); loaded {
 		return false
 	}
@@ -191,6 +200,43 @@ func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *
 	}()
 
 	return true
+}
+
+func (e *AIWorkflowEngine) emitUserMessageLog(sessionCtx map[string]any, userMessage string) {
+	if e == nil || e.toolExecutor == nil || sessionCtx == nil {
+		return
+	}
+	if strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id")) == "" {
+		return
+	}
+
+	text := strings.TrimSpace(userMessage)
+	if text == "" {
+		return
+	}
+	const maxRunes = 2000
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		text = string(runes[:maxRunes]) + "…(truncated)…"
+	}
+	e.toolExecutor.emitTerminalAILog(sessionCtx, "action", "用户补充信息", "text", text)
+}
+
+func (e *AIWorkflowEngine) emitUserMessageLogFromRuntime(rt *runtimeSession, userMessage string) {
+	if e == nil || rt == nil {
+		return
+	}
+	tid := strings.TrimSpace(rt.terminalID)
+	if tid == "" {
+		return
+	}
+	ctx := map[string]any{
+		"terminal_id": tid,
+	}
+	if strings.TrimSpace(rt.taskID) != "" {
+		ctx["task_id"] = rt.taskID
+	}
+	e.emitUserMessageLog(ctx, userMessage)
 }
 
 // ResumeWorkflow appends a user message and resumes a workflow session.
@@ -223,6 +269,7 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 			rt.session.CompletedAt = nil
 			session := rt.session
 			rt.mu.Unlock()
+			e.emitUserMessageLogFromRuntime(rt, msg)
 			return session, nil
 		}
 	}
@@ -232,11 +279,29 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 		return nil, err
 	}
 
-	status := strings.ToLower(strings.TrimSpace(session.Status))
+	rawStatus := strings.ToLower(strings.TrimSpace(session.Status))
+	status := rawStatus
+	switch status {
+	case "":
+		// Backward compatibility / DB null -> empty string.
+		status = "running"
+	case "done":
+		status = "completed"
+	case "canceled":
+		status = "cancelled"
+	case "in_progress":
+		status = "running"
+	}
+
 	resumable := status == "running" || status == "paused" || status == "completed" || status == "failed" || status == "cancelled" || status == "timeout"
 	if !resumable {
-		return nil, errors.New("session is not resumable")
+		// Best-effort recovery for legacy/unknown statuses: allow resuming instead of hard failing.
+		utils.Warn("workflow session status not resumable; forcing resume",
+			zap.String("session", id),
+			zap.String("status", rawStatus))
+		status = "running"
 	}
+
 	shouldRestartTaskMonitor := status == "completed" || status == "failed" || status == "cancelled" || status == "timeout"
 
 	aiConfig, err := e.aiProvider.GetDefaultConfig()
@@ -262,6 +327,7 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 
 	// Best-effort start: if it's already running (race / restarted loop), treat as success.
 	_ = e.startExecution(session, aiConfig)
+	e.emitUserMessageLog(session.Context, msg)
 
 	if shouldRestartTaskMonitor {
 		taskID := strings.TrimSpace(session.WorkflowID)
@@ -423,20 +489,33 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 			Content: aiResponse,
 		})
 
-		// Parse response
-		parsed, err := ParseAIResponse(aiResponse)
-		if err != nil {
-			utils.Warn("Failed to parse AI response", zap.Error(err))
-			_ = e.saveSession(session)
-			rt.mu.Unlock()
-			continue
-		}
+			// Parse response
+			parsed, err := ParseAIResponse(aiResponse)
+			if err != nil {
+				utils.Warn("Failed to parse AI response", zap.Error(err))
+				if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+					e.toolExecutor.emitTerminalAILog(session.Context, "error", "解析 AI 响应失败，将继续尝试下一步", "error", err.Error())
+				}
+				_ = e.saveSession(session)
+				rt.mu.Unlock()
+				continue
+			}
 
-		// Check if complete
-		if parsed.Complete != nil {
-			now := time.Now()
-			session.Status = "completed"
-			session.Summary = parsed.Complete.Summary
+			// Best-effort AI logs for observability (keeps the old "[AI][type]" stream style).
+			if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+				if strings.TrimSpace(parsed.Thought) != "" {
+					e.toolExecutor.emitTerminalAILog(session.Context, "thinking", strings.TrimSpace(parsed.Thought), "", "")
+				}
+				if parsed.Action != nil && strings.TrimSpace(parsed.Action.Tool) != "" {
+					e.toolExecutor.emitTerminalAILog(session.Context, "decision", fmt.Sprintf("调用工具: %s", strings.TrimSpace(parsed.Action.Tool)), "", "")
+				}
+			}
+
+			// Check if complete
+			if parsed.Complete != nil {
+				now := time.Now()
+				session.Status = "completed"
+				session.Summary = parsed.Complete.Summary
 			session.CompletedAt = &now
 			_ = e.saveSession(session)
 			rt.mu.Unlock()

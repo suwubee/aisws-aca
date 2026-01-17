@@ -290,13 +290,11 @@ const baseMenuOptions: MenuOption[] = [
 
 const menuOptions = computed<MenuOption[]>(() => baseMenuOptions)
 
-const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
-  { key: 'dashboard', label: '工作台', icon: '🏠' },
-  { key: 'work-items', label: '工作', icon: '📋' },
-  { key: 'kanban', label: '看板', icon: '📊' },
-  { key: 'terminals', label: '终端', icon: '🧪' },
-  { key: 'settings', label: '设置', icon: '⚙️' }
-]
+	const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
+	  { key: 'dashboard', label: '工作台', icon: '🏠' },
+	  { key: 'terminals', label: '终端', icon: '🧪' },
+	  { key: 'settings', label: '设置', icon: '⚙️' }
+	]
 
 const userOptions = [
   { label: '个人信息', key: 'profile' },

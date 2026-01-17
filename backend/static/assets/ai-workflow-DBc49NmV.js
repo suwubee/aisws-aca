@@ -1,0 +1,1 @@
+import{am as s}from"./index-DQIF0u8d.js";function e(o){return s.post("/ai-workflow/start",{goal:o})}function n(o){return s.get(`/ai-workflow/session/${o}`)}function i(){return s.get("/ai-workflow/sessions")}function a(o,r){return s.post(`/ai-workflow/session/${o}/message`,{message:r})}export{n as g,i as l,a as p,e as s};

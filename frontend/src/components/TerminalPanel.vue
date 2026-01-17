@@ -288,9 +288,9 @@
                 </div>
               </div>
 
-		              <div v-else-if="aiHandoffEmptyText" class="ai-handoff-empty">
-		                <p>{{ aiHandoffEmptyText }}</p>
-		              </div>
+			              <div v-else-if="aiHandoffEmptyText.trim()" class="ai-handoff-empty">
+			                <p>{{ aiHandoffEmptyText }}</p>
+			              </div>
 	
 	              <!-- 始终保留输入框：用于下发指令/补充信息，避免“启用AI后无处输入”卡住 -->
 	              <div class="ai-command-box">

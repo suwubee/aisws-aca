@@ -466,14 +466,17 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		Metadata: session.Metadata(),
 	})
 
-	// 发送历史输出
-	scrollback := session.Scrollback()
-	if len(scrollback) > 0 {
-		c.WriteJSON(WSMessage{
-			Type: "data",
-			Data: base64.StdEncoding.EncodeToString(scrollback),
-		})
-	}
+		// 发送历史输出
+		scrollback := session.Scrollback()
+		if len(scrollback) > 0 {
+			scrollback = terminal.FilterInternalMarkers(scrollback)
+		}
+		if len(scrollback) > 0 {
+			c.WriteJSON(WSMessage{
+				Type: "data",
+				Data: base64.StdEncoding.EncodeToString(scrollback),
+			})
+		}
 
 	// 订阅会话
 	subID, eventCh := session.Subscribe()
@@ -520,22 +523,28 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 	}()
 
 	// 转发会话事件
-	for event := range eventCh {
-		wsMsg := WSMessage{
-			Type:           string(event.Type),
-			Data:           event.Data,
-			Metadata:       event.Metadata,
-			ExitCode:       event.ExitCode,
-			Message:        event.Message,
-			ApprovalResult: event.ApprovalResult,
-			AILog:          event.AILog,
-		}
-		if err := c.WriteJSON(wsMsg); err != nil {
-			utils.Debug("WebSocket write error", zap.Error(err))
-			return
+		for event := range eventCh {
+			wsMsg := WSMessage{
+				Type:           string(event.Type),
+				Data:           event.Data,
+				Metadata:       event.Metadata,
+				ExitCode:       event.ExitCode,
+				Message:        event.Message,
+				ApprovalResult: event.ApprovalResult,
+				AILog:          event.AILog,
+			}
+			if event.Type == terminal.StreamEventData && strings.TrimSpace(event.Data) != "" {
+				if raw, err := base64.StdEncoding.DecodeString(event.Data); err == nil && len(raw) > 0 {
+					filtered := terminal.FilterInternalMarkers(raw)
+					wsMsg.Data = base64.StdEncoding.EncodeToString(filtered)
+				}
+			}
+			if err := c.WriteJSON(wsMsg); err != nil {
+				utils.Debug("WebSocket write error", zap.Error(err))
+				return
+			}
 		}
 	}
-}
 
 // SendInput 通过HTTP向终端发送输入（用于审批中心等非WS场景）
 func (ctrl *TerminalController) SendInput(c *fiber.Ctx) error {

@@ -539,17 +539,17 @@ func (s *Session) flushDataBatchLocked() {
 		return
 	}
 
-	// 过滤掉内部命令标记（ACA_CMD_BEGIN/END）
-	filtered := filterInternalMarkers(s.dataBatchBuf)
+		// 发送批量数据
+		s.broadcast(StreamEvent{
+			Type: StreamEventData,
+			// NOTE: do not filter internal markers here.
+			// RunCommand relies on markers to capture output deterministically.
+			// Filtering for UI clients is handled in the websocket layer.
+			Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
+		})
 
-	// 发送批量数据
-	s.broadcast(StreamEvent{
-		Type: StreamEventData,
-		Data: base64.StdEncoding.EncodeToString(filtered),
-	})
-
-	s.dataBatchBuf = s.dataBatchBuf[:0]
-}
+		s.dataBatchBuf = s.dataBatchBuf[:0]
+	}
 
 // detectAndHandle 检测AI状态并处理审批
 func (s *Session) detectAndHandle(data []byte) {
@@ -2134,8 +2134,11 @@ func (s *Session) doFlushLogs() {
 	}
 }
 
-// filterInternalMarkers 过滤内部命令标记
-func filterInternalMarkers(data []byte) []byte {
+// FilterInternalMarkers 过滤内部命令标记
+// FilterInternalMarkers removes internal command markers from a terminal byte stream.
+// It is intended for UI rendering only; internal consumers (e.g. RunCommand) may rely on
+// these markers to delimit captured output.
+func FilterInternalMarkers(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
