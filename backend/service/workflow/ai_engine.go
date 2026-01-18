@@ -444,8 +444,14 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 		iteration := iterationBase + i
 		select {
 		case <-ctx.Done():
+			rt.mu.Lock()
+			if len(rt.pending) > 0 {
+				session.Messages = append(session.Messages, rt.pending...)
+				rt.pending = nil
+			}
 			session.Status = "cancelled"
-			e.saveSession(session)
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
 			return
 		default:
 		}
@@ -471,6 +477,10 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 		if err != nil {
 			utils.Error("AI call failed", zap.Error(err))
 			rt.mu.Lock()
+			if len(rt.pending) > 0 {
+				session.Messages = append(session.Messages, rt.pending...)
+				rt.pending = nil
+			}
 			session.Status = "failed"
 			session.Summary = fmt.Sprintf("AI调用失败: %v", err)
 			_ = e.saveSession(session)
@@ -489,33 +499,68 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 			Content: aiResponse,
 		})
 
-			// Parse response
-			parsed, err := ParseAIResponse(aiResponse)
-			if err != nil {
-				utils.Warn("Failed to parse AI response", zap.Error(err))
-				if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
-					e.toolExecutor.emitTerminalAILog(session.Context, "error", "解析 AI 响应失败，将继续尝试下一步", "error", err.Error())
+		// Parse response
+		parsed, err := ParseAIResponse(aiResponse)
+		if err != nil {
+			utils.Warn("Failed to parse AI response", zap.Error(err))
+			if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+				e.toolExecutor.emitTerminalAILog(session.Context, "error", "解析 AI 响应失败，将继续尝试下一步", "error", err.Error())
+			}
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
+			continue
+		}
+
+		// Best-effort AI logs for observability (keeps the old "[AI][type]" stream style).
+		if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+			if strings.TrimSpace(parsed.Thought) != "" {
+				e.toolExecutor.emitTerminalAILog(session.Context, "thinking", strings.TrimSpace(parsed.Thought), "", "")
+			}
+			if parsed.Action != nil && strings.TrimSpace(parsed.Action.Tool) != "" {
+				e.toolExecutor.emitTerminalAILog(session.Context, "decision", fmt.Sprintf("调用工具: %s", strings.TrimSpace(parsed.Action.Tool)), "", "")
+			}
+		}
+
+		// Check if complete
+		if parsed.Complete != nil {
+			summary := strings.TrimSpace(parsed.Complete.Summary)
+
+			// If the user already queued follow-up messages while this completion was being generated,
+			// do NOT terminate the session; treat this completion as a milestone and continue.
+			if len(rt.pending) > 0 {
+				step := AIWorkflowStep{
+					ID:         uuid.New().String(),
+					Iteration:  iteration,
+					Thought:    parsed.Thought,
+					Action:     "complete",
+					ActionArgs: map[string]any{"status": strings.TrimSpace(parsed.Complete.Status)},
+					Result:     summary,
+					Success:    true,
+					Timestamp:  time.Now(),
 				}
+				session.Steps = append(session.Steps, step)
+
+				if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+					msg := summary
+					if msg == "" {
+						msg = "AI 托管已完成"
+					}
+					e.toolExecutor.emitTerminalAILog(session.Context, "info", "AI 托管完成：\n"+msg, "", "")
+				}
+
+				session.Messages = append(session.Messages, rt.pending...)
+				rt.pending = nil
+				session.Status = "running"
+				session.Summary = ""
+				session.CompletedAt = nil
 				_ = e.saveSession(session)
 				rt.mu.Unlock()
 				continue
 			}
 
-			// Best-effort AI logs for observability (keeps the old "[AI][type]" stream style).
-			if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
-				if strings.TrimSpace(parsed.Thought) != "" {
-					e.toolExecutor.emitTerminalAILog(session.Context, "thinking", strings.TrimSpace(parsed.Thought), "", "")
-				}
-				if parsed.Action != nil && strings.TrimSpace(parsed.Action.Tool) != "" {
-					e.toolExecutor.emitTerminalAILog(session.Context, "decision", fmt.Sprintf("调用工具: %s", strings.TrimSpace(parsed.Action.Tool)), "", "")
-				}
-			}
-
-			// Check if complete
-			if parsed.Complete != nil {
-				now := time.Now()
-				session.Status = "completed"
-				session.Summary = parsed.Complete.Summary
+			now := time.Now()
+			session.Status = "completed"
+			session.Summary = summary
 			session.CompletedAt = &now
 			_ = e.saveSession(session)
 			rt.mu.Unlock()
@@ -543,6 +588,18 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 				}
 				session.Steps = append(session.Steps, step)
 
+				// If user messages arrived while the model was deciding to ask, keep running and let the model continue.
+				if len(rt.pending) > 0 {
+					session.Messages = append(session.Messages, rt.pending...)
+					rt.pending = nil
+					session.Status = "running"
+					session.Summary = ""
+					session.CompletedAt = nil
+					_ = e.saveSession(session)
+					rt.mu.Unlock()
+					continue
+				}
+
 				session.Status = "paused"
 				session.Summary = question
 				_ = e.saveSession(session)
@@ -557,6 +614,39 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 				if summary == "" {
 					summary = strings.TrimSpace(parsed.Thought)
 				}
+
+				// Same as <complete>: if follow-up messages exist, keep running.
+				if len(rt.pending) > 0 {
+					step := AIWorkflowStep{
+						ID:         uuid.New().String(),
+						Iteration:  iteration,
+						Thought:    parsed.Thought,
+						Action:     "complete_workflow",
+						ActionArgs: parsed.Action.Args,
+						Result:     summary,
+						Success:    true,
+						Timestamp:  time.Now(),
+					}
+					session.Steps = append(session.Steps, step)
+
+					if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+						msg := summary
+						if msg == "" {
+							msg = "AI 托管已完成"
+						}
+						e.toolExecutor.emitTerminalAILog(session.Context, "info", "AI 托管完成：\n"+msg, "", "")
+					}
+
+					session.Messages = append(session.Messages, rt.pending...)
+					rt.pending = nil
+					session.Status = "running"
+					session.Summary = ""
+					session.CompletedAt = nil
+					_ = e.saveSession(session)
+					rt.mu.Unlock()
+					continue
+				}
+
 				now := time.Now()
 				session.Status = "completed"
 				session.Summary = summary
