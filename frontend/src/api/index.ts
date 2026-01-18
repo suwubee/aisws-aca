@@ -85,7 +85,11 @@ export const taskApi = {
   update: (id: string, data: UpdateTaskRequest) => api.put(`/tasks/${id}`, data),
   delete: (id: string) => api.delete(`/tasks/${id}`),
   move: (id: string, data: MoveTaskRequest) => api.post(`/tasks/${id}/move`, data),
-  start: (id: string) => api.post(`/tasks/${id}/start`)
+  start: (id: string) => api.post(`/tasks/${id}/start`),
+  bindTerminal: (id: string, terminalId: string) =>
+    api.post(`/tasks/${id}/bind-terminal`, { terminal_id: terminalId }),
+  pauseAI: (id: string) => api.post(`/tasks/${id}/pause`),
+  resumeAI: (id: string) => api.post(`/tasks/${id}/resume`)
 }
 
 // Comment API
@@ -109,6 +113,8 @@ export const terminalApi = {
     api.post(`/terminals/${id}/rename`, { title }),
   linkTask: (id: string, taskId: string | null) =>
     api.post(`/terminals/${id}/link-task`, { task_id: taskId }),
+  emitAILog: (id: string, data: { type?: string; message: string; task_id?: string }) =>
+    api.post(`/terminals/${id}/ai-log`, data),
   stats: () => api.get('/terminals/stats'),
   logs: (id: string, params?: TerminalLogsParams) => api.get(`/terminals/${id}/logs`, { params }),
   clearLogs: (id: string) => api.delete(`/terminals/${id}/logs`),

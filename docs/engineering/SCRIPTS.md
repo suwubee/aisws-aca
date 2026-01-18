@@ -4,7 +4,7 @@
 
 ## 0) 初始化向导（可视化）
 
-适用场景：首次部署，希望用 Web 界面引导完成 `.env`、SQLite、默认审核规则、管理员账号，并自动启动服务。
+适用场景：首次部署，希望用 Web 界面引导完成 `.env`、SQLite / PostgreSQL、默认审核规则、管理员账号，并自动启动服务。
 
 ```bash
 ./scripts/quickstart.sh wizard
@@ -75,7 +75,10 @@ scripts\start.bat
 与脚本相关的常见变量：
 - `SERVER_HOST` / `SERVER_PORT`：后端监听
 - `DEMO_MODE`：演示模式（只读）
-- `DATABASE_DSN`：SQLite 路径（默认 `./data/aca.db`，通常落在 `backend/data/aca.db`）
+- `DATABASE_TYPE`：数据库类型（默认 `sqlite`；可选 `postgres`）
+- `DATABASE_DSN`：
+  - SQLite：文件路径（默认 `./data/aca.db`，通常落在 `backend/data/aca.db`）
+  - PostgreSQL：连接 DSN（示例：`host=localhost user=aca password=secret dbname=aca port=5432 sslmode=disable`）
 - `AUTH_USERNAME` / `AUTH_PASSWORD` / `JWT_SECRET`：认证
 - `TERMINAL_DEFAULT_LOGIN_DIR`：终端默认登入目录（新建本地终端会话默认进入，默认 `~/`）
 - `ACA_BACKEND_HOST` / `ACA_BACKEND_PORT` / `ACA_FRONTEND_PORT`：仅开发模式下用于 Vite 代理与端口覆盖（可选）

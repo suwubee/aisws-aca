@@ -32,11 +32,11 @@
 
     <!-- 主内容区 -->
     <n-layout>
-      <n-layout-header class="header">
-        <div class="header-left">
-          <n-button
-            v-if="isMobile"
-            quaternary
+	      <n-layout-header class="header">
+	        <div class="header-left">
+	          <n-button
+	            v-if="isMobile"
+	            quaternary
             size="small"
             class="mobile-menu-btn"
             @click="showMobileMenu = true"
@@ -53,12 +53,23 @@
             <n-breadcrumb-item v-if="currentPageName">
               {{ currentPageName }}
             </n-breadcrumb-item>
-          </n-breadcrumb>
-        </div>
-        <div class="header-right">
-          <n-space align="center">
-            <n-tag
-              v-if="isDemoMode"
+	            </n-breadcrumb>
+	        </div>
+	        <div v-if="isMobile && !isDemoMode" class="header-center">
+	          <n-button
+	            quaternary
+	            size="small"
+	            class="mobile-create-task-btn"
+	            title="新建任务"
+	            @click="openCreateTaskFromHeader"
+	          >
+	            ➕
+	          </n-button>
+	        </div>
+	        <div class="header-right">
+	          <n-space align="center">
+	            <n-tag
+	              v-if="isDemoMode"
               size="small"
               type="warning"
               :bordered="false"
@@ -279,13 +290,11 @@ const baseMenuOptions: MenuOption[] = [
 
 const menuOptions = computed<MenuOption[]>(() => baseMenuOptions)
 
-const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
-  { key: 'dashboard', label: '工作台', icon: '🏠' },
-  { key: 'work-items', label: '工作', icon: '📋' },
-  { key: 'kanban', label: '看板', icon: '📊' },
-  { key: 'terminals', label: '终端', icon: '🧪' },
-  { key: 'settings', label: '设置', icon: '⚙️' }
-]
+	const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
+	  { key: 'dashboard', label: '工作台', icon: '🏠' },
+	  { key: 'terminals', label: '终端', icon: '🧪' },
+	  { key: 'settings', label: '设置', icon: '⚙️' }
+	]
 
 const userOptions = [
   { label: '个人信息', key: 'profile' },
@@ -327,16 +336,21 @@ const currentPageName = computed(() => {
   return null
 })
 
-function handleMenuChange(key: string) {
-  const target = leafMenu[key]
-  if (!target) return
-  router.push(target.path)
-}
+	function handleMenuChange(key: string) {
+	  const target = leafMenu[key]
+	  if (!target) return
+	  router.push(target.path)
+	}
 
-function handleMobileMenuChange(key: string) {
-  showMobileMenu.value = false
-  handleMenuChange(key)
-}
+	function openCreateTaskFromHeader() {
+	  if (isDemoMode.value) return
+	  router.push({ path: '/', query: { create_task: '1' } })
+	}
+
+	function handleMobileMenuChange(key: string) {
+	  showMobileMenu.value = false
+	  handleMenuChange(key)
+	}
 
 function handleUserAction(key: string) {
   if (key === 'logout') {
@@ -424,15 +438,16 @@ watch(isMobile, (mobile) => {
   color: #18a058;
 }
 
-.header {
-  height: var(--app-header-height);
-  padding: 0 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: rgba(22, 33, 62, 0.95);
-  border-bottom: 1px solid #334155;
-}
+	.header {
+	  height: var(--app-header-height);
+	  padding: 0 20px;
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  position: relative;
+	  background: rgba(22, 33, 62, 0.95);
+	  border-bottom: 1px solid #334155;
+	}
 
 .header-left {
   display: flex;
@@ -459,16 +474,32 @@ watch(isMobile, (mobile) => {
   margin-left: 8px;
 }
 
-.header-right {
-  display: flex;
-  align-items: center;
-}
+	.header-right {
+	  display: flex;
+	  align-items: center;
+	}
 
-.content {
-  background: #0f1419;
-  min-height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
-  padding-bottom: calc(var(--app-bottom-nav-height) + env(safe-area-inset-bottom));
-}
+	.header-center {
+	  position: absolute;
+	  left: 50%;
+	  top: 50%;
+	  transform: translate(-50%, -50%);
+	  display: flex;
+	  align-items: center;
+	  justify-content: center;
+	  z-index: 1;
+	}
+
+	.mobile-create-task-btn {
+	  font-size: 16px;
+	  line-height: 1;
+	}
+
+	.content {
+	  background: #0f1419;
+	  min-height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
+	  padding-bottom: calc(var(--app-bottom-nav-height) + env(safe-area-inset-bottom));
+	}
 
 .mobile-bottom-nav {
   position: fixed;

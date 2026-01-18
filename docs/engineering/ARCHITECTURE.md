@@ -9,10 +9,10 @@
   - 终端：`xterm.js` 渲染与交互
   - 移动端：表格 → 卡片化展示，底部导航 + 抽屉菜单
 
-- **后端（Go + Fiber + GORM + SQLite）**
+- **后端（Go + Fiber + GORM + SQLite / PostgreSQL）**
   - REST API：任务/终端/服务器/工作流/计划任务/系统设置
   - WebSocket：终端输出流与状态推送
-  - 数据：SQLite（默认 `./data/aca.db`）
+  - 数据：SQLite（默认 `./data/aca.db`）或 PostgreSQL（`DATABASE_TYPE=postgres`）
 
 - **终端托管（PTY + 可选 tmux）**
   - 统一维护会话、输入输出日志、终端状态

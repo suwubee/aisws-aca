@@ -34,6 +34,9 @@
             <n-space size="small">
               <n-button size="small" :loading="loading" @click="fetchAll">刷新</n-button>
               <n-button size="small" :disabled="isDemoMode" @click="showBatchExecute = true">批量执行</n-button>
+              <n-button v-if="canManage" size="small" :disabled="isDemoMode" @click="handleExport">导出</n-button>
+              <n-button v-if="canManage" size="small" :disabled="isDemoMode" @click="triggerImport">导入</n-button>
+              <input ref="importFileInput" type="file" accept=".csv" style="display: none" @change="handleImport" />
               <n-button v-if="canManage" size="small" @click="openCreateGroup">新建分组</n-button>
               <n-button v-if="canManage" size="small" type="primary" @click="openCreate">添加服务器</n-button>
             </n-space>
@@ -128,6 +131,12 @@
       :servers="servers"
     />
 
+    <ServerShareModal
+      v-model:show="showShareModal"
+      :server="sharingServer"
+      @saved="fetchAll"
+    />
+
     <n-modal
       v-model:show="showCreateTask"
       preset="dialog"
@@ -175,50 +184,6 @@
     </n-modal>
 
     <!-- SSH Terminal Window -->
-    <n-modal
-      v-model:show="showSshTerminal"
-      preset="card"
-      :title="sshTerminalTitle"
-      style="width: min(980px, calc(100vw - 32px)); position: fixed; right: 16px; bottom: 16px; margin: 0"
-      :bordered="false"
-      :show-mask="false"
-      :block-scroll="false"
-      :mask-closable="false"
-      @close="closeAllSshTerminals"
-    >
-      <div class="ssh-terminal-window">
-        <div class="ssh-terminal-tabs">
-          <button
-            v-for="tab in sshTerminals"
-            :key="tab.key"
-            class="ssh-terminal-tab"
-            :class="{ active: tab.key === activeSshKey }"
-            @click="setActiveSshTerminal(tab.key)"
-          >
-            <span class="status-dot" :class="getSshStatusDotClass(tab.status)"></span>
-            <span class="tab-title">{{ tab.title }}</span>
-            <span class="close-btn" @click.stop="closeSshTerminal(tab.key)">×</span>
-          </button>
-        </div>
-
-        <div class="ssh-terminal-content">
-          <div
-            v-for="tab in sshTerminals"
-            :key="tab.key"
-            v-show="tab.key === activeSshKey"
-            class="ssh-terminal-wrapper"
-          >
-            <SSHTerminal
-              :server-id="tab.serverId"
-              @status-change="(s) => updateSshTerminalStatus(tab.key, s)"
-            />
-          </div>
-          <div v-if="sshTerminals.length === 0" class="empty-terminal">
-            <n-empty description="暂无SSH终端" />
-          </div>
-        </div>
-      </div>
-    </n-modal>
   </div>
 </template>
 
@@ -242,11 +207,13 @@ import {
   deleteServer,
   getServerGroups,
   getServers,
-  testConnection
+  testConnection,
+  exportServers,
+  importServers
 } from '@/api/server'
 import BatchExecute from '@/components/BatchExecute.vue'
 import ServerForm from '@/components/ServerForm.vue'
-import SSHTerminal from '@/components/SSHTerminal.vue'
+import ServerShareModal from '@/components/ServerShareModal.vue'
 import TaskForm from '@/components/TaskForm.vue'
 import type { TaskFormModel } from '@/components/TaskForm.vue'
 import { useTaskStore } from '@/stores/task'
@@ -281,6 +248,10 @@ const showBatchExecute = ref(false)
 
 const testingId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
+const importFileInput = ref<HTMLInputElement | null>(null)
+
+const showShareModal = ref(false)
+const sharingServer = ref<SSHServer | null>(null)
 
 const showCreateTask = ref(false)
 const creatingTask = ref(false)
@@ -354,6 +325,7 @@ function mobileServerActionOptions(server: SSHServer) {
 
   if (canManage.value) {
     options.push(
+      { label: '共享', key: 'share' },
       { label: '编辑', key: 'edit' },
       { label: '删除', key: 'delete' }
     )
@@ -370,6 +342,10 @@ function handleMobileServerAction(action: string | number, server: SSHServer) {
   const key = String(action)
   if (key === 'test') {
     void test(server)
+    return
+  }
+  if (key === 'share') {
+    openShareModal(server)
     return
   }
   if (key === 'edit') {
@@ -443,7 +419,7 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
   {
     title: '操作',
     key: 'actions',
-    width: canManage.value ? 360 : 260,
+    width: canManage.value ? 420 : 260,
     render: (row) => {
       const actions: any[] = [
         h(NButton, {
@@ -475,6 +451,12 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
             size: 'tiny',
             quaternary: true,
             disabled: isDemoMode.value,
+            onClick: () => openShareModal(row)
+          }, () => '共享'),
+          h(NButton, {
+            size: 'tiny',
+            quaternary: true,
+            disabled: isDemoMode.value,
             onClick: () => openEdit(row)
           }, () => '编辑'),
           h(NPopconfirm, {
@@ -499,85 +481,24 @@ const columns = computed<DataTableColumns<SSHServer>>(() => [
   }
 ])
 
-type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
-
-interface SSHTerminalTab {
-  key: string
-  serverId: string
-  title: string
-  status: ConnectionStatus
-}
-
-const showSshTerminal = ref(false)
-const sshTerminals = ref<SSHTerminalTab[]>([])
-const activeSshKey = ref<string | null>(null)
-
-const sshTerminalTitle = computed(() => {
-  if (sshTerminals.value.length <= 1) return 'SSH 终端'
-  return `SSH 终端（${sshTerminals.value.length}）`
-})
-
-function getSshStatusDotClass(status: ConnectionStatus) {
-  if (status === 'connected') return 'connected'
-  if (status === 'disconnected') return 'disconnected'
-  return 'connecting'
-}
-
-function openSshTerminal(server: SSHServer) {
+async function openSshTerminal(server: SSHServer) {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
     return
   }
-  const existing = sshTerminals.value.find(t => t.serverId === server.id)
-  if (existing) {
-    activeSshKey.value = existing.key
-    showSshTerminal.value = true
-    return
+
+  try {
+    // 创建终端
+    const terminal = await terminalStore.createTerminal({
+      server_id: server.id,
+      title: server.name || server.host
+    })
+
+    // 跳转到工作台页面并指定终端
+    router.push({ path: '/', query: { terminal: terminal.id } })
+  } catch (error: any) {
+    message.error(error.response?.data?.error || '创建终端失败')
   }
-
-  const key = `${server.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  sshTerminals.value.push({
-    key,
-    serverId: server.id,
-    title: server.name || server.host,
-    status: 'connecting'
-  })
-  activeSshKey.value = key
-  showSshTerminal.value = true
-}
-
-function setActiveSshTerminal(key: string) {
-  activeSshKey.value = key
-}
-
-function updateSshTerminalStatus(key: string, status: ConnectionStatus) {
-  const tab = sshTerminals.value.find(t => t.key === key)
-  if (tab) tab.status = status
-}
-
-function closeSshTerminal(key: string) {
-  const idx = sshTerminals.value.findIndex(t => t.key === key)
-  if (idx < 0) return
-
-  sshTerminals.value.splice(idx, 1)
-
-  if (activeSshKey.value === key) {
-    activeSshKey.value =
-      sshTerminals.value[idx - 1]?.key ||
-      sshTerminals.value[idx]?.key ||
-      sshTerminals.value[0]?.key ||
-      null
-  }
-
-  if (sshTerminals.value.length === 0) {
-    closeAllSshTerminals()
-  }
-}
-
-function closeAllSshTerminals() {
-  showSshTerminal.value = false
-  sshTerminals.value = []
-  activeSshKey.value = null
 }
 
 function openCreateTask(server: SSHServer) {
@@ -717,6 +638,45 @@ async function fetchAll() {
   }
 }
 
+async function handleExport() {
+  try {
+    const resp = await exportServers()
+    const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'servers.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+    message.success('导出成功')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '导出失败')
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click()
+}
+
+async function handleImport(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    const resp = await importServers(file)
+    const { imported, skipped, errors } = resp.data
+    message.success(`导入完成：成功 ${imported}，跳过 ${skipped}`)
+    if (errors?.length > 0) {
+      console.warn('Import errors:', errors)
+    }
+    await fetchAll()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '导入失败')
+  } finally {
+    input.value = ''
+  }
+}
+
 function openCreate() {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
@@ -743,6 +703,19 @@ function openEdit(server: SSHServer) {
   serverFormMode.value = 'edit'
   editingServer.value = server
   showServerForm.value = true
+}
+
+function openShareModal(server: SSHServer) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!isAdmin.value) {
+    message.warning('仅管理员可操作')
+    return
+  }
+  sharingServer.value = server
+  showShareModal.value = true
 }
 
 function handleServerSaved(server: SSHServer) {

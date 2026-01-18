@@ -44,3 +44,7 @@
 
 1. 复制 `.env.example` 为 `.env`
 2. 按需修改（生产环境务必更换 `JWT_SECRET` / 管理员账号密码 / 数据库路径等）
+
+数据库配置：
+- SQLite（默认）：`DATABASE_TYPE=sqlite`，`DATABASE_DSN=./data/aca.db`
+- PostgreSQL：`DATABASE_TYPE=postgres`，`DATABASE_DSN=host=localhost user=aca password=secret dbname=aca port=5432 sslmode=disable`

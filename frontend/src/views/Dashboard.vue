@@ -1,7 +1,7 @@
 <template>
   <div class="dashboard">
     <!-- Top Row: Quick Stats -->
-    <div class="dashboard-row stats-row">
+    <div class="dashboard-row stats-row" v-if="!isMobile">
       <!-- Task Stats -->
       <n-card class="stat-card" size="small" @click="$router.push('/tasks')">
         <div class="stat-content">
@@ -87,6 +87,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
+import { useIsMobile } from '@/utils/useIsMobile'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
@@ -98,6 +99,7 @@ const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
 const isDemoMode = computed(() => authStore.isDemoMode)
+const { isMobile } = useIsMobile()
 
 const showCreateTask = ref(false)
 const newTask = reactive({
@@ -156,6 +158,14 @@ watch(
   }
 )
 
+watch(
+  () => route.query.create_task,
+  () => {
+    void applyCreateTaskQuery()
+  },
+  { immediate: true }
+)
+
 async function applyTerminalQuery() {
   const terminalId = String(route.query.terminal || '').trim()
   if (!terminalId) return
@@ -194,6 +204,16 @@ async function applyTerminalQuery() {
 
   const nextQuery = { ...route.query }
   delete (nextQuery as any).terminal
+  router.replace({ path: route.path, query: nextQuery })
+}
+
+async function applyCreateTaskQuery() {
+  const flag = String(route.query.create_task || '').trim()
+  if (!flag) return
+  showCreateTask.value = true
+
+  const nextQuery = { ...route.query }
+  delete (nextQuery as any).create_task
   router.replace({ path: route.path, query: nextQuery })
 }
 
@@ -320,6 +340,10 @@ async function handleCreateTask() {
     padding: 8px;
     gap: 8px;
     overflow: auto;
+  }
+
+  .stats-row {
+    display: none;
   }
 
   .stats-row {

@@ -16,7 +16,10 @@
 
 - `JWT_SECRET`：务必替换为强随机值
 - `AUTH_USERNAME` / `AUTH_PASSWORD`：替换默认账号密码
-- `DATABASE_DSN`：SQLite 数据库文件路径
+- `DATABASE_TYPE`：数据库类型（默认 `sqlite`；可选 `postgres`）
+- `DATABASE_DSN`：
+  - SQLite：数据库文件路径
+  - PostgreSQL：连接 DSN（示例：`host=localhost user=aca password=secret dbname=aca port=5432 sslmode=disable`）
 - `TERMINAL_DEFAULT_LOGIN_DIR`：默认 `~/`（新建本地终端会话默认进入目录）
 - `DEMO_MODE`：演示模式（`true/false`），开启后 API 仅允许读取（除登出外），用于演示环境防误操作
 
@@ -45,13 +48,18 @@ cd /opt/aca && ./ai-coding-assistant
 
 ## 3) 数据与备份
 
-默认数据库为 SQLite：
+默认数据库为 SQLite（本地文件）；也支持 PostgreSQL（推荐多人/高并发/审计留存场景）。
 
+SQLite：
 - 文件位置：由 `DATABASE_DSN` 决定（默认值为 `./data/aca.db`，通常落在 `backend/data/aca.db`）
 - 备份方式：停止服务后复制该文件即可
 
+PostgreSQL：
+- 备份方式：使用你们的标准 PostgreSQL 备份策略（如 `pg_dump` / 全量快照 / 托管备份）
+
 建议同时备份：
-- `DATABASE_DSN` 指向的 SQLite 文件
+- SQLite：`DATABASE_DSN` 指向的数据库文件
+- PostgreSQL：数据库备份产物（以及连接信息/凭证的安全存放）
 - 业务侧自建的服务器密钥/凭证（如有单独存放）
 
 ## 4) 升级建议

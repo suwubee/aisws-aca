@@ -9,6 +9,7 @@ import (
 // SSHServer SSH服务器配置
 type SSHServer struct {
 	ID         string    `gorm:"primaryKey" json:"id"`
+	UserID     string    `gorm:"index" json:"user_id"` // 所属用户
 	Name       string    `json:"name"`
 	Host       string    `json:"host"`
 	Port       int       `gorm:"default:22" json:"port"`
@@ -26,11 +27,20 @@ type SSHServer struct {
 // ServerGroup 服务器分组
 type ServerGroup struct {
 	ID          string  `gorm:"primaryKey" json:"id"`
+	UserID      string  `gorm:"index" json:"user_id"` // 所属用户
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
 	ParentID    *string `gorm:"index" json:"parent_id"` // 支持嵌套分组
 }
 
+// UserServerShare 用户服务器共享关系
+type UserServerShare struct {
+	ID        string    `gorm:"primaryKey" json:"id"`
+	UserID    string    `gorm:"index;not null" json:"user_id"`
+	ServerID  string    `gorm:"index;not null" json:"server_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 func AutoMigrateSSHServer(db *gorm.DB) error {
-	return db.AutoMigrate(&SSHServer{}, &ServerGroup{})
+	return db.AutoMigrate(&SSHServer{}, &ServerGroup{}, &UserServerShare{})
 }

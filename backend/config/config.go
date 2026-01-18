@@ -27,8 +27,15 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Driver string
-	DSN    string
+	Type  string // sqlite, postgres
+	DSN   string
+	LogDB LogDBConfig // 日志数据库配置
+}
+
+type LogDBConfig struct {
+	Enabled bool   // 是否启用独立日志数据库
+	Type    string // postgres
+	DSN     string
 }
 
 type AuthConfig struct {
@@ -58,6 +65,16 @@ type CORSConfig struct {
 }
 
 func Load() *Config {
+	databaseType := normalizeDatabaseType(getEnv("DATABASE_TYPE", "sqlite"), "sqlite")
+	databaseDSN := resolveDatabaseDSNForType(databaseType, getEnv("DATABASE_DSN", ""))
+
+	logDBEnabled := getEnvBool("LOG_DB_ENABLED", false)
+	logDBType := normalizeDatabaseType(getEnv("LOG_DB_TYPE", "postgres"), "postgres")
+	if logDBType != "postgres" {
+		logDBType = "postgres"
+	}
+	logDBDSN := strings.TrimSpace(getEnv("LOG_DB_DSN", ""))
+
 	return &Config{
 		App: AppConfig{
 			DemoMode: getEnvBool("DEMO_MODE", false),
@@ -67,8 +84,13 @@ func Load() *Config {
 			Port: getEnv("SERVER_PORT", "34007"),
 		},
 		Database: DatabaseConfig{
-			Driver: "sqlite",
-			DSN:    resolveDatabaseDSN(getEnv("DATABASE_DSN", "")),
+			Type: databaseType,
+			DSN:  databaseDSN,
+			LogDB: LogDBConfig{
+				Enabled: logDBEnabled,
+				Type:    logDBType,
+				DSN:     logDBDSN,
+			},
 		},
 		Auth: AuthConfig{
 			JWTSecret:     getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
@@ -137,6 +159,24 @@ func resolveDatabaseDSN(raw string) string {
 		return filepath.Clean(dsn)
 	}
 	return filepath.Clean(filepath.Join(baseDir, dsn))
+}
+
+func resolveDatabaseDSNForType(databaseType, raw string) string {
+	if databaseType == "postgres" {
+		return strings.TrimSpace(raw)
+	}
+	return resolveDatabaseDSN(raw)
+}
+
+func normalizeDatabaseType(raw, defaultType string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	case "postgres", "postgresql":
+		return "postgres"
+	default:
+		return defaultType
+	}
 }
 
 func resolveProjectBackendDir() string {

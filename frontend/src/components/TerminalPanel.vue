@@ -23,14 +23,28 @@
           @click.stop="hideTerminal(terminal.id)"
         >×</span>
       </button>
-      <button class="terminal-tab add-tab" @click="createNewTerminal">
-        +
-      </button>
-      <div class="terminal-actions">
-        <button
-          class="action-btn"
-          @click="showRuleConfig = true"
-          :disabled="!activeTerminalId"
+	      <button class="terminal-tab add-tab" @click="createNewTerminal">
+	        +
+	      </button>
+	      <div class="terminal-actions">
+	        <!-- AI 托管状态入口：显示当前状态，点击打开右侧 AI 托管控制栏 -->
+	        <button
+	          v-if="activeTerminalId"
+	          class="action-btn ai-btn"
+	          :class="aiMenuButtonClass"
+	          :disabled="aiControlLoading"
+	          @click="openAIControlPanel"
+	          :title="aiMenuTitle"
+	        >
+	          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+	            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+	          </svg>
+	          <span class="btn-label">{{ aiMenuLabel }}</span>
+	        </button>
+	        <button
+	          class="action-btn"
+	          @click="showRuleConfig = true"
+	          :disabled="!activeTerminalId"
           title="终端规则配置"
         >
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -138,12 +152,197 @@
           </n-empty>
         </div>
       </div>
-      <div v-if="(showLogs || showApprovals || showWorkflow) && activeTerminalId" class="logs-panel">
-        <TerminalLogs v-if="showLogs" :session-id="activeTerminalId" />
-        <TerminalApprovals v-else-if="showApprovals" :terminal-id="activeTerminalId" />
-        <template v-else>
-          <AIWorkflowSessionPanel v-if="activeWorkflowSessionId" :session-id="activeWorkflowSessionId" />
-          <n-empty v-else description="该终端未关联 AI 托管会话" />
+	      <div v-if="(showLogs || showApprovals || showWorkflow) && activeTerminalId" class="logs-panel">
+	        <TerminalLogs v-if="showLogs" :session-id="activeTerminalId" />
+	        <TerminalApprovals v-else-if="showApprovals" :terminal-id="activeTerminalId" />
+	        <template v-else>
+	          <!-- AI 托管控制面板（保留旧的“需要时对话框 + 下方日志输出”交互） -->
+	          <div class="ai-control-panel">
+	            <div class="ai-control-header">
+	              <div class="ai-control-header-row">
+	                <h3>AI 托管控制</h3>
+	                <div class="ai-control-toolbar">
+	                  <n-button
+	                    v-if="!isAgentMode && !isAIManaged"
+	                    size="small"
+	                    type="primary"
+	                    :loading="aiControlLoading"
+	                    @click="handleEnableAIFromPanel"
+	                  >
+	                    启用 AI
+	                  </n-button>
+	                  <n-button
+	                    v-else-if="isAIRunning || isAgentRunning"
+	                    size="small"
+	                    type="warning"
+	                    :loading="aiControlLoading"
+	                    @click="handlePauseAI"
+	                  >
+	                    暂停
+	                  </n-button>
+	                  <n-button
+	                    v-else-if="isAIPaused || isAgentPaused"
+	                    size="small"
+	                    type="success"
+	                    :loading="aiControlLoading"
+	                    @click="handleResumeAI"
+	                  >
+	                    恢复
+	                  </n-button>
+
+	                  <n-button
+	                    v-if="activeTask"
+	                    size="small"
+	                    quaternary
+	                    :disabled="isDemoMode"
+	                    @click="goToActiveTask"
+	                  >
+	                    管理任务
+	                  </n-button>
+	                  <n-button
+	                    v-else
+	                    size="small"
+	                    quaternary
+	                    :disabled="!activeTerminalId"
+	                    @click="showLinkTaskModal = true"
+	                  >
+	                    关联任务
+	                  </n-button>
+
+	                  <n-tag size="small" :bordered="false" :type="aiControlStatusTagType">
+	                    {{ aiControlStatusLabel }}
+	                  </n-tag>
+	                </div>
+	              </div>
+	            </div>
+	            <div class="ai-control-content">
+	              <!-- AI 托管需要手动接管时，使用旧的“对话框 + 下方日志输出”模式 -->
+	              <div v-if="handoffKind" class="ai-handoff">
+	                <div class="ai-handoff-header">
+	                  <div class="ai-handoff-title">需要手动接管</div>
+                  <n-tag v-if="handoffKind === 'terminal'" size="small" :bordered="false" type="warning">terminal</n-tag>
+                  <n-tag v-else size="small" :bordered="false" type="warning">ask_user</n-tag>
+                </div>
+
+                <pre v-if="handoffKind === 'terminal'" class="ai-handoff-prompt">{{ activePendingApproval?.promptContent || '' }}</pre>
+                <pre v-else class="ai-handoff-prompt">{{ (pendingWorkflowMessage?.content || '').trim() || '—' }}</pre>
+
+                <div class="ai-handoff-actions">
+                  <template v-if="handoffKind === 'terminal'">
+                    <n-space align="center" wrap>
+                      <n-button size="small" type="success" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('y')">
+                        允许 (y)
+                      </n-button>
+                      <n-button size="small" type="error" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('n')">
+                        拒绝 (n)
+                      </n-button>
+                      <n-input
+                        v-model:value="handoffResponse"
+                        placeholder="自定义响应（回车发送）"
+                        clearable
+                        :disabled="isDemoMode"
+                        @keyup.enter="submitHandoffResponse"
+                        style="min-width: 220px"
+                      />
+                      <n-button
+                        type="primary"
+                        size="small"
+                        :loading="handoffSending"
+                        :disabled="isDemoMode || !handoffResponse.trim()"
+                        @click="submitHandoffResponse"
+                      >
+                        发送
+                      </n-button>
+                    </n-space>
+                  </template>
+
+                  <template v-else>
+                    <n-space align="center" wrap>
+                      <n-input
+                        v-model:value="workflowResponse"
+                        placeholder="补充信息/确认内容（回车发送）"
+                        clearable
+                        :disabled="isDemoMode"
+                        @keyup.enter="submitWorkflowResponse"
+                        style="min-width: 240px"
+                      />
+                      <n-button
+                        type="primary"
+                        size="small"
+                        :loading="workflowSending"
+                        :disabled="isDemoMode || !workflowResponse.trim()"
+                        @click="submitWorkflowResponse"
+                      >
+                        发送给 AI
+                      </n-button>
+                      <n-button
+                        size="small"
+                        :loading="workflowSending"
+                        :disabled="isDemoMode"
+                        @click="quickConfirmWorkflow"
+                      >
+                        直接确认继续
+                      </n-button>
+                    </n-space>
+                  </template>
+                </div>
+              </div>
+
+			              <div v-else-if="aiHandoffEmptyText.trim()" class="ai-handoff-empty">
+			                <p>{{ aiHandoffEmptyText }}</p>
+			              </div>
+	
+	              <!-- 始终保留输入框：用于下发指令/补充信息，避免“启用AI后无处输入”卡住 -->
+	              <div class="ai-command-box">
+	                <n-input
+	                  ref="aiCommandInputRef"
+	                  v-model:value="aiCommand"
+	                  type="textarea"
+	                  :rows="3"
+	                  placeholder="输入给 AI 的指令/补充信息（Ctrl+Enter 发送）"
+	                  :disabled="isDemoMode || !activeTerminalId"
+	                  @keydown="handleAICommandKeydown"
+	                />
+	                <div class="ai-command-actions">
+	                  <n-button
+	                    size="small"
+	                    type="primary"
+	                    :disabled="isDemoMode || !aiCommand.trim()"
+	                    :loading="handoffSending || workflowSending || aiControlLoading"
+	                    @click="submitAICommand"
+	                  >
+	                    发送给 AI
+	                  </n-button>
+	                </div>
+	              </div>
+	
+	              <!-- AI 日志（沿用旧日志写入/解析方式） -->
+	              <div class="ai-log-inline">
+	                <div class="ai-log-inline-header">
+	                  <span>🤖 AI日志 <span v-if="aiLogs.length > 0" class="count">{{ aiLogs.length }}</span></span>
+	                  <n-button size="tiny" quaternary :loading="aiLogLoading" @click="refreshAILogs">
+	                    刷新
+	                  </n-button>
+	                </div>
+
+                <div class="ai-log-inline-body">
+                  <n-empty v-if="aiLogs.length === 0" description="暂无AI日志" />
+                  <div v-else class="ai-log-inline-list">
+                    <div
+                      v-for="(log, index) in aiLogs"
+                      :key="index"
+                      class="ai-log-item"
+                      :class="log.type"
+                    >
+                      <span class="log-time">{{ formatAILogTime(log.time) }}</span>
+                      <span class="log-type-badge" :class="log.type">{{ aiLogTypeLabel(log.type) }}</span>
+                      <span class="log-message">{{ log.message }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </template>
       </div>
     </div>
@@ -194,33 +393,71 @@
         还没有可用服务器，请先到「服务器」中添加配置。
       </n-text>
     </n-modal>
+
+    <!-- Link Task Modal -->
+    <n-modal
+      v-model:show="showLinkTaskModal"
+      preset="dialog"
+      title="关联任务"
+      positive-text="关联"
+      negative-text="取消"
+      style="width: min(480px, 94vw)"
+      @positive-click="confirmLinkTask"
+    >
+      <n-form label-placement="left" label-width="90">
+        <n-form-item label="选择任务">
+          <n-select
+            v-model:value="linkTaskForm.taskId"
+            :options="inProgressTaskOptions"
+            clearable
+            placeholder="选择一个进行中的任务"
+          />
+        </n-form-item>
+      </n-form>
+      <n-text depth="3">
+        关联任务后，可启用 AI 托管功能。只能关联进行中的任务。
+      </n-text>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useMessage } from 'naive-ui'
-import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
-import { useTaskStore } from '@/stores/task'
+  import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+  import { useRouter } from 'vue-router'
+  import { useMessage } from 'naive-ui'
+  import { automationApi, terminalApi } from '@/api'
+  import { postAIWorkflowMessage } from '@/api/ai-workflow'
+  import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
+  import { useTaskStore, type Task } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useKeyBindingsStore } from '@/stores/keyBindings'
+import { useAuthStore } from '@/stores/auth'
+import { useApprovalStore, type PendingApproval } from '@/stores/approval'
 import Terminal from './Terminal.vue'
 import TerminalLogs from './TerminalLogs.vue'
-import TerminalApprovals from './TerminalApprovals.vue'
-import TerminalRuleConfig from './TerminalRuleConfig.vue'
-import AIWorkflowSessionPanel from './AIWorkflowSessionPanel.vue'
+	import TerminalApprovals from './TerminalApprovals.vue'
+	import TerminalRuleConfig from './TerminalRuleConfig.vue'
 
-const message = useMessage()
-const terminalStore = useTerminalStore()
-const taskStore = useTaskStore()
-const serverStore = useServerStore()
-const keyBindingsStore = useKeyBindingsStore()
+	const message = useMessage()
+	const router = useRouter()
+	const terminalStore = useTerminalStore()
+	const taskStore = useTaskStore()
+	const serverStore = useServerStore()
+	const keyBindingsStore = useKeyBindingsStore()
+	const authStore = useAuthStore()
+const approvalStore = useApprovalStore()
+const isDemoMode = computed(() => authStore.isDemoMode)
 
 const terminals = computed(() => terminalStore.terminals)
 const activeTerminalId = computed(() => terminalStore.activeTerminalId)
 const activeTerminal = computed(() => terminals.value.find(t => t.id === activeTerminalId.value))
 const taskOptions = computed(() =>
   taskStore.tasks.map(t => ({ label: t.title, value: t.id }))
+)
+const inProgressTaskOptions = computed(() =>
+  taskStore.tasks
+    .filter(t => t.status === 'in_progress')
+    .map(t => ({ label: t.title, value: t.id }))
 )
 const serverOptions = computed(() => serverStore.serverOptions)
 const taskTitleMap = computed(() => {
@@ -237,6 +474,10 @@ const showApprovals = ref(false)
 const showWorkflow = ref(false)
 const showRuleConfig = ref(false)
 const showCreateTerminal = ref(false)
+const showLinkTaskModal = ref(false)
+const linkTaskForm = reactive({
+  taskId: null as string | null
+})
 const createTerminalForm = reactive({
   title: '',
   taskId: null as string | null,
@@ -270,11 +511,718 @@ const quickInputButtons = computed(() => {
     }))
 })
 
-const activeWorkflowSessionId = computed(() => {
-  const taskId = activeTerminal.value?.task_id
-  if (!taskId) return ''
-  const task = taskStore.tasks.find(t => t.id === taskId)
-  return (task?.agent_session_id || '').trim()
+	const activeWorkflowSessionId = computed(() => {
+	  const taskId = activeTerminal.value?.task_id
+	  if (!taskId) return ''
+	  const task = taskStore.tasks.find(t => t.id === taskId)
+	  return (task?.agent_session_id || '').trim()
+	})
+
+	// AI 托管控制相关
+	const activeTask = computed<Task | null>(() => {
+	  const taskId = activeTerminal.value?.task_id
+	  if (!taskId) return null
+	  return taskStore.tasks.find(t => t.id === taskId) || null
+	})
+
+	const aiAssistant = computed(() => {
+	  return activeTerminal.value?.metadata?.ai_assistant || null
+	})
+
+const isAgentMode = computed(() => {
+  const mode = String(activeTask.value?.automation_mode || '').trim().toLowerCase()
+  return mode === 'agent'
+})
+
+const isAgentRunning = computed(() => {
+  return isAgentMode.value && activeTask.value?.status === 'in_progress'
+})
+
+const isAgentPaused = computed(() => {
+  return isAgentMode.value && activeTask.value?.status === 'paused'
+})
+
+const isAIManaged = computed(() => {
+  return activeTask.value?.ai_managed === true
+})
+
+const isAIRunning = computed(() => {
+  // AI 托管并且状态为 running 或 ai_status 未设置但 ai_managed 为 true
+  if (!activeTask.value) return false
+  if (!activeTask.value.ai_managed) return false
+  const status = activeTask.value.ai_status
+  // 如果 ai_status 未定义或为 running，且任务在进行中，显示暂停按钮
+  return (status === 'running' || (!status && activeTask.value.status === 'in_progress'))
+})
+
+	const isAIPaused = computed(() => {
+	  return activeTask.value?.ai_managed === true && activeTask.value?.ai_status === 'paused'
+	})
+
+	function formatAIStatusLabel(status: string) {
+	  const normalized = String(status || '').trim().toLowerCase()
+	  const map: Record<string, string> = {
+	    running: '运行中',
+	    paused: '已暂停',
+	    waiting_reconnect: '等待重连',
+	    stopped: '已停止',
+	    todo: '待处理',
+	    in_progress: '进行中',
+	    done: '已完成',
+	    archived: '已归档',
+	    failed: '失败',
+	    timeout: '超时'
+	  }
+	  return map[normalized] || (normalized ? status : '')
+	}
+
+	const aiControlStatusKind = computed<'running' | 'paused' | 'idle'>(() => {
+	  if (isAIRunning.value || isAgentRunning.value) return 'running'
+	  if (isAIPaused.value || isAgentPaused.value) return 'paused'
+	  return 'idle'
+	})
+
+	const aiControlStatusLabel = computed(() => {
+	  if (!activeTerminal.value) return '未选择终端'
+	  if (!activeTask.value) return '未关联任务'
+
+	  if (isAgentMode.value) {
+	    if (isAgentRunning.value) return '运行中'
+	    if (isAgentPaused.value) return '已暂停'
+	    return formatAIStatusLabel(activeTask.value.status) || '未启动'
+	  }
+
+	  if (!isAIManaged.value) return '未启用'
+	  if (isAIRunning.value) return '运行中'
+	  if (isAIPaused.value) return '已暂停'
+
+	  return formatAIStatusLabel(activeTask.value.ai_status || '') || '已启用'
+	})
+
+	const aiHandoffEmptyText = computed(() => {
+	  if (!activeTerminalId.value) return '请先选择一个终端'
+	  if (!activeTask.value) return '当前终端未关联任务'
+	  if (!isAgentMode.value && !isAIManaged.value) return 'AI 托管未启用'
+	  return ''
+	})
+
+	const aiControlStatusTagType = computed(() => {
+	  if (aiControlStatusKind.value === 'running') return 'success'
+	  if (aiControlStatusKind.value === 'paused') return 'warning'
+	  return 'default'
+	})
+
+	const aiMenuLabel = computed(() => {
+	  if (!activeTerminal.value) return 'AI'
+	  if (!activeTask.value) return 'AI未关联任务'
+	  if (aiControlStatusLabel.value === '未启用') return 'AI未启用'
+	  if (aiControlStatusLabel.value === '运行中') return 'AI运行中'
+	  if (aiControlStatusLabel.value === '已暂停') return 'AI已暂停'
+	  return `AI${aiControlStatusLabel.value}`
+	})
+
+	const aiMenuTitle = computed(() => {
+	  return '打开 AI 托管控制'
+	})
+
+	const aiMenuButtonClass = computed(() => {
+	  if (aiControlStatusKind.value === 'running') return 'state-running'
+	  if (aiControlStatusKind.value === 'paused') return 'state-paused'
+	  return 'state-idle'
+	})
+
+	async function openAIControlPanel() {
+	  showWorkflow.value = true
+	  showLogs.value = false
+	  showApprovals.value = false
+	  await nextTick()
+	  aiCommandInputRef.value?.focus?.()
+	}
+
+	async function goToActiveTask() {
+	  const task = activeTask.value
+	  if (!task) return
+	  await router.push({ name: 'TaskDetail', params: { id: task.id } })
+	}
+
+	function handleAICommandKeydown(e: KeyboardEvent) {
+	  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+	    e.preventDefault()
+	    void submitAICommand()
+	  }
+	}
+
+	const aiControlLoading = ref(false)
+
+type HandoffKind = 'terminal' | 'workflow' | null
+
+const activePendingApproval = computed<PendingApproval | null>(() => {
+  const tid = String(activeTerminalId.value || '').trim()
+  if (!tid) return null
+  return approvalStore.pendingApprovals.find(p => p.terminalId === tid || p.id === tid) || null
+})
+
+interface ApprovalNeededMessage {
+  id: string
+  terminal_id: string | null
+  title: string
+  content: string
+  context: string
+  created_at: string
+}
+
+const pendingWorkflowMessage = ref<ApprovalNeededMessage | null>(null)
+const workflowResponse = ref('')
+const workflowSending = ref(false)
+
+const handoffResponse = ref('')
+const handoffSending = ref(false)
+
+const aiCommand = ref('')
+const aiCommandInputRef = ref<any>(null)
+
+function normalizeResponseInput(input: string) {
+  const raw = input ?? ''
+  if (raw === '\r' || raw === '\n' || raw === '\r\n') return raw
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+  if (raw.endsWith('\n') || raw.endsWith('\r')) return raw
+  return `${trimmed}\r`
+}
+
+function getWorkflowSessionId(msg: ApprovalNeededMessage | null) {
+  const raw = (msg?.context || '').trim()
+  if (!raw) return ''
+  try {
+    const ctx = JSON.parse(raw)
+    return String(ctx?.workflow_session_id || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+const handoffKind = computed<HandoffKind>(() => {
+  if (activePendingApproval.value) return 'terminal'
+  if (getWorkflowSessionId(pendingWorkflowMessage.value)) return 'workflow'
+  return null
+})
+
+watch(activePendingApproval, () => {
+  handoffResponse.value = ''
+})
+
+watch(pendingWorkflowMessage, () => {
+  workflowResponse.value = ''
+})
+
+async function submitHandoffResponse() {
+  const approval = activePendingApproval.value
+  if (!approval) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (handoffSending.value) return
+
+  const normalized = normalizeResponseInput(handoffResponse.value)
+  if (!normalized) return
+
+  handoffSending.value = true
+  try {
+    await approvalStore.respondToApproval(approval.terminalId, normalized)
+    handoffResponse.value = ''
+    message.success('已发送审批响应')
+  } catch (e: any) {
+    message.error(e?.message || '发送审批响应失败')
+  } finally {
+    handoffSending.value = false
+  }
+}
+
+async function quickRespond(value: 'y' | 'n') {
+  const approval = activePendingApproval.value
+  if (!approval) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (handoffSending.value) return
+
+  handoffSending.value = true
+  try {
+    await approvalStore.respondToApproval(approval.terminalId, normalizeResponseInput(value))
+    message.success('已发送审批响应')
+  } catch (e: any) {
+    message.error(e?.message || '发送审批响应失败')
+  } finally {
+    handoffSending.value = false
+  }
+}
+
+async function fetchPendingWorkflowMessage() {
+  const tid = String(activeTerminalId.value || '').trim()
+  if (!tid) {
+    pendingWorkflowMessage.value = null
+    return
+  }
+  try {
+    const { data } = await automationApi.listMessages({
+      status: 'unread',
+      type: 'approval_needed',
+      terminal_id: tid,
+      limit: 20,
+      offset: 0
+    })
+    const items = (data?.items || []) as ApprovalNeededMessage[]
+    const found = items.find(m => Boolean(getWorkflowSessionId(m)))
+    pendingWorkflowMessage.value = found || null
+  } catch (e) {
+    console.error('Failed to fetch approval_needed messages:', e)
+  }
+}
+
+let workflowPollTimer: number | null = null
+function stopWorkflowPoll() {
+  if (workflowPollTimer) {
+    window.clearInterval(workflowPollTimer)
+    workflowPollTimer = null
+  }
+}
+
+function startWorkflowPoll() {
+  stopWorkflowPoll()
+  workflowPollTimer = window.setInterval(() => {
+    void fetchPendingWorkflowMessage()
+  }, 5000)
+}
+
+watch([showWorkflow, activeTerminalId], ([visible, tid]) => {
+  if (!visible) {
+    stopWorkflowPoll()
+    pendingWorkflowMessage.value = null
+    return
+  }
+  if (!tid) {
+    stopWorkflowPoll()
+    pendingWorkflowMessage.value = null
+    return
+  }
+  void fetchPendingWorkflowMessage()
+  startWorkflowPoll()
+})
+
+async function submitWorkflowResponse() {
+  const msg = pendingWorkflowMessage.value
+  const mid = String(msg?.id || '').trim()
+  if (!mid) return
+  const sessionId = getWorkflowSessionId(msg)
+  if (!sessionId) return
+  const input = (workflowResponse.value || '').trim()
+  if (!input) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (workflowSending.value) return
+
+  workflowSending.value = true
+  try {
+    await postAIWorkflowMessage(sessionId, input)
+    workflowResponse.value = ''
+    await automationApi.handleMessage(mid, 'submitted_workflow_message')
+    await fetchPendingWorkflowMessage()
+    message.success('已发送给 AI，会话继续执行')
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '提交失败')
+  } finally {
+    workflowSending.value = false
+  }
+}
+
+async function quickConfirmWorkflow() {
+  if (workflowSending.value) return
+  workflowResponse.value = '已确认，请继续执行。'
+  await submitWorkflowResponse()
+}
+
+	async function submitAICommand() {
+	  if (isDemoMode.value) {
+	    message.warning('演示模式：只读')
+	    return
+	  }
+	  const terminalId = String(activeTerminalId.value || '').trim()
+	  if (!terminalId) {
+	    message.error('请先选择一个终端')
+	    return
+	  }
+
+	  const raw = String(aiCommand.value || '')
+	  const input = raw.trim()
+	  if (!input) return
+
+	  // 优先用于“需要确认”的对话框输入（保持旧交互：输入在对话框下方）
+	  if (handoffKind.value === 'terminal') {
+	    handoffResponse.value = input
+	    await submitHandoffResponse()
+	    aiCommand.value = ''
+	    await nextTick()
+	    aiCommandInputRef.value?.focus?.()
+	    return
+	  }
+	  if (handoffKind.value === 'workflow') {
+	    workflowResponse.value = input
+	    await submitWorkflowResponse()
+	    aiCommand.value = ''
+	    await nextTick()
+	    aiCommandInputRef.value?.focus?.()
+	    return
+	  }
+
+	  // 如果存在工作流会话，则直接作为补充信息投递，避免“启用AI后无处下指令”
+	  const sessionId = String(activeWorkflowSessionId.value || '').trim()
+	  if (sessionId) {
+	    try {
+	      await postAIWorkflowMessage(sessionId, input)
+	      aiCommand.value = ''
+	      message.success('已发送给 AI')
+	      await nextTick()
+	      aiCommandInputRef.value?.focus?.()
+	    } catch (e: any) {
+	      message.error(e?.response?.data?.error || '发送失败')
+	    }
+	    return
+	  }
+
+	  // 非工作流：仅在检测到 AI CLI 可输入时才允许下发，避免把“指令”误当作 shell 命令执行
+		  const task = activeTask.value
+		  if (!task) {
+		    message.warning('当前终端未关联任务，无法下发 AI 指令')
+		    return
+		  }
+		  const mode = String(task.automation_mode || '').trim().toLowerCase()
+		  if (mode === 'none') {
+		    // “仅记录”任务：将该输入作为 AI 托管(动态) 的目标启动（不依赖终端内 AI CLI）
+		    const terminal = activeTerminal.value
+		    const serverId = String(terminal?.metadata?.server_id || task.server_id || '').trim()
+		    if (!serverId) {
+		      message.warning('请先连接到服务器')
+		      return
+		    }
+		    if (aiControlLoading.value) return
+		    aiControlLoading.value = true
+		    try {
+		      await terminalApi.emitAILog(terminalId, {
+		        type: 'info',
+		        message: `用户目标: ${input}`,
+		        task_id: task.id
+		      }).catch(() => {})
+		      await taskStore.updateTask(task.id, {
+		        automation_mode: 'agent',
+		        initial_prompt: input,
+		        target_server_ids: [serverId]
+		      })
+		      const started = await taskStore.startTask(task.id)
+		      const startedTerminalId = String(started?.terminal_id || '').trim()
+		      if (startedTerminalId) {
+		        await terminalStore.fetchTerminals()
+		        terminalStore.setActiveTerminal(startedTerminalId)
+		      }
+		      aiCommand.value = ''
+		      message.success('已开始 AI 托管(动态)')
+		      await nextTick()
+		      aiCommandInputRef.value?.focus?.()
+		    } catch (e: any) {
+		      console.error('Start agent from record-only task failed:', e)
+		      message.error(e?.response?.data?.error || e?.message || '启动 AI 托管失败')
+		      // 兜底：仍写入一条 AI 日志，避免用户输入丢失
+		      try {
+		        await terminalApi.emitAILog(terminalId, {
+		          type: 'info',
+		          message: `用户指令: ${input}`,
+		          task_id: task.id
+		        })
+		        aiCommand.value = ''
+		      } catch {
+		        // ignore
+		      }
+		    } finally {
+		      aiControlLoading.value = false
+		    }
+		    return
+		  }
+
+	  if (!isAIManaged.value) {
+	    message.warning('请先启用 AI 托管')
+	    return
+	  }
+
+	  const assistant = aiAssistant.value
+	  if (!assistant?.detected) {
+	    message.warning('未检测到 AI CLI 就绪，请先在终端进入 AI CLI 后再发送')
+	    return
+	  }
+	  const state = String(assistant.state || '').trim()
+	  if (state && state !== 'waiting_input') {
+	    message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，请等待可输入`)
+	    return
+	  }
+
+	  const normalized = normalizeResponseInput(input)
+	  terminalRefs.get(terminalId)?.sendInput?.(normalized)
+	  aiCommand.value = ''
+	  message.success('已发送给 AI')
+	  await nextTick()
+	  aiCommandInputRef.value?.focus?.()
+	}
+
+// 从右侧面板启用 AI 托管（支持自动创建任务）
+async function handleEnableAIFromPanel() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (aiControlLoading.value) return
+
+  // 打开右侧 AI 托管控制栏，避免“启用后无处输入”
+  showWorkflow.value = true
+  showLogs.value = false
+  showApprovals.value = false
+  await nextTick()
+  aiCommandInputRef.value?.focus?.()
+
+  const terminalId = activeTerminalId.value
+  if (!terminalId) {
+    message.error('请先选择一个终端')
+    return
+  }
+
+  aiControlLoading.value = true
+  try {
+    // 如果已有任务，直接启用 AI
+    if (activeTask.value) {
+      await taskStore.updateTask(activeTask.value.id, {
+        ai_managed: true,
+        ai_status: 'running'
+      })
+      message.success('AI托管已启用')
+      await taskStore.fetchTasks()
+      return
+    }
+
+    // 没有任务，需要先创建任务
+    const terminal = activeTerminal.value
+    if (!terminal) {
+      message.error('终端信息获取失败')
+      return
+    }
+
+    // 获取终端关联的服务器信息
+    const serverId = terminal.metadata?.server_id || null
+    if (!serverId) {
+      message.error('请先连接到服务器')
+      return
+    }
+
+    // 创建新任务：用于给当前终端“挂载”AI托管（不自动新开终端）
+    const newTask = await taskStore.createAutomationTask({
+      title: terminal.title || `AI 托管任务 - ${new Date().toLocaleString()}`,
+      description: '自动创建的 AI 托管任务',
+      server_id: serverId,
+      automation_mode: 'none',
+      ai_managed: true
+    })
+
+    // 绑定当前终端为该任务的活跃终端（同时写回终端 task_id）
+    await taskStore.bindTerminal(newTask.id, terminalId)
+
+    // 将 AI 状态置为 running（便于展示暂停/恢复按钮）
+    await taskStore.updateTask(newTask.id, { ai_status: 'running' })
+
+    // 刷新数据
+    await taskStore.fetchTasks()
+    await terminalStore.fetchTerminals()
+
+    message.success('已创建任务并启用 AI 托管')
+  } catch (e: any) {
+    console.error('Enable AI from panel failed:', e)
+    message.error(e.response?.data?.error || e.message || '启用AI托管失败')
+  } finally {
+    aiControlLoading.value = false
+  }
+}
+
+async function handlePauseAI() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!activeTask.value || aiControlLoading.value) return
+  aiControlLoading.value = true
+  try {
+    await taskStore.pauseAI(activeTask.value.id)
+    message.success('AI已暂停')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '暂停AI失败')
+  } finally {
+    aiControlLoading.value = false
+  }
+}
+
+async function handleResumeAI() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!activeTask.value || aiControlLoading.value) return
+  aiControlLoading.value = true
+  try {
+    await taskStore.resumeAI(activeTask.value.id)
+    message.success('AI已恢复')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '恢复AI失败')
+  } finally {
+    aiControlLoading.value = false
+  }
+}
+
+// AI 日志（沿用旧日志写入/解析方式）
+type AILogType = 'thinking' | 'action' | 'decision' | 'error' | 'info' | string
+interface AILogEntry {
+  type: AILogType
+  message: string
+  time: Date
+}
+
+const aiLogs = ref<AILogEntry[]>([])
+const aiLogLoading = ref(false)
+let aiLogWs: WebSocket | null = null
+let aiLogReconnectTimer: number | null = null
+let aiLogDestroyed = false
+
+function formatAILogTime(date: Date) {
+  return date.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function aiLogTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    thinking: '思考',
+    action: '执行',
+    decision: '决策',
+    error: '错误',
+    info: '信息'
+  }
+  return labels[type] || type
+}
+
+function parseAILogFromSystemLog(content: string) {
+  const text = (content || '').trim()
+  const match = text.match(/^\[AI\]\[([a-zA-Z_]+)\]\s*/i)
+  if (!match) return null
+  const rawType = (match[1] || '').toLowerCase()
+  const type = (['thinking', 'action', 'decision', 'error', 'info'] as const).includes(rawType as any)
+    ? (rawType as AILogEntry['type'])
+    : 'info'
+  const messageText = text.replace(/^\[AI\]\[[a-zA-Z_]+\]\s*/i, '').trim()
+  return { type, message: messageText }
+}
+
+async function fetchPersistedAILogs(terminalId: string) {
+  const tid = String(terminalId || '').trim()
+  if (!tid) return
+  try {
+    const { data } = await terminalApi.logs(tid, {
+      limit: 200,
+      offset: 0,
+      type: 'system',
+      order: 'asc'
+    })
+    const items = (data?.items || []) as Array<{ content: string; created_at: string }>
+    const parsed: AILogEntry[] = []
+    for (const item of items) {
+      if (!item?.content) continue
+      const parsedLog = parseAILogFromSystemLog(item.content)
+      if (!parsedLog) continue
+      const t = new Date(item.created_at)
+      parsed.push({
+        type: parsedLog.type,
+        message: parsedLog.message,
+        time: Number.isNaN(t.getTime()) ? new Date() : t
+      })
+    }
+    aiLogs.value = parsed.slice(-200)
+  } catch (e) {
+    console.error('Failed to fetch persisted AI logs:', e)
+  }
+}
+
+function stopAILogStream() {
+  if (aiLogReconnectTimer) {
+    window.clearTimeout(aiLogReconnectTimer)
+    aiLogReconnectTimer = null
+  }
+  if (aiLogWs) {
+    aiLogWs.onclose = null
+    aiLogWs.close()
+    aiLogWs = null
+  }
+}
+
+function connectAILogWs(terminalId: string) {
+  if (aiLogDestroyed) return
+  const tid = String(terminalId || '').trim()
+  if (!tid) return
+
+  stopAILogStream()
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const token = localStorage.getItem('token')
+  const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws?sessionId=${tid}&token=${token}`
+
+  aiLogWs = new WebSocket(wsUrl)
+  aiLogWs.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'ai_log' && msg.ai_log?.type && msg.ai_log?.message) {
+        aiLogs.value.push({ type: msg.ai_log.type, message: msg.ai_log.message, time: new Date() })
+        if (aiLogs.value.length > 200) {
+          aiLogs.value = aiLogs.value.slice(-200)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse AI log:', e)
+    }
+  }
+  aiLogWs.onclose = () => {
+    aiLogWs = null
+    if (aiLogDestroyed) return
+    aiLogReconnectTimer = window.setTimeout(() => {
+      aiLogReconnectTimer = null
+      if (aiLogDestroyed) return
+      connectAILogWs(tid)
+    }, 2000)
+  }
+}
+
+async function refreshAILogs() {
+  const tid = String(activeTerminalId.value || '').trim()
+  if (!tid || aiLogLoading.value) return
+  aiLogLoading.value = true
+  try {
+    await fetchPersistedAILogs(tid)
+  } finally {
+    aiLogLoading.value = false
+  }
+}
+
+watch([showWorkflow, activeTerminalId], ([visible, tid]) => {
+  stopAILogStream()
+  aiLogs.value = []
+
+  if (!visible) return
+  const id = String(tid || '').trim()
+  if (!id) return
+  void refreshAILogs()
+  connectAILogWs(id)
 })
 
 // Terminal 组件引用
@@ -391,6 +1339,9 @@ watch([isFullscreen, isFloating], ([fullscreen, floating]) => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleEsc)
+  stopWorkflowPoll()
+  aiLogDestroyed = true
+  stopAILogStream()
 })
 
 function setActiveTerminal(id: string) {
@@ -425,6 +1376,28 @@ async function confirmCreateTerminal() {
     }
   } catch (error) {
     message.error('创建终端失败')
+  }
+}
+
+async function confirmLinkTask() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  const terminalId = activeTerminalId.value
+  const taskId = linkTaskForm.taskId
+  if (!terminalId || !taskId) {
+    message.error('请选择要关联的任务')
+    return
+  }
+  try {
+    await terminalStore.linkTask(terminalId, taskId)
+    showLinkTaskModal.value = false
+    linkTaskForm.taskId = null
+    await taskStore.fetchTasks()
+    message.success('终端已关联任务')
+  } catch (error) {
+    message.error('关联任务失败')
   }
 }
 
@@ -564,6 +1537,61 @@ function getStatusClass(terminal: TerminalTab) {
   color: #f87171;
 }
 
+/* AI 托管控制按钮样式 */
+.action-btn.ai-btn {
+  width: auto;
+  padding: 4px 10px;
+  gap: 4px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+	.action-btn.ai-btn:hover {
+	  background: rgba(148, 163, 184, 0.18);
+	  border-color: rgba(148, 163, 184, 0.35);
+	  color: #fff;
+	}
+
+	.action-btn.ai-btn.state-paused,
+	.action-btn.ai-btn.pause {
+	  background: rgba(240, 160, 32, 0.2);
+	  color: #f0a020;
+	  border-color: rgba(240, 160, 32, 0.4);
+	}
+
+	.action-btn.ai-btn.state-paused:hover,
+	.action-btn.ai-btn.pause:hover {
+	  background: rgba(240, 160, 32, 0.3);
+	}
+
+	.action-btn.ai-btn.state-running,
+	.action-btn.ai-btn.resume {
+	  background: rgba(24, 160, 88, 0.2);
+	  color: #18a058;
+	  border-color: rgba(24, 160, 88, 0.4);
+	}
+
+	.action-btn.ai-btn.link {
+	  background: rgba(100, 120, 200, 0.2);
+	  color: #8090d0;
+	  border-color: rgba(100, 120, 200, 0.4);
+}
+
+.action-btn.ai-btn.link:hover {
+  background: rgba(100, 120, 200, 0.3);
+}
+
+.action-btn.ai-btn .btn-label {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.action-btn.ai-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .terminal-tab {
   padding: 6px 12px;
   border-radius: 4px;
@@ -654,6 +1682,10 @@ function getStatusClass(terminal: TerminalTab) {
   width: 400px;
   border-left: 1px solid #333;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
 .terminal-wrapper {
@@ -708,6 +1740,207 @@ function getStatusClass(terminal: TerminalTab) {
   justify-content: center;
 }
 
+/* AI 托管控制面板 */
+.ai-control-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  min-height: 0;
+}
+
+	.ai-command-box {
+	  padding: 10px;
+	  border-radius: 8px;
+	  background: #252525;
+	  border: 1px solid #333;
+	}
+
+	.ai-control-header {
+	  padding: 10px 12px;
+	  border-bottom: 1px solid #333;
+	}
+
+	.ai-control-header-row {
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  gap: 10px;
+	  flex-wrap: wrap;
+	}
+
+	.ai-control-toolbar {
+	  display: flex;
+	  align-items: center;
+	  gap: 8px;
+	  flex-wrap: wrap;
+	}
+
+	.ai-control-header h3 {
+	  margin: 0;
+	  font-size: 14px;
+	  font-weight: 500;
+	  color: #fff;
+	}
+
+.ai-control-content {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+	.ai-command-actions {
+	  display: flex;
+	  justify-content: flex-end;
+	  margin-top: 8px;
+	}
+
+.ai-handoff {
+  padding: 12px;
+  background: #222;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.ai-handoff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ai-handoff-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.ai-handoff-prompt {
+  margin: 0;
+  padding: 10px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e5e7eb;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.ai-handoff-actions {
+  margin-top: 10px;
+}
+
+.ai-handoff-empty {
+  padding: 12px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.ai-handoff-empty p {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+  color: #888;
+}
+
+	.ai-handoff-empty .hint {
+	  font-size: 11px;
+	  color: #666;
+	}
+
+.ai-log-inline {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+	.ai-log-inline-header {
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  gap: 8px;
+	  padding: 4px 0;
+	  border-bottom: 1px solid #333;
+	  background: transparent;
+	  font-size: 12px;
+	  color: #cbd5e1;
+	}
+
+	.ai-log-inline-header .count {
+	  margin-left: 6px;
+	  padding: 1px 5px;
+	  font-size: 10px;
+	  background: rgba(255, 255, 255, 0.2);
+	  border-radius: 8px;
+	}
+
+.ai-log-inline-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 0 0 0;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+	.ai-log-inline-list {
+	  display: flex;
+	  flex-direction: column;
+	  font-size: 11px;
+	  font-family: 'Menlo', 'Monaco', monospace;
+	}
+
+.ai-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #333;
+}
+
+.ai-log-item:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: #666;
+  flex-shrink: 0;
+}
+
+.log-type-badge {
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.log-type-badge.thinking { background: #3b82f6; color: white; }
+.log-type-badge.action { background: #10b981; color: white; }
+.log-type-badge.decision { background: #f59e0b; color: white; }
+.log-type-badge.error { background: #ef4444; color: white; }
+.log-type-badge.info { background: #6b7280; color: white; }
+
+.log-message {
+  color: #ddd;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.ai-log-item.error .log-message {
+  color: #f87171;
+}
+
 @media (max-width: 768px) {
   .terminal-panel.is-floating {
     top: 0;
@@ -734,6 +1967,8 @@ function getStatusClass(terminal: TerminalTab) {
     height: 40%;
     border-left: none;
     border-top: 1px solid #333;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 </style>

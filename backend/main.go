@@ -57,18 +57,48 @@ func main() {
 	}
 
 	// 确保数据目录存在
-	dataDir := filepath.Dir(cfg.Database.DSN)
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		utils.Error("Failed to create data directory", zap.Error(err))
-		log.Fatal(err)
+	if cfg.Database.Type == "" || cfg.Database.Type == "sqlite" {
+		if cfg.Database.DSN != "" &&
+			cfg.Database.DSN != ":memory:" &&
+			!strings.HasPrefix(cfg.Database.DSN, "file:") &&
+			!strings.Contains(cfg.Database.DSN, "://") {
+			dataDir := filepath.Dir(cfg.Database.DSN)
+			if err := os.MkdirAll(dataDir, 0755); err != nil {
+				utils.Error("Failed to create data directory", zap.Error(err))
+				log.Fatal(err)
+			}
+		}
 	}
 
-	// 初始化数据库
-	if err := model.InitDB(cfg.Database.DSN); err != nil {
-		utils.Error("Failed to initialize database", zap.Error(err))
-		log.Fatal(err)
+	// 初始化主数据库
+	dbCfg := model.DBConfig{
+		Type: cfg.Database.Type,
+		DSN:  cfg.Database.DSN,
 	}
-	utils.Info("Database initialized", zap.String("dsn", cfg.Database.DSN))
+	mainDB, err := model.InitDatabase(dbCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	model.DB = mainDB
+	utils.Info("Database initialized", zap.String("type", cfg.Database.Type))
+
+	// 初始化日志数据库（如果启用）
+	if cfg.Database.LogDB.Enabled && cfg.Database.LogDB.DSN != "" {
+		logDBCfg := model.DBConfig{
+			Type: cfg.Database.LogDB.Type,
+			DSN:  cfg.Database.LogDB.DSN,
+		}
+		logDB, err := model.InitLogDatabase(logDBCfg)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize log database: %v, using main database for logs", err)
+			model.LogDB = mainDB
+		} else {
+			model.LogDB = logDB
+			utils.Info("Log database initialized", zap.String("type", cfg.Database.LogDB.Type))
+		}
+	} else {
+		model.LogDB = mainDB
+	}
 
 	// Ensure builtin defaults exist (prompt templates / key bindings / settings).
 	if err := promptsvc.EnsureDefaults(); err != nil {

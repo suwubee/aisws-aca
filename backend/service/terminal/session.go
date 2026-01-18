@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -292,6 +293,11 @@ func (s *Session) SetStartDir(dir string) {
 	s.startDir = strings.TrimSpace(dir)
 }
 
+// GetWorkDir 获取当前工作目录
+func (s *Session) GetWorkDir() string {
+	return s.startDir
+}
+
 // Start 启动会话
 func (s *Session) Start() error {
 	return s.StartWithTmux(false)
@@ -533,14 +539,17 @@ func (s *Session) flushDataBatchLocked() {
 		return
 	}
 
-	// 发送批量数据
-	s.broadcast(StreamEvent{
-		Type: StreamEventData,
-		Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
-	})
+		// 发送批量数据
+		s.broadcast(StreamEvent{
+			Type: StreamEventData,
+			// NOTE: do not filter internal markers here.
+			// RunCommand relies on markers to capture output deterministically.
+			// Filtering for UI clients is handled in the websocket layer.
+			Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
+		})
 
-	s.dataBatchBuf = s.dataBatchBuf[:0]
-}
+		s.dataBatchBuf = s.dataBatchBuf[:0]
+	}
 
 // detectAndHandle 检测AI状态并处理审批
 func (s *Session) detectAndHandle(data []byte) {
@@ -1462,17 +1471,35 @@ func (s *Session) SetTitle(title string) {
 
 func (s *Session) SetTaskID(taskID *string) {
 	s.metaMutex.Lock()
-	s.taskID = taskID
-	s.metadata.TaskID = taskID
+	// NOTE: fiber/fasthttp may return strings backed by an internal buffer (zero-copy).
+	// Do not retain those string headers/pointers beyond the request lifecycle.
+	// Always copy the value we store in the session to avoid later corruption.
+	if taskID == nil || strings.TrimSpace(*taskID) == "" {
+		s.taskID = nil
+		s.metadata.TaskID = nil
+		s.metaMutex.Unlock()
+		return
+	}
+
+	copied := strings.Clone(strings.TrimSpace(*taskID))
+	s.taskID = &copied
+	s.metadata.TaskID = s.taskID
 	s.metaMutex.Unlock()
 }
 
 func (s *Session) SetServerInfo(serverID *string, name, host string) {
 	s.metaMutex.Lock()
-	s.serverID = serverID
-	s.metadata.ServerID = serverID
-	s.metadata.ServerName = strings.TrimSpace(name)
-	s.metadata.ServerHost = strings.TrimSpace(host)
+	// Same reason as SetTaskID: copy values to avoid retaining unsafe string headers.
+	if serverID == nil || strings.TrimSpace(*serverID) == "" {
+		s.serverID = nil
+		s.metadata.ServerID = nil
+	} else {
+		copied := strings.Clone(strings.TrimSpace(*serverID))
+		s.serverID = &copied
+		s.metadata.ServerID = s.serverID
+	}
+	s.metadata.ServerName = strings.Clone(strings.TrimSpace(name))
+	s.metadata.ServerHost = strings.Clone(strings.TrimSpace(host))
 	s.metaMutex.Unlock()
 }
 
@@ -1559,10 +1586,14 @@ func (s *Session) flushInputLineLocked() {
 	if line == "" {
 		return
 	}
+	// 过滤内部命令标记（ACA_CMD_BEGIN/END、ACA_CODE、ACA_EOF等）
+	if isInternalMarkerLine(line) {
+		return
+	}
 	s.addLog("input", line+"\n")
 }
 
-// addOutputLog 将PTY输出按行聚合，过滤提示符/回显后写入日志缓冲
+// addOutputLog 将PTY输出按行聚合，过滤提示符/回显/内部标记后写入日志缓冲
 func (s *Session) addOutputLog(data []byte) {
 	s.ioBufMutex.Lock()
 	lines := s.consumeOutputLinesLocked(data)
@@ -1575,6 +1606,10 @@ func (s *Session) addOutputLog(data []byte) {
 			continue
 		}
 		if isShellPromptOrCommandLine(line) {
+			continue
+		}
+		// 过滤内部命令标记行（ACA_CMD_BEGIN/END、ACA_CODE、ACA_EOF等）
+		if isInternalMarkerLine(line) {
 			continue
 		}
 		s.addLog("output", line+"\n")
@@ -1989,6 +2024,38 @@ func isShellPromptOrCommandLine(line string) bool {
 	return false
 }
 
+// isInternalMarkerLine 检查单行是否包含内部命令标记
+func isInternalMarkerLine(line string) bool {
+	// 直接包含标记
+	if strings.Contains(line, "__ACA_CMD_BEGIN_") ||
+		strings.Contains(line, "__ACA_CMD_END_") ||
+		strings.Contains(line, "ACA_CODE=$?") ||
+		strings.Contains(line, "ACA_EOF_") ||
+		strings.Contains(line, "ACA_TASK_EXIT_CODE:") ||
+		strings.Contains(line, "ACA_TASK_DONE") ||
+		strings.Contains(line, "ACA_TASK_PAUSE") {
+		return true
+	}
+	// echo 命令中包含标记
+	if strings.Contains(line, "echo '") {
+		if strings.Contains(line, "__ACA_CMD_") ||
+			strings.Contains(line, "ACA_CODE") ||
+			strings.Contains(line, "ACA_EOF_") ||
+			strings.Contains(line, "ACA_TASK_") {
+			return true
+		}
+	}
+	// bash heredoc 命令
+	if strings.Contains(line, "bash <<'ACA_") {
+		return true
+	}
+	// unset ACA_CODE
+	if strings.Contains(line, "unset ACA_CODE") {
+		return true
+	}
+	return false
+}
+
 // stripANSI 去除ANSI转义码
 func stripANSI(s string) string {
 	// 移除ANSI转义序列
@@ -2065,4 +2132,81 @@ func (s *Session) doFlushLogs() {
 			utils.Warn("Failed to save terminal logs", zap.Error(err))
 		}
 	}
+}
+
+// FilterInternalMarkers 过滤内部命令标记
+// FilterInternalMarkers removes internal command markers from a terminal byte stream.
+// It is intended for UI rendering only; internal consumers (e.g. RunCommand) may rely on
+// these markers to delimit captured output.
+func FilterInternalMarkers(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+
+	// 快速检查是否包含标记
+	if !bytes.Contains(data, []byte("__ACA_CMD_")) &&
+		!bytes.Contains(data, []byte("ACA_CODE")) &&
+		!bytes.Contains(data, []byte("ACA_EOF_")) &&
+		!bytes.Contains(data, []byte("ACA_TASK_")) {
+		return data
+	}
+
+	// 使用正则替换方式过滤标记（更可靠，能处理跨行情况）
+	result := data
+
+	// 过滤 echo '__ACA_CMD_BEGIN_xxx__' 命令
+	result = bytes.ReplaceAll(result, []byte("echo '"), []byte("\x00ECHO_"))
+	for {
+		beginIdx := bytes.Index(result, []byte("\x00ECHO___ACA_"))
+		if beginIdx == -1 {
+			break
+		}
+		endIdx := bytes.Index(result[beginIdx:], []byte("'"))
+		if endIdx == -1 {
+			break
+		}
+		// 删除整个 echo 命令
+		endIdx = beginIdx + endIdx + 1
+		// 检查是否有 && 或 ; 后续
+		if endIdx < len(result) && (result[endIdx] == '&' || result[endIdx] == ';' || result[endIdx] == ' ') {
+			// 继续查找行尾
+			lineEnd := bytes.IndexByte(result[endIdx:], '\n')
+			if lineEnd != -1 {
+				endIdx = endIdx + lineEnd + 1
+			} else {
+				endIdx = len(result)
+			}
+		}
+		result = append(result[:beginIdx], result[endIdx:]...)
+	}
+	// 恢复普通 echo
+	result = bytes.ReplaceAll(result, []byte("\x00ECHO_"), []byte("echo '"))
+
+	// 按行过滤
+	lines := bytes.Split(result, []byte("\n"))
+	filtered := make([][]byte, 0, len(lines))
+
+	for _, line := range lines {
+		// 跳过包含内部标记的行
+		if bytes.Contains(line, []byte("__ACA_CMD_BEGIN_")) ||
+			bytes.Contains(line, []byte("__ACA_CMD_END_")) ||
+			bytes.Contains(line, []byte("ACA_CODE=$?")) ||
+			bytes.Contains(line, []byte("ACA_CODE=")) ||
+			bytes.Contains(line, []byte("unset ACA_CODE")) ||
+			bytes.Contains(line, []byte("ACA_EOF_")) ||
+			bytes.Contains(line, []byte("ACA_TASK_EXIT_CODE")) ||
+			bytes.Contains(line, []byte("ACA_TASK_DONE")) ||
+			bytes.Contains(line, []byte("ACA_TASK_PAUSE")) ||
+			bytes.Contains(line, []byte("bash <<'ACA_")) {
+			continue
+		}
+		// 跳过以 echo '__ACA 开头的行
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("echo '")) && bytes.Contains(trimmed, []byte("__ACA_")) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+
+	return bytes.Join(filtered, []byte("\n"))
 }

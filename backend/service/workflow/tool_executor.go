@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -210,6 +211,12 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 		return &ToolResult{Success: false, Error: "command is required"}
 	}
 
+	restartLike := isRestartLikeCommand(command)
+	taskID := ""
+	if sessionCtx != nil {
+		taskID = strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
+	}
+
 	workDir, _ := args["work_dir"].(string)
 	if strings.TrimSpace(workDir) == "" {
 		workDir = strings.TrimSpace(getStringFromMap(sessionCtx, "work_dir"))
@@ -232,6 +239,13 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 
 	// 优先使用“终端执行模式”：让 AI 真正在工作台可见的终端里敲命令，便于实时观察/接管。
 	if execMode == "terminal" && e.terminal != nil {
+		// 若任务处于“预期断开/等待重连”，非重启类命令应等待重连完成后再执行，避免 AI 指令乱序/串任务。
+		if taskID != "" && model.DB != nil && !restartLike {
+			if err := waitForTaskReconnect(taskID, 5*time.Minute); err != nil {
+				return &ToolResult{Success: false, Error: err.Error()}
+			}
+		}
+
 		terminalID := e.ensureTerminalForServer(sessionCtx, serverID)
 		if strings.TrimSpace(terminalID) != "" {
 			displayCmd := strings.TrimSpace(command)
@@ -242,8 +256,35 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 
 			session, err := e.terminal.GetOrResumeSession(terminalID)
 			if err == nil && session != nil {
+				// 标记“预期断开”：当 AI 执行重启类命令时，允许后续自动重连逻辑接管。
+				if restartLike && taskID != "" && model.DB != nil {
+					now := time.Now()
+					_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+						"expect_disconnect":  true,
+						"ai_status":          "waiting_reconnect",
+						"ai_pause_reason":    "",
+						"reconnect_attempts": 0,
+						"last_reconnect_at":  nil,
+						"updated_at":         now,
+					}).Error
+				}
+
 				output, exitCode, runErr := session.RunCommand(command, workDir, 0)
 				if runErr != nil {
+					if restartLike && taskID != "" && isExpectedDisconnectError(runErr) {
+						e.emitTerminalAILog(sessionCtx, "warning", fmt.Sprintf("[%s] 终端已断开（预期重启），等待自动重连…", strings.TrimSpace(serverID)), "", "")
+						return &ToolResult{Success: true, Output: strings.TrimSpace(output)}
+					}
+					// 重启类命令未导致断开：清理“预期断开”标记，避免后续命令无谓等待。
+					if restartLike && taskID != "" && model.DB != nil {
+						now := time.Now()
+						_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+							"expect_disconnect": false,
+							"ai_status":         "running",
+							"ai_pause_reason":   "",
+							"updated_at":        now,
+						}).Error
+					}
 					msg := fmt.Sprintf("[%s] 命令执行失败: %v", strings.TrimSpace(serverID), runErr)
 					if strings.TrimSpace(output) != "" {
 						msg = msg + "\n" + strings.TrimRight(output, "\n")
@@ -252,6 +293,17 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 					}
 					e.emitTerminalAILog(sessionCtx, "error", msg, "", "")
 					return &ToolResult{Success: false, Error: runErr.Error(), Output: output}
+				}
+
+				// 重启类命令未导致断开：清理“预期断开”标记，避免后续命令无谓等待。
+				if restartLike && taskID != "" && model.DB != nil {
+					now := time.Now()
+					_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+						"expect_disconnect": false,
+						"ai_status":         "running",
+						"ai_pause_reason":   "",
+						"updated_at":        now,
+					}).Error
 				}
 
 				out := strings.TrimRight(output, "\n")
@@ -299,7 +351,86 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 	} else {
 		e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s]\n%s", strings.TrimSpace(serverID), out), "", "")
 	}
+
+	// 重启类命令未导致断开：清理“预期断开”标记，避免后续命令无谓等待。
+	if restartLike && taskID != "" && model.DB != nil {
+		now := time.Now()
+		_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+			"expect_disconnect": false,
+			"ai_status":         "running",
+			"ai_pause_reason":   "",
+			"updated_at":        now,
+		}).Error
+	}
+
 	return &ToolResult{Success: true, Output: output}
+}
+
+func isRestartLikeCommand(command string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	if cmd == "" {
+		return false
+	}
+
+	// common patterns; keep broad (false positives are acceptable, false negatives are costly)
+	if strings.Contains(cmd, " reboot") || cmd == "reboot" || strings.HasPrefix(cmd, "reboot ") {
+		return true
+	}
+	if strings.Contains(cmd, "shutdown") {
+		// shutdown -r / --reboot / now
+		if strings.Contains(cmd, "-r") || strings.Contains(cmd, "--reboot") {
+			return true
+		}
+	}
+	if strings.Contains(cmd, "init 6") {
+		return true
+	}
+	if strings.Contains(cmd, "systemctl reboot") || strings.Contains(cmd, "systemctl poweroff") {
+		return true
+	}
+	if strings.Contains(cmd, "systemctl restart") {
+		return true
+	}
+	return false
+}
+
+func waitForTaskReconnect(taskID string, timeout time.Duration) error {
+	if model.DB == nil {
+		return nil
+	}
+	id := strings.TrimSpace(taskID)
+	if id == "" {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		var task model.Task
+		if err := model.DB.Select("expect_disconnect", "ai_status", "ai_pause_reason").First(&task, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if !task.ExpectDisconnect {
+			if strings.EqualFold(strings.TrimSpace(task.AIStatus), "paused") && strings.EqualFold(strings.TrimSpace(task.AIPauseReason), "reconnect_timeout") {
+				return errors.New("task reconnect timed out")
+			}
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for task reconnect (%s)", timeout)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func isExpectedDisconnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "terminal session closed") || strings.Contains(msg, "terminal subscription closed")
 }
 
 func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[string]any) *ToolResult {
@@ -556,30 +687,95 @@ func (e *ToolExecutor) ensureTerminalForServer(sessionCtx map[string]any, server
 		return ""
 	}
 
+	taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
+
 	terminalByServer := getStringMapFromContext(sessionCtx, "terminal_ids_by_server")
 	if terminalByServer == nil {
 		terminalByServer = map[string]string{}
 	}
 
+	// 优先使用任务的 ActiveTerminalID（避免重启后上下文仍指向旧终端导致重复创建）
+	if taskID != "" && model.DB != nil {
+		var task model.Task
+		if err := model.DB.Select("active_terminal_id").First(&task, "id = ?", taskID).Error; err == nil {
+			if task.ActiveTerminalID != nil {
+				active := strings.TrimSpace(*task.ActiveTerminalID)
+				if active != "" {
+					var t model.TerminalSession
+					if err := model.DB.Select("id", "server_id", "task_id").First(&t, "id = ?", active).Error; err == nil {
+						if t.ServerID != nil && strings.TrimSpace(*t.ServerID) == sid {
+							if t.TaskID == nil || strings.TrimSpace(*t.TaskID) == "" || strings.TrimSpace(*t.TaskID) == taskID {
+								if sess, err := e.terminal.GetOrResumeSession(active); err == nil && sess != nil {
+									terminalByServer[sid] = active
+									sessionCtx["terminal_ids_by_server"] = terminalByServer
+									sessionCtx["terminal_id"] = active
+									return active
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if existing := strings.TrimSpace(terminalByServer[sid]); existing != "" {
-		if sess, err := e.terminal.GetOrResumeSession(existing); err == nil && sess != nil {
-			sessionCtx["terminal_id"] = existing
-			return existing
+		// 任务隔离：禁止复用其他任务的终端
+		if taskID != "" && model.DB != nil {
+			var t model.TerminalSession
+			if err := model.DB.Select("task_id").First(&t, "id = ?", existing).Error; err == nil {
+				if t.TaskID != nil {
+					bound := strings.TrimSpace(*t.TaskID)
+					if bound != "" && bound != taskID {
+						delete(terminalByServer, sid)
+						sessionCtx["terminal_ids_by_server"] = terminalByServer
+						existing = ""
+					}
+				}
+			}
+		}
+		if existing != "" {
+			if sess, err := e.terminal.GetOrResumeSession(existing); err == nil && sess != nil {
+				sessionCtx["terminal_id"] = existing
+				if taskID != "" && model.DB != nil {
+					_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+						"active_terminal_id": existing,
+						"updated_at":         time.Now(),
+					}).Error
+				}
+				return existing
+			}
 		}
 		delete(terminalByServer, sid)
 	}
 
 	// 如果上下文已带 terminal_id（例如 StartTaskAgent 创建并由前端打开的默认终端），
 	// 且该终端绑定的 server_id 与当前选择的服务器一致，则优先复用，避免创建第二个终端导致“AI 在后台跑，工作台终端静止”。
-	if current := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id")); current != "" && model.DB != nil {
+	current := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id"))
+	if current != "" && model.DB != nil {
 		var t model.TerminalSession
-		if err := model.DB.Select("id", "server_id").First(&t, "id = ?", current).Error; err == nil {
+		if err := model.DB.Select("id", "server_id", "task_id").First(&t, "id = ?", current).Error; err == nil {
 			if t.ServerID != nil && strings.TrimSpace(*t.ServerID) == sid {
-				if sess, err := e.terminal.GetOrResumeSession(current); err == nil && sess != nil {
-					terminalByServer[sid] = current
-					sessionCtx["terminal_ids_by_server"] = terminalByServer
-					sessionCtx["terminal_id"] = current
-					return current
+				if taskID != "" && t.TaskID != nil {
+					bound := strings.TrimSpace(*t.TaskID)
+					if bound != "" && bound != taskID {
+						// 不同任务必须新建终端：跳过复用
+						current = ""
+					}
+				}
+				if current != "" {
+					if sess, err := e.terminal.GetOrResumeSession(current); err == nil && sess != nil {
+						terminalByServer[sid] = current
+						sessionCtx["terminal_ids_by_server"] = terminalByServer
+						sessionCtx["terminal_id"] = current
+						if taskID != "" {
+							_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+								"active_terminal_id": current,
+								"updated_at":         time.Now(),
+							}).Error
+						}
+						return current
+					}
 				}
 			}
 		}
@@ -591,10 +787,15 @@ func (e *ToolExecutor) ensureTerminalForServer(sessionCtx map[string]any, server
 	}
 
 	terminalID := session.ID()
-	taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
 	if taskID != "" {
 		taskIDCopy := taskID
 		_ = e.terminal.LinkTask(terminalID, &taskIDCopy)
+		if model.DB != nil {
+			_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
+				"active_terminal_id": terminalID,
+				"updated_at":         time.Now(),
+			}).Error
+		}
 	}
 
 	title := "AI托管"

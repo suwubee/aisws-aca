@@ -36,7 +36,8 @@ type SetupConfig struct {
 
 	FrontendPort int `json:"frontend_port"`
 
-	DatabaseDSN string `json:"database_dsn"` // e.g. ./data/aca.db (relative to backend/)
+	DatabaseType string `json:"database_type"` // sqlite | postgres
+	DatabaseDSN  string `json:"database_dsn"`  // sqlite: ./data/aca.db (relative to backend/), postgres: DSN string
 
 	AdminUsername string `json:"admin_username"`
 	AdminEmail    string `json:"admin_email"`
@@ -508,7 +509,7 @@ const indexHTML = `<!doctype html>
     <div class="wrap">
       <div class="card">
         <h1>AI Coding Assistant · 初始化向导</h1>
-        <div class="muted">首次启动会写入 <code>.env</code>，初始化 SQLite，设置默认审核规则与管理员账号，并启动后端/前端。</div>
+        <div class="muted">首次启动会写入 <code>.env</code>，初始化 SQLite / PostgreSQL，设置默认审核规则与管理员账号，并启动后端/前端。</div>
 
         <h2>环境检测</h2>
         <div id="preflight" class="inline muted">加载中…</div>
@@ -550,7 +551,14 @@ const indexHTML = `<!doctype html>
             <input id="frontend_port" type="number" min="1" max="65535" />
           </div>
           <div>
-            <label>SQLite DSN（相对 backend/）</label>
+            <label>数据库类型</label>
+            <select id="database_type">
+              <option value="sqlite">SQLite（本地文件）</option>
+              <option value="postgres">PostgreSQL</option>
+            </select>
+          </div>
+          <div>
+            <label>数据库 DSN</label>
             <input id="database_dsn" placeholder="./data/aca.db" />
           </div>
         </div>
@@ -680,12 +688,25 @@ const indexHTML = `<!doctype html>
         el('server_host').value = env.SERVER_HOST || data.default_host || '0.0.0.0';
         el('server_port').value = Number(env.SERVER_PORT || data.recommended_port || 34007);
         el('frontend_port').value = Number(env.ACA_FRONTEND_PORT || data.recommended_frontend_port || 34001);
+        const dbType = String(env.DATABASE_TYPE || 'sqlite').toLowerCase();
+        el('database_type').value = (dbType === 'postgresql' ? 'postgres' : dbType);
         el('database_dsn').value = env.DATABASE_DSN || './data/aca.db';
         el('admin_username').value = env.AUTH_USERNAME || 'admin';
         el('admin_password').value = env.AUTH_PASSWORD || 'admin123';
         el('jwt_secret').value = env.JWT_SECRET || '';
         el('terminal_default_login_dir').value = env.TERMINAL_DEFAULT_LOGIN_DIR || '~/';
         el('demo_mode').checked = (String(env.DEMO_MODE || 'false').toLowerCase() === 'true');
+
+        refreshDatabasePlaceholder();
+      }
+
+      function refreshDatabasePlaceholder() {
+        const t = (el('database_type').value || 'sqlite').toLowerCase();
+        if (t === 'postgres') {
+          el('database_dsn').placeholder = 'host=localhost user=aca password=secret dbname=aca port=5432 sslmode=disable';
+          return;
+        }
+        el('database_dsn').placeholder = './data/aca.db';
       }
 
       function linesToArray(text) {
@@ -705,6 +726,7 @@ const indexHTML = `<!doctype html>
           server_host: el('server_host').value || '0.0.0.0',
           server_port: Number(el('server_port').value || 34007),
           frontend_port: Number(el('frontend_port').value || 34001),
+          database_type: el('database_type').value || 'sqlite',
           database_dsn: el('database_dsn').value || './data/aca.db',
           admin_username: el('admin_username').value || 'admin',
           admin_email: el('admin_email').value || '',
@@ -769,6 +791,7 @@ const indexHTML = `<!doctype html>
       }
 
       startBtn.addEventListener('click', start);
+      el('database_type').addEventListener('change', refreshDatabasePlaceholder);
       quitBtn.addEventListener('click', async () => {
         await fetch('/api/quit', { method: 'POST' });
       });

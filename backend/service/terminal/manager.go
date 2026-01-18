@@ -341,7 +341,7 @@ func (m *Manager) waitSSHSession(session *Session, adapter *sshservice.SSHTermin
 		}
 	}
 
-	m.completeTaskIfNeeded(session.TaskID(), session.ID())
+	m.maybeAutoReconnectTaskTerminal(session.TaskID(), session.ID())
 
 	session.broadcast(StreamEvent{
 		Type:     StreamEventExit,
@@ -417,8 +417,9 @@ func (m *Manager) CloseSession(id string) error {
 	now := time.Now()
 	if model.DB != nil {
 		if err := model.DB.Model(&model.TerminalSession{}).Where("id = ?", id).Updates(map[string]interface{}{
-			"status":    "exited",
-			"closed_at": now,
+			"status":       "exited",
+			"closed_at":    now,
+			"close_reason": "user_close",
 		}).Error; err != nil {
 			utils.Warn("Failed to update session status to exited", zap.String("id", id), zap.Error(err))
 		}
@@ -566,4 +567,145 @@ func (m *Manager) GetSessionCount() int {
 		return true
 	})
 	return count
+}
+
+// RestartSession 重启终端会话
+// 关闭旧会话，创建新会话，保留任务绑定和工作目录
+func (m *Manager) RestartSession(oldID string) (*Session, error) {
+	oldSession := m.GetSession(oldID)
+	if oldSession == nil {
+		// Allow restart after backend restart for tmux-backed sessions.
+		resumed, err := m.GetOrResumeSession(oldID)
+		if err != nil {
+			return nil, err
+		}
+		oldSession = resumed
+	}
+
+	var (
+		taskID      *string
+		title       string
+		serverID    *string
+		lastWorkDir string
+	)
+
+	if oldSession != nil {
+		// 获取旧会话的元数据
+		taskID = oldSession.TaskID()
+		title = oldSession.Title()
+		serverID = oldSession.Metadata().ServerID
+		lastWorkDir = strings.TrimSpace(oldSession.GetWorkDir())
+	}
+
+	// 兜底：允许重启已不在内存中的 SSH 会话（用 DB 快照恢复必要信息）。
+	if oldSession == nil {
+		if model.DB == nil {
+			return nil, errors.New("session not found")
+		}
+
+		var dbSession model.TerminalSession
+		if err := model.DB.First(&dbSession, "id = ?", oldID).Error; err != nil {
+			return nil, errors.New("session not found")
+		}
+
+		taskID = dbSession.TaskID
+		title = strings.TrimSpace(dbSession.Title)
+		serverID = dbSession.ServerID
+		lastWorkDir = strings.TrimSpace(dbSession.LastWorkDir)
+	}
+
+	if strings.TrimSpace(title) == "" {
+		title = "Terminal"
+	}
+
+	// 创建新会话
+	var newSession *Session
+	var err error
+
+	if serverID != nil && strings.TrimSpace(*serverID) != "" {
+		// SSH 会话
+		newSession, err = m.CreateSSHSession(strings.TrimSpace(*serverID))
+	} else {
+		// 本地会话
+		newSession, err = m.CreateSession(title, taskID)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 确保新会话继承必要属性，并写回数据库（SSH 创建时默认 task_id 为空）
+	if strings.TrimSpace(title) != "" {
+		_ = m.RenameSession(newSession.ID(), title)
+	}
+	if taskID != nil && strings.TrimSpace(*taskID) != "" {
+		_ = m.LinkTask(newSession.ID(), taskID)
+	}
+
+	// 关闭旧会话（如果仍存在）
+	if oldSession != nil {
+		if err := oldSession.Close(); err != nil {
+			utils.Warn("Failed to close old session during restart",
+				zap.String("id", oldID),
+				zap.Error(err))
+		}
+		m.sessions.Delete(oldID)
+	}
+
+	// 更新旧会话的数据库记录
+	now := time.Now()
+	if model.DB != nil {
+		if err := model.DB.Model(&model.TerminalSession{}).
+			Where("id = ?", oldID).
+			Updates(map[string]interface{}{
+				"status":        "exited",
+				"closed_at":     now,
+				"close_reason":  "restart",
+				"last_work_dir": lastWorkDir,
+			}).Error; err != nil {
+			utils.Warn("Failed to update old session during restart",
+				zap.String("id", oldID),
+				zap.Error(err))
+		}
+	}
+
+	// 更新旧会话的 ReplacedByTerminalID
+	if model.DB != nil {
+		if err := model.DB.Model(&model.TerminalSession{}).
+			Where("id = ?", oldID).
+			Update("replaced_by_terminal_id", newSession.ID()).Error; err != nil {
+			utils.Warn("Failed to update session replacement chain",
+				zap.String("id", oldID),
+				zap.Error(err))
+		}
+	}
+
+	// 更新任务的 ActiveTerminalID
+	if taskID != nil && model.DB != nil {
+		if err := model.DB.Model(&model.Task{}).
+			Where("id = ?", *taskID).
+			Updates(map[string]interface{}{
+				"active_terminal_id": newSession.ID(),
+				"updated_at":         now,
+			}).Error; err != nil {
+			utils.Warn("Failed to update task active terminal during restart",
+				zap.Stringp("task_id", taskID),
+				zap.Error(err))
+		}
+	}
+
+	// 如果有工作目录，切换到该目录
+	if strings.TrimSpace(lastWorkDir) != "" {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			_ = newSession.Write([]byte("cd -- " + quoteShellPathForTerminal(lastWorkDir) + "\r"))
+		}()
+	}
+
+	utils.Info("Restarted terminal session",
+		zap.String("old_id", oldID),
+		zap.String("new_id", newSession.ID()),
+		zap.Stringp("task_id", taskID))
+
+	return newSession, nil
 }

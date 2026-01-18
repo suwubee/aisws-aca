@@ -10,6 +10,7 @@ const (
 
 type Project struct {
 	ID          string `gorm:"primaryKey" json:"id"`
+	UserID      string `gorm:"index" json:"user_id"` // 所属用户
 	Name        string `gorm:"not null" json:"name"`
 	Description string `json:"description"`
 	Remark      string `json:"remark"`
@@ -34,6 +35,7 @@ type Project struct {
 // ProjectGroup 项目集/项目组（Portfolio/Group）
 type ProjectGroup struct {
 	ID          string  `gorm:"primaryKey" json:"id"`
+	UserID      string  `gorm:"index" json:"user_id"` // 所属用户
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
 	Remark      string  `json:"remark"`

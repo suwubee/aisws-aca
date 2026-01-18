@@ -15,7 +15,14 @@
           <n-button v-if="linkedTerminal" type="info" @click="handleOpenTerminal(linkedTerminal.id)">
             📺 打开终端
           </n-button>
-          <n-button type="warning" :disabled="isDemoMode" @click="handleStopTask">
+          <!-- AI托管暂停/恢复按钮 -->
+          <n-button v-if="isAIRunning" type="warning" :disabled="isDemoMode" @click="handlePauseAI">
+            ⏸ 暂停AI
+          </n-button>
+          <n-button v-else-if="isAIPaused" type="success" :disabled="isDemoMode" @click="handleResumeAI">
+            ▶ 恢复AI
+          </n-button>
+          <n-button type="error" :disabled="isDemoMode" @click="handleStopTask">
             ⏹ 终止任务
           </n-button>
         </template>
@@ -26,7 +33,12 @@
           </n-button>
         </template>
         <!-- 通用按钮 -->
-        <n-button type="error" :disabled="isDemoMode" @click="handleDeleteTask">
+        <n-button
+          type="error"
+          :disabled="isDemoMode || !canDeleteTask"
+          :title="canDeleteTask ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除'"
+          @click="handleDeleteTask"
+        >
           🗑 删除
         </n-button>
       </div>
@@ -36,7 +48,7 @@
       <div v-if="task" class="task-content">
         <!-- 任务基本信息 -->
         <n-card title="基本信息" size="small">
-          <n-descriptions :column="2" label-placement="left">
+          <n-descriptions :column="isMobileView ? 2 : 4" label-placement="left">
             <n-descriptions-item label="标题">{{ task.title }}</n-descriptions-item>
             <n-descriptions-item label="状态">
               <n-tag :type="statusType">{{ statusLabel }}</n-tag>
@@ -51,32 +63,40 @@
             <n-descriptions-item label="创建时间">
               {{ formatTime(task.created_at) }}
             </n-descriptions-item>
-            <n-descriptions-item v-if="task.description" label="描述" :span="2">
+            <n-descriptions-item label="AI状态" v-if="task.ai_status">
+              <n-tag :type="task.ai_status === 'running' ? 'success' : task.ai_status === 'paused' ? 'warning' : 'default'">
+                {{ task.ai_status }}
+              </n-tag>
+            </n-descriptions-item>
+            <n-descriptions-item v-if="task.description" label="描述" :span="isMobileView ? 2 : 4">
               {{ task.description }}
             </n-descriptions-item>
-            <n-descriptions-item label="备注" :span="2">
-              <n-space vertical :size="6" style="width: 100%">
-                <n-input
-                  v-model:value="remarkDraft"
-                  type="textarea"
-                  :rows="2"
-                  placeholder="可用于临时提醒/记录关键结论（可选）"
-                  :disabled="isDemoMode"
-                />
-                <n-space justify="end" :size="6">
-                  <n-button
-                    size="small"
-                    type="primary"
-                    :loading="savingRemark"
-                    :disabled="isDemoMode"
-                    @click="saveRemark"
-                  >
-                    保存备注
-                  </n-button>
-                </n-space>
-              </n-space>
-            </n-descriptions-item>
           </n-descriptions>
+        </n-card>
+
+        <!-- 备注（单独卡片，容量更大） -->
+        <n-card title="备注" size="small">
+          <n-input
+            v-model:value="remarkDraft"
+            type="textarea"
+            :rows="4"
+            placeholder="可用于临时提醒/记录关键结论（可选）"
+            :disabled="isDemoMode"
+            style="width: 100%"
+          />
+          <template #footer>
+            <n-space justify="end">
+              <n-button
+                size="small"
+                type="primary"
+                :loading="savingRemark"
+                :disabled="isDemoMode"
+                @click="saveRemark"
+              >
+                保存备注
+              </n-button>
+            </n-space>
+          </template>
         </n-card>
 
         <!-- 自动化配置 -->
@@ -229,6 +249,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
+import { useIsMobile } from '@/utils/useIsMobile'
 import AIWorkflowSessionPanel from '@/components/AIWorkflowSessionPanel.vue'
 
 const route = useRoute()
@@ -238,7 +259,9 @@ const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
+const { isMobile } = useIsMobile()
 const isDemoMode = computed(() => authStore.isDemoMode)
+const isMobileView = computed(() => isMobile.value)
 
 const loading = ref(true)
 const task = ref<Task | null>(null)
@@ -257,6 +280,10 @@ const serverLoading = ref(false)
 const taskId = computed(() => route.params.id as string)
 
 const taskStatus = computed(() => task.value?.status || '')
+const canDeleteTask = computed(() => {
+  const s = String(taskStatus.value || '').trim().toLowerCase()
+  return s === 'done' || s === 'failed' || s === 'timeout' || s === 'archived'
+})
 
 const statusLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -317,6 +344,14 @@ const canStartTask = computed(() => {
     String(task.value.initial_prompt || '').trim() ||
     task.value.ai_managed
   )
+})
+
+const isAIRunning = computed(() => {
+  return task.value?.ai_status === 'running'
+})
+
+const isAIPaused = computed(() => {
+  return task.value?.ai_status === 'paused' || task.value?.ai_pause_reason === 'user_paused'
 })
 
 const serverLabel = computed(() => {
@@ -466,6 +501,36 @@ function handleOpenTerminal(terminalId: string) {
   router.push({ path: '/', query: { terminal: terminalId } })
 }
 
+async function handlePauseAI() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!task.value) return
+  try {
+    await taskStore.pauseAI(task.value.id)
+    message.success('AI已暂停')
+    await loadTaskDetail()
+  } catch (error: any) {
+    message.error(error.response?.data?.error || '暂停AI失败')
+  }
+}
+
+async function handleResumeAI() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!task.value) return
+  try {
+    await taskStore.resumeAI(task.value.id)
+    message.success('AI已恢复')
+    await loadTaskDetail()
+  } catch (error: any) {
+    message.error(error.response?.data?.error || '恢复AI失败')
+  }
+}
+
 async function handleStopTask() {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
@@ -495,13 +560,17 @@ async function handleDeleteTask() {
     message.warning('演示模式：只读')
     return
   }
+  if (!canDeleteTask.value) {
+    message.warning('仅已完成/失败/超时/归档的任务可删除')
+    return
+  }
   if (!task.value) return
   try {
     await taskStore.deleteTask(task.value.id)
     message.success('任务已删除')
     router.push('/tasks')
-  } catch (error) {
-    message.error('删除任务失败')
+  } catch (error: any) {
+    message.error(error?.response?.data?.error || error?.message || '删除任务失败')
   }
 }
 
