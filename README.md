@@ -27,6 +27,51 @@ AISWS-ACA 是 AISWS（AI SUPER WORKSTATION / AI超站）品牌下的开源产品
 - **AI 审核（审批治理）**：识别确认/选择提示，规则/AI 决策 `approve/reject/input/ask_user` 并审计
 - **工作流与计划任务**：Runbook 雏形（可视化编排 + cron/单次触发）
 
+## 更新记录（Update）
+
+> 以下为从 `ba8d0a9feacb783f410bad6b0810967bedfb06ac`（2026-01-15）到当前版本的更新摘要，按提交顺序列出，便于核对版本差异。
+
+### Update 列表（Commit）
+
+- 2026-01-15 `ba8d0a9` feat: add PostgreSQL database support
+- 2026-01-16 `1e31e90` fix: filter internal ACA_CMD markers from terminal output
+- 2026-01-16 `0838cdc` feat: bind task terminals and auto-reconnect on restart
+- 2026-01-16 `9c4c2d8` docs: update database and terminal restart notes
+- 2026-01-16 `a658ef5` fix: prevent terminal task_id corruption
+- 2026-01-16 `ec9276a` feat: add server sharing and AI task management
+- 2026-01-18 `f88520f` fix: AI托管闭环与任务删除
+- 2026-01-18 `22ba63a` fix: AI托管工作流恢复与终端标记过滤
+- 2026-01-18 `0703dc0` fix(ai-agent): process queued user messages across completion
+- 2026-01-18 `fb855b8` feat(ai-agent): pause after repeated invalid retries
+
+### 详细说明（Highlights）
+
+- `ba8d0a9` PostgreSQL 数据库支持
+  - 新增 `DATABASE_DSN` 配置项：支持 PostgreSQL DSN（同时保留 SQLite 模式），并完善数据库初始化/迁移逻辑。
+- `1e31e90` 终端输出清爽化：过滤内部命令采集标记
+  - `RunCommand` 为了采集输出会注入内部 marker（`__ACA_CMD_BEGIN__/END__`），该版本起对外输出层会过滤，避免用户在终端里看到无关 `echo` 行。
+- `0838cdc` 任务↔终端绑定 + “预期断开”自动重连
+  - 新增任务绑定终端接口：`/api/tasks/:id/bind-terminal`，避免同一任务反复创建新终端、也避免终端误绑到其他任务。
+  - 新增“预期断开”自动重连：当 AI 托管执行重启类命令导致 SSH 断开时，系统会自动尝试重连并恢复任务 AI 状态（超时则暂停）。
+- `9c4c2d8` 文档与 Release 配置完善
+  - 补充 PostgreSQL / 终端重启与重连的说明，更新 `release/.env.example` 与 Release 运行文档。
+- `a658ef5` 终端绑定数据安全修复
+  - 修复 `task_id/server_id` 在 fiber/fasthttp “zero-copy string” 场景下可能被污染的问题：对写入 session 的字符串进行复制，并补充回归测试。
+- `ec9276a` 服务器与 AI 任务管理增强
+  - 服务器管理 API 增强（导入/导出、批量执行、上传 key、创建终端等），并引入 `UserServerShare` 数据结构与前端共享管理入口（共享 API 后续完善）。
+  - 任务详情页增加 AI 托管(动态) 会话面板（步骤/状态/追加指令可视化）。
+- `f88520f` AI 托管闭环与任务删除修复
+  - 任务删除：仅允许在 `done/failed/timeout/archived` 状态删除；并在 PostgreSQL 外键约束下先解绑终端再删除任务，避免删除失败/误报。
+  - AI 托管：控制面板/日志展示与交互闭环优化；`<action>/<complete>` 解析更健壮（兜底提取 JSON / 纯文本 summary）。
+- `22ba63a` AI 托管恢复与终端标记过滤完善
+  - 修复 AI 托管恢复（避免 “session is not resumable”），并统一沿用旧的 `[AI][type] ...` 日志写入/解析方式。
+  - 进一步完善终端输出过滤，避免内部 marker 影响用户终端体验。
+- `0703dc0` AI 托管并发追加指令：完成/暂停边界不丢消息
+  - 用户在“完成判断/总结尚未结束”时追加的新问题不再被吞：会在当前轮结束后自动继续处理。
+- `fb855b8` AI 托管防止无效重试（默认熔断）
+  - 连续 3 次无效响应（解析失败/未输出 action/complete）或重复失败会自动暂停并 ask_user 让用户补充确认，避免长任务无效消耗 token。
+  - 同步强化 “AI 托管(动态)” 系统提示词：目标不明确优先追问、连续无法推进主动请求用户确认。
+
 ## AI 托管与 AI 审核
 
 ### 前置条件：配置 AI Provider
