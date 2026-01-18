@@ -440,6 +440,16 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 		rt.mu.Unlock()
 	}
 
+	// Guardrails: avoid burning tokens when the model repeatedly fails to produce a valid ReAct response
+	// or keeps repeating the same failing action.
+	const (
+		maxConsecutiveInvalidResponses = 3
+		maxRepeatedFailureStreak       = 3
+	)
+	invalidResponseStreak := 0
+	repeatedFailureStreak := 0
+	lastFailureKey := ""
+
 	for i := 0; i < e.maxIterations; i++ {
 		iteration := iterationBase + i
 		select {
@@ -506,10 +516,72 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 			if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
 				e.toolExecutor.emitTerminalAILog(session.Context, "error", "解析 AI 响应失败，将继续尝试下一步", "error", err.Error())
 			}
+			invalidResponseStreak++
+			if invalidResponseStreak >= maxConsecutiveInvalidResponses {
+				question := fmt.Sprintf("AI 连续 %d 次未能生成可执行步骤（可能是输出未按 ReAct 格式或缺少关键信息）。\n请补充/确认：\n- 目标要达到的具体结果（成功标准）\n- 目标范围/服务器\n- 是否允许执行风险操作（安装/修改配置/重启）\n回复后我将继续执行。", maxConsecutiveInvalidResponses)
+				step := AIWorkflowStep{
+					ID:         uuid.New().String(),
+					Iteration:  iteration,
+					Thought:    "guardrail: invalid_ai_response",
+					Action:     "ask_user",
+					ActionArgs: map[string]any{"question": question},
+					Result:     question,
+					Success:    true,
+					Timestamp:  time.Now(),
+				}
+				session.Steps = append(session.Steps, step)
+				if len(rt.pending) > 0 {
+					session.Messages = append(session.Messages, rt.pending...)
+					rt.pending = nil
+				}
+				session.Status = "paused"
+				session.Summary = question
+				session.CompletedAt = nil
+				_ = e.saveSession(session)
+				rt.mu.Unlock()
+				return
+			}
 			_ = e.saveSession(session)
 			rt.mu.Unlock()
 			continue
 		}
+
+		// If the model didn't produce either an action or a completion marker, treat it as invalid and retry a bit.
+		if parsed.Action == nil && parsed.Complete == nil {
+			if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
+				e.toolExecutor.emitTerminalAILog(session.Context, "warning", "AI 未输出 action/complete，将重试", "", "")
+			}
+			invalidResponseStreak++
+			if invalidResponseStreak >= maxConsecutiveInvalidResponses {
+				question := fmt.Sprintf("AI 连续 %d 次未能生成可执行步骤（未输出 action/complete）。\n请补充/确认：\n- 目标要达到的具体结果（成功标准）\n- 目标范围/服务器\n- 是否允许执行风险操作（安装/修改配置/重启）\n回复后我将继续执行。", maxConsecutiveInvalidResponses)
+				step := AIWorkflowStep{
+					ID:         uuid.New().String(),
+					Iteration:  iteration,
+					Thought:    "guardrail: missing_action_or_complete",
+					Action:     "ask_user",
+					ActionArgs: map[string]any{"question": question},
+					Result:     question,
+					Success:    true,
+					Timestamp:  time.Now(),
+				}
+				session.Steps = append(session.Steps, step)
+				if len(rt.pending) > 0 {
+					session.Messages = append(session.Messages, rt.pending...)
+					rt.pending = nil
+				}
+				session.Status = "paused"
+				session.Summary = question
+				session.CompletedAt = nil
+				_ = e.saveSession(session)
+				rt.mu.Unlock()
+				return
+			}
+			_ = e.saveSession(session)
+			rt.mu.Unlock()
+			continue
+		}
+
+		invalidResponseStreak = 0
 
 		// Best-effort AI logs for observability (keeps the old "[AI][type]" stream style).
 		if e.toolExecutor != nil && session.Context != nil && strings.TrimSpace(getStringFromMap(session.Context, "terminal_id")) != "" {
@@ -671,6 +743,43 @@ func (e *AIWorkflowEngine) executeLoop(ctx context.Context, rt *runtimeSession) 
 				Role:    "user",
 				Content: observation,
 			})
+
+			if step.Success {
+				repeatedFailureStreak = 0
+				lastFailureKey = ""
+			} else {
+				failureKey := strings.TrimSpace(step.Action) + "|" + strings.TrimSpace(truncateString(step.Result, 240))
+				if failureKey == lastFailureKey && failureKey != "" {
+					repeatedFailureStreak++
+				} else {
+					lastFailureKey = failureKey
+					repeatedFailureStreak = 1
+				}
+				if repeatedFailureStreak >= maxRepeatedFailureStreak {
+					question := fmt.Sprintf("AI 连续 %d 次执行失败，已暂停以避免无效重试。\n最近失败信息：%s\n\n请确认/补充：\n- 是否允许继续重试或更换方案？\n- 是否需要执行 sudo/安装依赖/修改配置？\n- 是否有你期望的具体命令或检查方向？", maxRepeatedFailureStreak, strings.TrimSpace(truncateString(step.Result, 800)))
+					guardStep := AIWorkflowStep{
+						ID:         uuid.New().String(),
+						Iteration:  iteration,
+						Thought:    "guardrail: repeated_action_failure",
+						Action:     "ask_user",
+						ActionArgs: map[string]any{"question": question},
+						Result:     question,
+						Success:    true,
+						Timestamp:  time.Now(),
+					}
+					session.Steps = append(session.Steps, guardStep)
+					if len(rt.pending) > 0 {
+						session.Messages = append(session.Messages, rt.pending...)
+						rt.pending = nil
+					}
+					session.Status = "paused"
+					session.Summary = question
+					session.CompletedAt = nil
+					_ = e.saveSession(session)
+					rt.mu.Unlock()
+					return
+				}
+			}
 		}
 
 		// Respect external pause/cancel right before saving this iteration.
