@@ -3,7 +3,12 @@
 本文以 AISWS-ACA（本仓库）当前实现为准，整理两条主流程：
 
 - **AI 审核（审批）**：当 Claude Code/Codex/Gemini 等 CLI 在终端里弹出确认/权限提示时，系统自动检测并按规则（或 AI）给出处理动作。
-- **AI 托管**：基于任务配置自动启动 CLI、自动输入提示、并持续监控终端日志判断完成/异常。
+- **AI 托管**：让 AI 替代人工去“接收目标 → 下发输入/命令 → 观察输出 → 决策下一步/结束/求助”。
+
+> 重要：本项目里 **AI 托管** 与 **AI 审核** 是两件事。
+>
+> - **AI 托管（Managed/Handoff）**：AI 是“驾驶员”，负责推进任务（主动输入、执行与反馈闭环）。
+> - **AI 审核（Approval/Audit）**：AI 是“安全员/加速器”，只在出现确认/选择题等需要人工判断的交互点时，按规则/AI 做 `approve/reject/input/ask_user`，避免卡死与降低高危误操作。
 
 ---
 
@@ -16,6 +21,20 @@
 - **Message（消息中心）**：`backend/model/db.go` 中 `Message`，用于“需要干预/被阻止/告警”等通知类信息。
 - **PromptTemplate（提示词模板）**：`backend/model/prompt_template.go`，系统级提示词统一从数据库读取（非硬编码），支持变量渲染。
 - **PromptTemplatePreset（提示词方案）**：`backend/model/prompt_template_preset.go`，每个模板 Key 可保存多个命名方案，并可一键套用。
+
+### 1.1 AI 托管的两种执行引擎（务必区分）
+
+同样叫“托管”，但底层执行路径不同：
+
+1) **CLI 托管（automation_mode=cli）**
+   - 依赖目标服务器终端里安装的 AI CLI（Claude Code/Codex/Gemini 等）。
+   - 系统负责：创建/绑定终端 → 启动 CLI → 发送提示 → 监控日志 →（配合 AI 审核处理 y/n 等）。
+   - 适合：目标环境已装好 AI CLI，用户希望“让 CLI 自己做事”，系统做编排与治理。
+
+2) **AI 托管(动态) / Task Agent（automation_mode=agent）**
+   - 不依赖服务器安装 AI CLI；由本系统配置的 AI Provider（OpenAI/Anthropic/…）直接驱动“ReAct 循环 + 工具调用”。
+   - 系统负责：创建可观测终端（可选）→ AI 规划/决策 → 调用工具执行（SSH/终端 RunCommand 等）→ 记录步骤与状态 → 在需要时 ask_user 暂停。
+   - 适合：服务器小白/不想装 AI CLI、希望“AI 直接接管执行面”的用户。
 
 **任务状态（建议按此理解）**
 
@@ -110,13 +129,31 @@
 - `frontend/src/components/Terminal.vue`：处理 `type === "approval"`，将未自动处理的审批写入 `approvalStore`。
 - `frontend/src/components/ApprovalCenter.vue`：展示待处理审批并可一键允许/拒绝/自定义输入。
 
+### 3.5 统一的“终端交互点”状态机（托管与审核共用）
+
+托管与审核能否顺畅，核心在于：**终端当前到底是在“等你输入”、还是在“等你确认”、还是在“忙”**。
+
+本项目用 `backend/service/detector/detector.go` 把终端输出粗分为：
+
+- `waiting_approval`：出现 y/n、Enter to confirm、选择列表等“需要判断的交互点”
+  - **AI 审核**：触发审批引擎 `approve/reject/input/wait`（可落库审计）
+  - **AI 托管(动态)**：若走 terminal 执行面，可让审批引擎自动处理或 ask_user 暂停
+- `waiting_input`：出现可输入提示符（CLI prompt / 输入框）
+  - **CLI 托管**：此时才安全发送 prompt（避免误当 shell 命令）
+- `working`：模型/工具执行中
+  - **托管**：允许用户追加消息，但会排队到“下一轮边界”处理，保证对话顺序
+- `idle`：更像 shell prompt（$/#/%）
+  - **CLI 托管**：通常表示不在 AI CLI 交互态（或已退出/未进入）
+
+> 备注：状态机是“最佳努力”启发式；因此对高风险输入默认更保守（宁可暂停 ask_user，也不误输入）。
+
 ---
 
 ## 4) AI 托管流程
 
 入口：`backend/api/task.go` 的 `StartTask()` → `backend/service/task/automation.go` 的 `AutomationService.StartTask()`
 
-### 3.1 启动阶段（创建终端 + 启动 CLI + 发送提示）
+### 4.1 CLI 托管：启动阶段（创建终端 + 启动 CLI + 发送提示）
 
 1. 创建本地/远程工作目录（可选）。
 2. 创建终端会话：
@@ -130,7 +167,16 @@
    - **AI 托管模式**：发送 `buildManagedPrompt(task)`（组合“任务目标/执行规则/完成条件”）
 5. 启动后台监控：`go monitorTaskCompletion(taskID, terminalID)`
 
-### 3.2 监控阶段（日志分析 → 决策 → 更新状态）
+#### 4.1.1 CLI 就绪检测（避免误把 prompt 当 shell 命令）
+
+为了避免“CLI 未进入交互界面 → 系统把提示词当作 shell 命令执行”的高风险误操作，启动阶段会做 **就绪检测**：
+
+- CLI 必须在任务里选择（`cli_type`），并且任务处于 CLI 托管或启用 AI 托管（`automation_mode=cli` 或 `ai_managed=true`）时，终端才会开启“AI CLI 状态跟踪”。
+- 进入/退出 CLI 的判断 **只基于终端输出锚点**（banner/prompt/会话文件标识/权限确认提示等），命中后才将 `metadata.ai_assistant.detected=true` 作为“已进入 CLI 模式”的标记；不会用“输入命令关键词”作为判定依据。
+- 随后基于终端输出的状态检测（`waiting_input/working/waiting_approval`）确认 CLI 已进入可交互态，再发送提示词。
+- 若超时仍无法确认，就暂停任务并提示用户手动确认 CLI 安装/启动方式（例如 `claude` 或 `npx claude`）。
+
+### 4.2 CLI 托管：监控阶段（日志分析 → 决策 → 更新状态）
 
 入口：`backend/service/task/automation.go` 的 `monitorTaskCompletion()`
 
@@ -147,6 +193,21 @@
 消息通知：
 
 - `backend/service/task/automation.go`：`createTaskMessage()` 写入 `messages`（例如 `approval_needed/warning/error`）
+
+### 4.3 AI 托管(动态) / Task Agent：ReAct 循环（可多轮持续接收用户补充）
+
+入口：`backend/api/task.go` 的 `StartTask()`（automation_mode=agent）→ `backend/service/workflow/task_agent.go` 的 `StartTaskAgent()`
+
+1. 为任务创建 AIWorkflowSession（ReAct 模型：`<thought>/<action>/<complete>`）。
+2. 可选创建/复用一个“可见终端”用于观测与介入（终端不是执行唯一通道，执行由工具层决定）。
+3. 进入执行循环：AI 决策下一步工具调用 → 工具执行 → 结果作为 observation 回灌 → 继续下一轮。
+4. 遇到不确定/风险/信息不足时输出 `ask_user` 并将会话置为 `paused`，等待用户补充后继续。
+
+**多轮补充信息的关键保障（避免“多次回复失效”）**
+
+- 前端通过 `POST /api/ai-workflow/session/:id/message` 追加用户消息。
+- 后端在执行中会把消息先进入 pending 队列，确保消息顺序不会插入到“正在生成的 assistant 回复”之前。
+- 为避免在会话完成/暂停的边界窗口丢消息，执行器在退出前会进入 closing 保护，并在必要时落库/重启循环，确保用户追加信息不会被吞。
 
 ---
 

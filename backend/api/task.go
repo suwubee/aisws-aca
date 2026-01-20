@@ -138,7 +138,7 @@ var allowedAutomationModes = map[string]struct{}{
 func normalizeAutomationMode(value string) (string, bool) {
 	s := strings.ToLower(strings.TrimSpace(value))
 	if s == "" {
-		return "none", true  // 默认为"仅记录"模式
+		return "none", true // 默认为"仅记录"模式
 	}
 	_, ok := allowedAutomationModes[s]
 	return s, ok
@@ -771,6 +771,20 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 
 	model.DB.First(&task, "id = ?", id)
 
+	// 若任务关键字段变化（启用AI托管/切换automation_mode/切换cli_type），刷新已绑定终端的内存态元数据。
+	// 目的：在“任务进行中/从终端面板开启AI托管”的场景下，终端侧可以基于任务选择的CLI类型，用输出锚点判断进入/退出CLI模式。
+	shouldRefreshTerminal := aiManagedChanged || req.AutomationMode != nil || req.CLIType != nil
+	if shouldRefreshTerminal && ctrl.terminalManager != nil {
+		terminalID := ""
+		if task.ActiveTerminalID != nil {
+			terminalID = strings.TrimSpace(*task.ActiveTerminalID)
+		}
+		if terminalID != "" {
+			taskIDCopy := task.ID
+			_ = ctrl.terminalManager.LinkTask(terminalID, &taskIDCopy)
+		}
+	}
+
 	// 如果中途启用AI托管，且任务正在进行中，启动监控
 	if aiManagedChanged && wasRunning {
 		terminalID := ""
@@ -1235,10 +1249,10 @@ func (ctrl *TaskController) ResumeAI(c *fiber.Ctx) error {
 			if strings.EqualFold(strings.TrimSpace(s.Status), "running") {
 				now := time.Now()
 				_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-					"status":         "in_progress",
-					"ai_status":      "running",
+					"status":          "in_progress",
+					"ai_status":       "running",
 					"ai_pause_reason": "",
-					"updated_at":     now,
+					"updated_at":      now,
 				}).Error
 				return c.JSON(fiber.Map{"message": "AI already running", "task_id": taskID, "session_id": sessionID})
 			}

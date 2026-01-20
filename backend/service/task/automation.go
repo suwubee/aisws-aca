@@ -408,6 +408,8 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		checkInterval := 500 * time.Millisecond
 		startTime := time.Now()
 		cliReady := false
+		sawApproval := false
+		lastApprovalPrompt := ""
 
 		utils.Info("Waiting for CLI ready", zap.String("task_id", task.ID), zap.String("prompt_len", fmt.Sprintf("%d", len(promptToSend))))
 
@@ -425,13 +427,27 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 						utils.Info("CLI ready detected", zap.String("state", state))
 						break
 					}
+					if state == "waiting_approval" {
+						sawApproval = true
+						if p := strings.TrimSpace(meta.AIAssistant.ApprovalPrompt); p != "" {
+							lastApprovalPrompt = p
+						}
+					}
 				}
 			}
 		}
 
 		if !cliReady {
 			utils.Warn("CLI ready timeout, pausing task instead of sending prompt")
-			hint := "CLI 就绪检测超时：未能确认已进入 AI CLI 交互界面，已暂停任务以避免误操作。\n"
+			hint := ""
+			if sawApproval {
+				hint = "CLI 当前停留在需要确认/选择的提示（waiting_approval），未能进入可输入态，已暂停任务以避免误把提示词输入到确认框。\n"
+				if lastApprovalPrompt != "" {
+					hint += "\n检测到的提示片段：\n" + lastApprovalPrompt + "\n\n"
+				}
+			} else {
+				hint = "CLI 就绪检测超时：未能确认已进入 AI CLI 交互界面，已暂停任务以避免误操作。\n"
+			}
 			switch strings.ToLower(strings.TrimSpace(cliConfig.Type)) {
 			case "claude":
 				hint += "请打开终端确认已进入 Claude Code（可尝试执行 claude 或 npx claude），然后再继续。"

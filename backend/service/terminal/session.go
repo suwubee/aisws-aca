@@ -143,6 +143,8 @@ type Session struct {
 	// 检测和审批相关
 	detector               *detector.Detector
 	approvalEngine         *approval.Engine
+	cliTrackingEnabled     bool
+	expectedAIAgentType    detector.AIAgentType
 	lastOutput             string // 用于检测状态变化
 	lastOutputMu           sync.Mutex
 	approvalEvalMu         sync.Mutex
@@ -539,42 +541,58 @@ func (s *Session) flushDataBatchLocked() {
 		return
 	}
 
-		// 发送批量数据
-		s.broadcast(StreamEvent{
-			Type: StreamEventData,
-			// NOTE: do not filter internal markers here.
-			// RunCommand relies on markers to capture output deterministically.
-			// Filtering for UI clients is handled in the websocket layer.
-			Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
-		})
+	// 发送批量数据
+	s.broadcast(StreamEvent{
+		Type: StreamEventData,
+		// NOTE: do not filter internal markers here.
+		// RunCommand relies on markers to capture output deterministically.
+		// Filtering for UI clients is handled in the websocket layer.
+		Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
+	})
 
-		s.dataBatchBuf = s.dataBatchBuf[:0]
-	}
+	s.dataBatchBuf = s.dataBatchBuf[:0]
+}
 
 // detectAndHandle 检测AI状态并处理审批
 func (s *Session) detectAndHandle(data []byte) {
 	output := string(data)
 
-	// 检测AI代理
-	if s.aiAssistant == nil || !s.aiAssistant.Detected {
-		if agent := s.detector.DetectAgent(output); agent != nil {
-			s.metaMutex.Lock()
-			s.aiAssistant = &AIAssistant{
-				Type:           string(agent.Type),
-				DisplayName:    agent.DisplayName,
-				State:          string(agent.State),
-				StateUpdatedAt: agent.StateUpdatedAt,
-				Detected:       agent.Detected,
-				Version:        agent.Version,
+	s.metaMutex.RLock()
+	cliTrackingEnabled := s.cliTrackingEnabled
+	expectedType := s.expectedAIAgentType
+	currentAssistant := s.aiAssistant
+	s.metaMutex.RUnlock()
+
+	// 检测AI代理（仅在任务选择了 CLI 且启用了托管/CLI模式时启用检测，避免误判）
+	if cliTrackingEnabled && strings.TrimSpace(string(expectedType)) != "" && expectedType != detector.AIAgentUnknown {
+		if currentAssistant == nil || !currentAssistant.Detected {
+			if agent := s.detector.DetectAgentWithType(output, expectedType); agent != nil {
+				s.metaMutex.Lock()
+				if s.aiAssistant == nil {
+					s.aiAssistant = &AIAssistant{
+						Type:           string(agent.Type),
+						DisplayName:    agent.DisplayName,
+						State:          string(agent.State),
+						StateUpdatedAt: agent.StateUpdatedAt,
+						Detected:       true,
+						Version:        agent.Version,
+					}
+				} else {
+					s.aiAssistant.Type = string(agent.Type)
+					s.aiAssistant.DisplayName = agent.DisplayName
+					s.aiAssistant.Detected = true
+					s.aiAssistant.Version = agent.Version
+					s.aiAssistant.StateUpdatedAt = time.Now()
+				}
+				s.metadata.AIAssistant = s.aiAssistant
+				s.metaMutex.Unlock()
+
+				utils.Info("AI CLI entered (detected from output)",
+					zap.String("type", string(agent.Type)),
+					zap.String("terminal", s.id))
+
+				s.broadcastMetadata()
 			}
-			s.metadata.AIAssistant = s.aiAssistant
-			s.metaMutex.Unlock()
-
-			utils.Info("AI agent detected",
-				zap.String("type", string(agent.Type)),
-				zap.String("terminal", s.id))
-
-			s.broadcastMetadata()
 		}
 	}
 
@@ -601,6 +619,14 @@ func (s *Session) detectAndHandle(data []byte) {
 			s.aiAssistant.ApprovalPrompt = approvalPrompt
 		}
 		s.metadata.AIAssistant = s.aiAssistant
+
+		// CLI 退出：从可交互/工作态回到 shell prompt
+		if cliTrackingEnabled && s.aiAssistant.Detected &&
+			oldState != string(detector.StateIdle) &&
+			state == detector.StateIdle {
+			s.aiAssistant.Detected = false
+			s.aiAssistant.ApprovalPrompt = ""
+		}
 
 		// 状态变化时广播
 		if oldState != string(state) {
@@ -1478,6 +1504,7 @@ func (s *Session) SetTaskID(taskID *string) {
 		s.taskID = nil
 		s.metadata.TaskID = nil
 		s.metaMutex.Unlock()
+		s.refreshTaskCLISelection()
 		return
 	}
 
@@ -1485,6 +1512,8 @@ func (s *Session) SetTaskID(taskID *string) {
 	s.taskID = &copied
 	s.metadata.TaskID = s.taskID
 	s.metaMutex.Unlock()
+
+	s.refreshTaskCLISelection()
 }
 
 func (s *Session) SetServerInfo(serverID *string, name, host string) {
@@ -1501,6 +1530,81 @@ func (s *Session) SetServerInfo(serverID *string, name, host string) {
 	s.metadata.ServerName = strings.Clone(strings.TrimSpace(name))
 	s.metadata.ServerHost = strings.Clone(strings.TrimSpace(host))
 	s.metaMutex.Unlock()
+}
+
+func (s *Session) refreshTaskCLISelection() {
+	if s == nil {
+		return
+	}
+
+	taskID := ""
+	s.metaMutex.RLock()
+	if s.taskID != nil {
+		taskID = strings.TrimSpace(*s.taskID)
+	}
+	s.metaMutex.RUnlock()
+
+	enabled := false
+	expectedType := detector.AIAgentUnknown
+	displayName := ""
+
+	if taskID != "" && model.DB != nil {
+		var task model.Task
+		if err := model.DB.Select("automation_mode", "ai_managed", "cli_type").First(&task, "id = ?", taskID).Error; err == nil {
+			mode := strings.ToLower(strings.TrimSpace(task.AutomationMode))
+			enabled = task.AIManaged || mode == "cli"
+
+			cliType := strings.ToLower(strings.TrimSpace(task.CLIType))
+			switch cliType {
+			case "claude":
+				expectedType = detector.AIAgentClaudeCode
+				displayName = "Claude Code"
+			case "codex":
+				expectedType = detector.AIAgentCodex
+				displayName = "OpenAI Codex"
+			case "gemini":
+				expectedType = detector.AIAgentGemini
+				displayName = "Gemini CLI"
+			default:
+				expectedType = detector.AIAgentUnknown
+				displayName = ""
+			}
+		}
+	}
+
+	if !enabled || expectedType == detector.AIAgentUnknown {
+		s.metaMutex.Lock()
+		s.cliTrackingEnabled = false
+		s.expectedAIAgentType = detector.AIAgentUnknown
+		s.aiAssistant = nil
+		s.metadata.AIAssistant = nil
+		s.metaMutex.Unlock()
+		s.broadcastMetadata()
+		return
+	}
+
+	s.metaMutex.Lock()
+	s.cliTrackingEnabled = true
+	s.expectedAIAgentType = expectedType
+
+	if s.aiAssistant == nil || strings.TrimSpace(s.aiAssistant.Type) != string(expectedType) {
+		s.aiAssistant = &AIAssistant{
+			Type:           string(expectedType),
+			DisplayName:    displayName,
+			State:          string(detector.StateUnknown),
+			StateUpdatedAt: time.Now(),
+			Detected:       false,
+			Version:        "",
+			ApprovalPrompt: "",
+		}
+	} else if s.aiAssistant != nil && s.aiAssistant.DisplayName != displayName {
+		s.aiAssistant.DisplayName = displayName
+	}
+
+	s.metadata.AIAssistant = s.aiAssistant
+	s.metaMutex.Unlock()
+
+	s.broadcastMetadata()
 }
 
 // ToDBModel 转换为数据库模型
@@ -1590,6 +1694,7 @@ func (s *Session) flushInputLineLocked() {
 	if isInternalMarkerLine(line) {
 		return
 	}
+
 	s.addLog("input", line+"\n")
 }
 

@@ -100,6 +100,41 @@ func (d *Detector) DetectAgent(output string) *DetectedAgent {
 	return nil
 }
 
+// DetectAgentWithType detects a specific agent type from output.
+// This is useful when the expected CLI is known (selected in task) and we want to avoid false positives
+// from other agent patterns.
+func (d *Detector) DetectAgentWithType(output string, agentType AIAgentType) *DetectedAgent {
+	if d == nil || strings.TrimSpace(string(agentType)) == "" {
+		return nil
+	}
+	for _, pattern := range d.agentPatterns {
+		if pattern.Type != agentType {
+			continue
+		}
+		for _, p := range pattern.OutputPatterns {
+			if matched, _ := regexp.MatchString(p, output); matched {
+				agent := &DetectedAgent{
+					Type:           pattern.Type,
+					DisplayName:    pattern.DisplayName,
+					State:          StateWorking,
+					StateUpdatedAt: time.Now(),
+					Detected:       true,
+				}
+				if pattern.VersionPattern != "" {
+					if re, err := regexp.Compile(pattern.VersionPattern); err == nil {
+						if matches := re.FindStringSubmatch(output); len(matches) > 1 {
+							agent.Version = matches[1]
+						}
+					}
+				}
+				return agent
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
 // DetectAgentFromCommand 从命令检测AI代理
 func (d *Detector) DetectAgentFromCommand(cmd string) *DetectedAgent {
 	cmdLower := strings.ToLower(cmd)
@@ -288,11 +323,17 @@ var defaultAgentPatterns = []AgentPattern{
 			`@anthropic`,
 		},
 		OutputPatterns: []string{
-			`(?i)claude\s*code`,
-			`(?i)anthropic`,
+			`(?i)Claude\s+Code\s+v\d+\.\d+\.\d+`,
+			`(?i)Welcome\s+to\s+.*Claude\s+Code`,
+			`(?i)\bClaude\s*Code\b`,
 			`(?i)╭─.*claude`,
-			`(?i)claude.*>`,
-			`(?i)\[claude\]`,
+			`(?i)>\s*Try\s+"`,
+			`(?i)\?\s+for\s+shortcuts`,
+			// Claude Code approval/permission prompts (startup often hits trust prompts before showing a full banner).
+			`(?i)allow\s+(tool|read|write|execute|bash)\b`,
+			`(?i)allow\s+this\s+action\s*\?`,
+			`(?i)enter\s+to\s+confirm`,
+			`(?i)esc\s+to\s+cancel`,
 		},
 		VersionPattern: `claude.*?(\d+\.\d+\.\d+)`,
 	},
@@ -304,9 +345,11 @@ var defaultAgentPatterns = []AgentPattern{
 			`openai.*codex`,
 		},
 		OutputPatterns: []string{
-			`(?i)codex`,
-			`(?i)openai.*cli`,
-			`(?i)\[codex\]`,
+			`(?i)\bcodex\s+v\d+`,
+			`(?i)\bOpenAI\s+Codex\b`,
+			`(?i)Enter\s+a\s+prompt`,
+			// Codex session file marker (high-signal)
+			`(?i)rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl`,
 		},
 	},
 	{
@@ -318,9 +361,10 @@ var defaultAgentPatterns = []AgentPattern{
 			`gcloud.*gemini`,
 		},
 		OutputPatterns: []string{
-			`(?i)gemini`,
-			`(?i)google\s*ai`,
-			`(?i)\[gemini\]`,
+			`(?i)\bGemini\s+CLI\b`,
+			`(?i)\bgcloud\b.*\bgemini\b`,
+			`(?i)google.*gemini`,
+			`(?im)^\s*gemini\s*>\s*$`,
 		},
 	},
 	{
@@ -436,7 +480,7 @@ var defaultStatePatterns = []StatePattern{
 			`(?i)searching`,
 			`(?i)loading`,
 			`⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏`, // 常见的加载动画字符
-			`\.{3,}`,                    // 省略号
+			`\.{3,}`, // 省略号
 		},
 		Priority: 30,
 	},
