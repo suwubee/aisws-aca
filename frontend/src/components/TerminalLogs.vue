@@ -117,10 +117,23 @@ const typeOptions = [
 const hasMore = computed(() => rawLogs.value.length < total.value)
 const showScrollToBottom = ref(false)
 
+function detectLogOrder(items: LogEntry[]): 'asc' | 'desc' {
+  for (let i = 1; i < items.length; i++) {
+    const prev = Date.parse(items[i - 1].created_at)
+    const curr = Date.parse(items[i].created_at)
+    if (Number.isNaN(prev) || Number.isNaN(curr)) continue
+    if (curr > prev) return 'asc'
+    if (curr < prev) return 'desc'
+  }
+  return 'asc'
+}
+
 // 合并连续相同类型的日志
 const groupedLogs = computed(() => {
   const groups: LogGroup[] = []
   let currentGroup: LogGroup | null = null
+  const order = detectLogOrder(rawLogs.value)
+  const shouldPrepend = order === 'desc'
 
   for (const log of rawLogs.value) {
     // 清理并处理内容
@@ -129,9 +142,16 @@ const groupedLogs = computed(() => {
 
     if (currentGroup && currentGroup.type === log.log_type) {
       // 合并到当前组
-      currentGroup.content += content
+      if (shouldPrepend) {
+        // 当列表为倒序时，为保证段落内仍按时间正序阅读，需要前插
+        currentGroup.content = content + currentGroup.content
+        currentGroup.startTime = log.created_at
+        currentGroup.ids.unshift(log.id)
+      } else {
+        currentGroup.content += content
+        currentGroup.ids.push(log.id)
+      }
       currentGroup.count++
-      currentGroup.ids.push(log.id)
     } else {
       // 创建新组
       currentGroup = {
