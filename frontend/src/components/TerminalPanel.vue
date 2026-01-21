@@ -217,7 +217,7 @@
 	            </div>
 	            <div class="ai-control-content">
 	              <!-- AI 托管需要手动接管时，使用旧的“对话框 + 下方日志输出”模式 -->
-	              <div v-if="handoffKind" class="ai-handoff">
+		              <div v-if="handoffKind" class="ai-handoff">
 	                <div class="ai-handoff-header">
 	                  <div class="ai-handoff-title">需要手动接管</div>
                   <n-tag v-if="handoffKind === 'terminal'" size="small" :bordered="false" type="warning">terminal</n-tag>
@@ -228,18 +228,25 @@
                 <pre v-else class="ai-handoff-prompt">{{ (pendingWorkflowMessage?.content || '').trim() || '—' }}</pre>
 
                 <div class="ai-handoff-actions">
-                  <template v-if="handoffKind === 'terminal'">
-                    <n-space align="center" wrap>
-                      <n-button size="small" type="success" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('y')">
-                        允许 (y)
-                      </n-button>
-                      <n-button size="small" type="error" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('n')">
-                        拒绝 (n)
-                      </n-button>
-                      <n-input
-                        v-model:value="handoffResponse"
-                        placeholder="自定义响应（回车发送）"
-                        clearable
+	                  <template v-if="handoffKind === 'terminal'">
+	                    <n-space align="center" wrap>
+	                      <n-button size="small" type="success" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('y')">
+	                        允许 (y)
+	                      </n-button>
+	                      <n-button size="small" type="error" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('n')">
+	                        拒绝 (n)
+	                      </n-button>
+	                      <n-button
+	                        size="small"
+	                        :disabled="isDemoMode"
+	                        @click="dismissTerminalHandoff"
+	                      >
+	                        取消提示
+	                      </n-button>
+	                      <n-input
+	                        v-model:value="handoffResponse"
+	                        placeholder="自定义响应（回车发送）"
+	                        clearable
                         :disabled="isDemoMode"
                         @keyup.enter="submitHandoffResponse"
                         style="min-width: 220px"
@@ -256,10 +263,10 @@
                     </n-space>
                   </template>
 
-                  <template v-else>
-                    <n-space align="center" wrap>
-                      <n-input
-                        v-model:value="workflowResponse"
+	                  <template v-else>
+	                    <n-space align="center" wrap>
+	                      <n-input
+	                        v-model:value="workflowResponse"
                         placeholder="补充信息/确认内容（回车发送）"
                         clearable
                         :disabled="isDemoMode"
@@ -275,22 +282,82 @@
                       >
                         发送给 AI
                       </n-button>
-                      <n-button
-                        size="small"
-                        :loading="workflowSending"
-                        :disabled="isDemoMode"
-                        @click="quickConfirmWorkflow"
-                      >
-                        直接确认继续
-                      </n-button>
-                    </n-space>
-                  </template>
-                </div>
-              </div>
+	                      <n-button
+	                        size="small"
+	                        :loading="workflowSending"
+	                        :disabled="isDemoMode"
+	                        @click="quickConfirmWorkflow"
+	                      >
+	                        直接确认继续
+	                      </n-button>
+	                      <n-button
+	                        size="small"
+	                        :loading="workflowSending"
+	                        :disabled="isDemoMode"
+	                        @click="dismissWorkflowHandoff"
+	                      >
+	                        取消提示
+	                      </n-button>
+	                    </n-space>
+	                  </template>
+	                </div>
+	              </div>
 
-			              <div v-else-if="aiHandoffEmptyText.trim()" class="ai-handoff-empty">
-			                <p>{{ aiHandoffEmptyText }}</p>
-			              </div>
+	              <!-- CLI 状态不确定：允许人工确认“是/否/不确定”，也可让系统基于上下文预判 -->
+	              <div v-else-if="cliConfirmNeeded" class="ai-handoff">
+	                <div class="ai-handoff-header">
+	                  <div class="ai-handoff-title">需要确认：AI CLI 状态</div>
+	                  <n-tag v-if="cliConfirmKind" size="small" :bordered="false" type="warning">{{ cliConfirmKind }}</n-tag>
+	                </div>
+
+	                <pre class="ai-handoff-prompt">{{ cliConfirmMessage }}</pre>
+	                <div v-if="cliEvalHint.trim()" class="ai-handoff-hint">{{ cliEvalHint }}</div>
+
+	                <div class="ai-handoff-actions">
+	                  <n-space align="center" wrap>
+	                    <n-button
+	                      size="small"
+	                      type="success"
+	                      secondary
+	                      :loading="cliConfirmLoading"
+	                      :disabled="isDemoMode"
+	                      @click="confirmCLIState('yes')"
+	                    >
+	                      是（在 CLI）
+	                    </n-button>
+	                    <n-button
+	                      size="small"
+	                      type="error"
+	                      secondary
+	                      :loading="cliConfirmLoading"
+	                      :disabled="isDemoMode"
+	                      @click="confirmCLIState('no')"
+	                    >
+	                      否（不在 CLI）
+	                    </n-button>
+	                    <n-button
+	                      size="small"
+	                      :loading="cliConfirmLoading"
+	                      :disabled="isDemoMode"
+	                      @click="confirmCLIState('unknown')"
+	                    >
+	                      不确定
+	                    </n-button>
+	                    <n-button
+	                      size="small"
+	                      :loading="cliEvalLoading"
+	                      :disabled="isDemoMode"
+	                      @click="evaluateCLIState"
+	                    >
+	                      让 AI 预判
+	                    </n-button>
+	                  </n-space>
+	                </div>
+	              </div>
+
+				              <div v-else-if="aiHandoffEmptyText.trim()" class="ai-handoff-empty">
+				                <p>{{ aiHandoffEmptyText }}</p>
+				              </div>
 	
 	              <!-- 始终保留输入框：用于下发指令/补充信息，避免“启用AI后无处输入”卡住 -->
 	              <div class="ai-command-box">
@@ -525,9 +592,99 @@ const quickInputButtons = computed(() => {
 	  return taskStore.tasks.find(t => t.id === taskId) || null
 	})
 
-	const aiAssistant = computed(() => {
-	  return activeTerminal.value?.metadata?.ai_assistant || null
-	})
+		const aiAssistant = computed(() => {
+		  return activeTerminal.value?.metadata?.ai_assistant || null
+		})
+
+// CLI 状态确认（CLI 可选/不强制）：当系统未能可靠判断进入/退出时，允许人工确认（是/否/不确定）或让 AI 预判。
+const cliConfirmForced = ref(false)
+const cliConfirmLoading = ref(false)
+const cliEvalLoading = ref(false)
+const cliEvalHint = ref('')
+
+const cliConfirmNeeded = computed(() => {
+  if (!activeTerminalId.value) return false
+  if (isAgentMode.value) return false
+  if (!isAIManaged.value) return false
+  const a: any = aiAssistant.value
+  return cliConfirmForced.value || !!a?.needs_confirm
+})
+
+const cliConfirmKind = computed(() => {
+  const a: any = aiAssistant.value
+  const k = String(a?.confirm_kind || '').trim()
+  return k || (cliConfirmForced.value ? 'send_blocked' : '')
+})
+
+const cliConfirmMessage = computed(() => {
+  const a: any = aiAssistant.value
+  const msg = String(a?.confirm_message || '').trim()
+  if (msg) return msg
+  return '系统未确认当前是否在 AI CLI 交互界面。你可以在终端中确认后选择：是/否/不确定。'
+})
+
+watch(aiAssistant, (a: any) => {
+  if (a?.detected) {
+    cliConfirmForced.value = false
+  }
+  if (!a?.needs_confirm && !cliConfirmForced.value) {
+    cliEvalHint.value = ''
+  }
+})
+
+async function confirmCLIState(decision: 'yes' | 'no' | 'unknown') {
+  const terminalId = String(activeTerminalId.value || '').trim()
+  if (!terminalId) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (cliConfirmLoading.value) return
+  cliConfirmLoading.value = true
+  try {
+    const a: any = aiAssistant.value
+    await terminalApi.confirmAIAssistant(terminalId, {
+      decision,
+      assistant_type: String(a?.type || '').trim() || undefined,
+      ttl_seconds: 120
+    })
+    cliConfirmForced.value = false
+    cliEvalHint.value = ''
+    message.success('已更新 AI CLI 状态')
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || e?.message || '确认失败')
+  } finally {
+    cliConfirmLoading.value = false
+  }
+}
+
+async function evaluateCLIState() {
+  const terminalId = String(activeTerminalId.value || '').trim()
+  if (!terminalId) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (cliEvalLoading.value) return
+  cliEvalLoading.value = true
+  try {
+    const { data } = await terminalApi.evaluateAIAssistant(terminalId, {
+      use_ai: true,
+      max_lines: 80,
+      max_runes: 900,
+      timeout_ms: 1500
+    })
+    const present = String((data as any)?.present || 'unknown').trim()
+    const conf = Number((data as any)?.confidence ?? 0)
+    const name = String((data as any)?.display_name || (data as any)?.type || '').trim()
+    const reason = String((data as any)?.reason || '').trim()
+    cliEvalHint.value = `AI 预判：${present}${name ? ` / ${name}` : ''}（${(conf * 100).toFixed(0)}%）${reason ? ` · ${reason}` : ''}`
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || e?.message || '预判失败')
+  } finally {
+    cliEvalLoading.value = false
+  }
+}
 
 const isAgentMode = computed(() => {
   const mode = String(activeTask.value?.automation_mode || '').trim().toLowerCase()
@@ -759,6 +916,13 @@ async function quickRespond(value: 'y' | 'n') {
   }
 }
 
+function dismissTerminalHandoff() {
+  const approval = activePendingApproval.value
+  if (!approval) return
+  approvalStore.dismissPendingApproval(approval.terminalId)
+  message.info('已取消提示（你可以在终端中手动处理）')
+}
+
 async function fetchPendingWorkflowMessage() {
   const tid = String(activeTerminalId.value || '').trim()
   if (!tid) {
@@ -843,6 +1007,31 @@ async function quickConfirmWorkflow() {
   if (workflowSending.value) return
   workflowResponse.value = '已确认，请继续执行。'
   await submitWorkflowResponse()
+}
+
+async function dismissWorkflowHandoff() {
+  const msg = pendingWorkflowMessage.value
+  const mid = String(msg?.id || '').trim()
+  if (!mid) {
+    pendingWorkflowMessage.value = null
+    return
+  }
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (workflowSending.value) return
+  workflowSending.value = true
+  try {
+    await automationApi.dismissMessage(mid)
+    pendingWorkflowMessage.value = null
+    message.info('已取消提示')
+    await fetchPendingWorkflowMessage()
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '取消失败')
+  } finally {
+    workflowSending.value = false
+  }
 }
 
 	async function submitAICommand() {
@@ -951,26 +1140,41 @@ async function quickConfirmWorkflow() {
 		    return
 		  }
 
-	  if (!isAIManaged.value) {
-	    message.warning('请先启用 AI 托管')
-	    return
-	  }
+		  if (!isAIManaged.value) {
+		    message.warning('请先启用 AI 托管')
+		    return
+		  }
 
-	  const assistant = aiAssistant.value
-	  if (!assistant?.detected) {
-	    message.warning('未检测到 AI CLI 就绪，请先在终端进入 AI CLI 后再发送')
-	    return
-	  }
-	  const state = String(assistant.state || '').trim()
-	  if (state && state !== 'waiting_input') {
-	    message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，请等待可输入`)
-	    return
-	  }
+		  const assistant: any = aiAssistant.value
+		  if (!assistant?.detected) {
+		    cliConfirmForced.value = true
+		    cliEvalHint.value = ''
+		    message.warning('需要先确认是否已进入 AI CLI（上方可选择“是/否/不确定”）')
+		    return
+		  }
+		  const state = String(assistant.state || '').trim()
+		  if (state === 'waiting_approval') {
+		    message.warning('AI 当前在等待确认/选择（waiting_approval），请先处理审批后再发送')
+		    return
+		  }
+		  if (state === 'working') {
+		    message.warning('AI 正在执行中（working），请稍后再发送')
+		    return
+		  }
+		  if (state && state !== 'waiting_input') {
+		    if (assistant.manual) {
+		      message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，将按人工确认继续发送`)
+		    } else {
+		      cliConfirmForced.value = true
+		      message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，请先确认/等待可输入`)
+		      return
+		    }
+		  }
 
-	  const normalized = normalizeResponseInput(input)
-	  terminalRefs.get(terminalId)?.sendInput?.(normalized)
-	  aiCommand.value = ''
-	  message.success('已发送给 AI')
+		  const normalized = normalizeResponseInput(input)
+		  terminalRefs.get(terminalId)?.sendInput?.(normalized)
+		  aiCommand.value = ''
+		  message.success('已发送给 AI')
 	  await nextTick()
 	  aiCommandInputRef.value?.focus?.()
 	}
@@ -1835,6 +2039,14 @@ function getStatusClass(terminal: TerminalTab) {
 
 .ai-handoff-actions {
   margin-top: 10px;
+}
+
+.ai-handoff-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ai-handoff-empty {

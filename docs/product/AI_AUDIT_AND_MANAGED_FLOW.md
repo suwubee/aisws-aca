@@ -171,8 +171,9 @@
 
 为了避免“CLI 未进入交互界面 → 系统把提示词当作 shell 命令执行”的高风险误操作，启动阶段会做 **就绪检测**：
 
-- CLI 必须在任务里选择（`cli_type`），并且任务处于 CLI 托管或启用 AI 托管（`automation_mode=cli` 或 `ai_managed=true`）时，终端才会开启“AI CLI 状态跟踪”。
-- 进入/退出 CLI 的判断 **只基于终端输出锚点**（banner/prompt/会话文件标识/权限确认提示等），命中后才将 `metadata.ai_assistant.detected=true` 作为“已进入 CLI 模式”的标记；不会用“输入命令关键词”作为判定依据。
+- **CLI 托管（`automation_mode=cli`）**：必须在任务里明确选择 `cli_type`，终端会开启“AI CLI 状态跟踪”，并使用 **所选 CLI 的输出锚点** 命中后将 `metadata.ai_assistant.detected=true` 作为“已进入 CLI 模式”的标记。
+- **CLI 可选（`ai_managed=true` 但 `automation_mode!=cli`）**：CLI 不强制。系统会基于输出锚点做“候选预判”（`needs_confirm=true`），并允许用户在终端面板手动确认（是/否/不确定），必要时也可触发 AI 预判（见 `/api/terminals/:id/ai-assistant/evaluate` 与 `/api/terminals/:id/ai-assistant/confirm`）。
+- 进入/退出 CLI 的自动判断仍以 **终端输出锚点/启发式证据** 为主；不会把“输入命令关键词”直接当作确定进入/退出的依据（只作为用户确认/AI 判断时的上下文线索之一）。
 - 随后基于终端输出的状态检测（`waiting_input/working/waiting_approval`）确认 CLI 已进入可交互态，再发送提示词。
 - 若超时仍无法确认，就暂停任务并提示用户手动确认 CLI 安装/启动方式（例如 `claude` 或 `npx claude`）。
 

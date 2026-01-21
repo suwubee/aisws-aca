@@ -108,6 +108,13 @@
                       >
                         拒绝
                       </n-button>
+                      <n-button
+                        size="tiny"
+                        :disabled="isDemoMode || bulkLoading"
+                        @click="handleDismissApproval(approval.terminalId)"
+                      >
+                        取消提示
+                      </n-button>
                     </n-space>
                   </div>
                 </div>
@@ -201,6 +208,15 @@
                           @click="handleRespond(approval.terminalId, 'no')"
                         >
                           拒绝 (no)
+                        </n-button>
+                      </n-space>
+                      <n-space>
+                        <n-button
+                          size="small"
+                          :disabled="isDemoMode || bulkLoading"
+                          @click="handleDismissApproval(approval.terminalId)"
+                        >
+                          取消提示
                         </n-button>
                       </n-space>
                     </n-space>
@@ -566,6 +582,16 @@ async function respondToApproval(
 
 function handleRespond(terminalId: string, response: string) {
   respondToApproval(terminalId, response)
+}
+
+function handleDismissApproval(terminalId: string) {
+  approvalStore.dismissPendingApproval(terminalId)
+  if (!terminalId) return
+  // Close expanded panel if it belongs to this terminal
+  const match = pendingApprovals.value.find(p => p.terminalId === terminalId || p.id === terminalId)
+  if (match && expandedId.value === match.id) {
+    expandedId.value = null
+  }
 }
 
 async function sendKeyActionToTerminal(

@@ -115,6 +115,14 @@ export const terminalApi = {
     api.post(`/terminals/${id}/link-task`, { task_id: taskId }),
   emitAILog: (id: string, data: { type?: string; message: string; task_id?: string }) =>
     api.post(`/terminals/${id}/ai-log`, data),
+  confirmAIAssistant: (
+    id: string,
+    payload: { decision: 'yes' | 'no' | 'unknown'; assistant_type?: string; ttl_seconds?: number }
+  ) => api.post(`/terminals/${id}/ai-assistant/confirm`, payload),
+  evaluateAIAssistant: (
+    id: string,
+    payload?: { use_ai?: boolean; max_lines?: number; max_runes?: number; timeout_ms?: number }
+  ) => api.post(`/terminals/${id}/ai-assistant/evaluate`, payload || {}),
   stats: () => api.get('/terminals/stats'),
   logs: (id: string, params?: TerminalLogsParams) => api.get(`/terminals/${id}/logs`, { params }),
   clearLogs: (id: string) => api.delete(`/terminals/${id}/logs`),

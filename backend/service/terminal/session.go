@@ -103,6 +103,13 @@ type AIAssistant struct {
 	Detected       bool      `json:"detected"`
 	Version        string    `json:"version,omitempty"`
 	ApprovalPrompt string    `json:"approval_prompt,omitempty"` // 当前的审批提示
+	// CLI 状态确认（用于“CLI可选/不强制”的场景：允许人工确认 + AI/启发式预判）
+	NeedsConfirm   bool    `json:"needs_confirm,omitempty"`   // 是否需要用户确认 CLI 状态
+	ConfirmKind    string  `json:"confirm_kind,omitempty"`    // enter_cli / exit_cli
+	ConfirmMessage string  `json:"confirm_message,omitempty"` // 用于弹框展示的证据/原因片段
+	Source         string  `json:"source,omitempty"`          // anchor / heuristic / manual / ai
+	Confidence     float64 `json:"confidence,omitempty"`      // 0-1，预判置信度
+	Manual         bool    `json:"manual,omitempty"`          // 是否处于人工确认/覆盖状态
 }
 
 // Session 终端会话
@@ -145,6 +152,8 @@ type Session struct {
 	approvalEngine         *approval.Engine
 	cliTrackingEnabled     bool
 	expectedAIAgentType    detector.AIAgentType
+	cliManualPresent       *bool
+	cliManualUntil         time.Time
 	lastOutput             string // 用于检测状态变化
 	lastOutputMu           sync.Mutex
 	approvalEvalMu         sync.Mutex
@@ -553,45 +562,167 @@ func (s *Session) flushDataBatchLocked() {
 	s.dataBatchBuf = s.dataBatchBuf[:0]
 }
 
+func lastNonEmptyLineLooksLikeShellPrompt(output string) bool {
+	cleaned := strings.TrimSpace(stripANSI(output))
+	if cleaned == "" {
+		return false
+	}
+	lines := strings.Split(cleaned, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		// Only treat as shell prompt when the last non-empty line itself looks like a prompt.
+		// This is intentionally conservative to avoid misclassifying "$" in logs/snippets as an exit signal.
+		return isPromptLine(line) || shellPromptRegex.MatchString(line)
+	}
+	return false
+}
+
 // detectAndHandle 检测AI状态并处理审批
 func (s *Session) detectAndHandle(data []byte) {
 	output := string(data)
 
-	s.metaMutex.RLock()
+	now := time.Now()
+
+	s.metaMutex.Lock()
+	// Expire manual override lazily.
+	if s.cliManualPresent != nil && !s.cliManualUntil.IsZero() && now.After(s.cliManualUntil) {
+		s.cliManualPresent = nil
+		s.cliManualUntil = time.Time{}
+		if s.aiAssistant != nil {
+			s.aiAssistant.Manual = false
+			if s.aiAssistant.Source == "manual" {
+				s.aiAssistant.Source = ""
+				s.aiAssistant.Confidence = 0
+			}
+		}
+	}
 	cliTrackingEnabled := s.cliTrackingEnabled
 	expectedType := s.expectedAIAgentType
 	currentAssistant := s.aiAssistant
-	s.metaMutex.RUnlock()
+	manualPresent := s.cliManualPresent
+	manualUntil := s.cliManualUntil
+	s.metaMutex.Unlock()
 
-	// 检测AI代理（仅在任务选择了 CLI 且启用了托管/CLI模式时启用检测，避免误判）
-	if cliTrackingEnabled && strings.TrimSpace(string(expectedType)) != "" && expectedType != detector.AIAgentUnknown {
-		if currentAssistant == nil || !currentAssistant.Detected {
-			if agent := s.detector.DetectAgentWithType(output, expectedType); agent != nil {
-				s.metaMutex.Lock()
-				if s.aiAssistant == nil {
-					s.aiAssistant = &AIAssistant{
-						Type:           string(agent.Type),
-						DisplayName:    agent.DisplayName,
-						State:          string(agent.State),
-						StateUpdatedAt: agent.StateUpdatedAt,
-						Detected:       true,
-						Version:        agent.Version,
-					}
-				} else {
-					s.aiAssistant.Type = string(agent.Type)
-					s.aiAssistant.DisplayName = agent.DisplayName
-					s.aiAssistant.Detected = true
-					s.aiAssistant.Version = agent.Version
-					s.aiAssistant.StateUpdatedAt = time.Now()
+	manualActive := manualPresent != nil && !manualUntil.IsZero() && now.Before(manualUntil)
+
+	// CLI 检测/确认：CLI 可选（不强制），允许通过“输出锚点预判 + 用户确认”闭环。
+	if cliTrackingEnabled {
+		// 1) 人工确认覆盖：只要在有效期内，就按用户选择固定 detected（避免误判导致阻塞）。
+		if manualActive {
+			s.metaMutex.Lock()
+			if s.aiAssistant == nil {
+				s.aiAssistant = &AIAssistant{
+					Type:           string(detector.AIAgentUnknown),
+					DisplayName:    "AI CLI",
+					State:          string(detector.StateUnknown),
+					StateUpdatedAt: now,
+					Detected:       false,
 				}
-				s.metadata.AIAssistant = s.aiAssistant
-				s.metaMutex.Unlock()
+			}
+			s.aiAssistant.Manual = true
+			s.aiAssistant.Source = "manual"
+			s.aiAssistant.Confidence = 1
+			if manualPresent != nil {
+				s.aiAssistant.Detected = *manualPresent
+			}
+			s.aiAssistant.NeedsConfirm = false
+			s.aiAssistant.ConfirmKind = ""
+			s.aiAssistant.ConfirmMessage = ""
+			s.metadata.AIAssistant = s.aiAssistant
+			s.metaMutex.Unlock()
+		} else if strings.TrimSpace(string(expectedType)) != "" && expectedType != detector.AIAgentUnknown {
+			// 2) 任务明确选择了 CLI 类型：使用类型限定的输出锚点确认进入（detected=true）。
+			if currentAssistant == nil || !currentAssistant.Detected {
+				if agent := s.detector.DetectAgentWithType(output, expectedType); agent != nil {
+					s.metaMutex.Lock()
+					if s.aiAssistant == nil {
+						s.aiAssistant = &AIAssistant{
+							Type:           string(agent.Type),
+							DisplayName:    agent.DisplayName,
+							State:          string(agent.State),
+							StateUpdatedAt: agent.StateUpdatedAt,
+							Detected:       true,
+							Version:        agent.Version,
+							Source:         "anchor",
+							Confidence:     1,
+							Manual:         false,
+						}
+					} else {
+						s.aiAssistant.Type = string(agent.Type)
+						s.aiAssistant.DisplayName = agent.DisplayName
+						s.aiAssistant.Detected = true
+						s.aiAssistant.Version = agent.Version
+						s.aiAssistant.StateUpdatedAt = now
+						s.aiAssistant.Source = "anchor"
+						s.aiAssistant.Confidence = 1
+						s.aiAssistant.NeedsConfirm = false
+						s.aiAssistant.ConfirmKind = ""
+						s.aiAssistant.ConfirmMessage = ""
+						s.aiAssistant.Manual = false
+					}
+					s.metadata.AIAssistant = s.aiAssistant
+					s.metaMutex.Unlock()
 
-				utils.Info("AI CLI entered (detected from output)",
-					zap.String("type", string(agent.Type)),
-					zap.String("terminal", s.id))
+					utils.Info("AI CLI entered (detected from output)",
+						zap.String("type", string(agent.Type)),
+						zap.String("terminal", s.id))
 
-				s.broadcastMetadata()
+					s.broadcastMetadata()
+				}
+			}
+		} else {
+			// 3) CLI 未强制选择：命中输出锚点时先作为候选（needs_confirm=true），由用户确认“是/否/不确定”。
+			if currentAssistant == nil {
+				currentAssistant = &AIAssistant{
+					Type:           string(detector.AIAgentUnknown),
+					DisplayName:    "AI CLI",
+					State:          string(detector.StateUnknown),
+					StateUpdatedAt: now,
+					Detected:       false,
+				}
+			}
+			if !currentAssistant.Detected && !currentAssistant.NeedsConfirm {
+				if agent := s.detector.DetectAgent(output); agent != nil {
+					s.metaMutex.Lock()
+					if s.aiAssistant == nil {
+						s.aiAssistant = &AIAssistant{
+							Type:           string(agent.Type),
+							DisplayName:    agent.DisplayName,
+							State:          string(agent.State),
+							StateUpdatedAt: agent.StateUpdatedAt,
+							Detected:       false,
+							Version:        agent.Version,
+							Source:         "anchor",
+							Confidence:     0.7,
+							NeedsConfirm:   true,
+							ConfirmKind:    "enter_cli",
+							ConfirmMessage: "检测到可能已进入 AI CLI，请确认是否进入交互界面（是/否/不确定）",
+						}
+					} else {
+						s.aiAssistant.Type = string(agent.Type)
+						s.aiAssistant.DisplayName = agent.DisplayName
+						s.aiAssistant.Detected = false
+						s.aiAssistant.Version = agent.Version
+						s.aiAssistant.StateUpdatedAt = now
+						s.aiAssistant.Source = "anchor"
+						s.aiAssistant.Confidence = 0.7
+						s.aiAssistant.NeedsConfirm = true
+						s.aiAssistant.ConfirmKind = "enter_cli"
+						s.aiAssistant.ConfirmMessage = "检测到可能已进入 AI CLI，请确认是否进入交互界面（是/否/不确定）"
+						s.aiAssistant.Manual = false
+					}
+					s.metadata.AIAssistant = s.aiAssistant
+					s.metaMutex.Unlock()
+
+					utils.Info("AI CLI candidate detected (needs confirmation)",
+						zap.String("type", string(agent.Type)),
+						zap.String("terminal", s.id))
+
+					s.broadcastMetadata()
+				}
 			}
 		}
 	}
@@ -609,23 +740,32 @@ func (s *Session) detectAndHandle(data []byte) {
 		go s.handleApproval(output)
 	}
 
-	// 更新AI助手状态（如果存在）
-	s.metaMutex.Lock()
-	if s.aiAssistant != nil {
-		oldState := s.aiAssistant.State
-		s.aiAssistant.State = string(state)
-		s.aiAssistant.StateUpdatedAt = time.Now()
+		// 更新AI助手状态（如果存在）
+		s.metaMutex.Lock()
+		if s.aiAssistant != nil {
+			oldState := s.aiAssistant.State
+			s.aiAssistant.State = string(state)
+		s.aiAssistant.StateUpdatedAt = now
 		if approvalPrompt != "" {
 			s.aiAssistant.ApprovalPrompt = approvalPrompt
 		}
 		s.metadata.AIAssistant = s.aiAssistant
 
-		// CLI 退出：从可交互/工作态回到 shell prompt
-		if cliTrackingEnabled && s.aiAssistant.Detected &&
-			oldState != string(detector.StateIdle) &&
-			state == detector.StateIdle {
-			s.aiAssistant.Detected = false
-			s.aiAssistant.ApprovalPrompt = ""
+			// CLI 退出（疑似）：从可交互/工作态回到 shell prompt。
+			// 为了安全默认先将 detected=false（避免把 prompt 当作 shell 命令执行），并交由用户确认闭环。
+			if cliTrackingEnabled && s.aiAssistant.Detected &&
+				oldState != string(detector.StateIdle) &&
+				state == detector.StateIdle &&
+				lastNonEmptyLineLooksLikeShellPrompt(output) &&
+				!(manualActive && manualPresent != nil && *manualPresent) {
+				s.aiAssistant.Detected = false
+				s.aiAssistant.ApprovalPrompt = ""
+				s.aiAssistant.NeedsConfirm = true
+			s.aiAssistant.ConfirmKind = "exit_cli"
+			s.aiAssistant.ConfirmMessage = "检测到可能已退出 AI CLI（出现 shell 提示符），请确认当前是否仍在 AI CLI（是/否/不确定）"
+			s.aiAssistant.Source = "heuristic"
+			s.aiAssistant.Confidence = 0.5
+			s.aiAssistant.Manual = false
 		}
 
 		// 状态变化时广播
@@ -1547,37 +1687,46 @@ func (s *Session) refreshTaskCLISelection() {
 	enabled := false
 	expectedType := detector.AIAgentUnknown
 	displayName := ""
+	taskMode := ""
 
 	if taskID != "" && model.DB != nil {
 		var task model.Task
 		if err := model.DB.Select("automation_mode", "ai_managed", "cli_type").First(&task, "id = ?", taskID).Error; err == nil {
-			mode := strings.ToLower(strings.TrimSpace(task.AutomationMode))
-			enabled = task.AIManaged || mode == "cli"
+			taskMode = strings.ToLower(strings.TrimSpace(task.AutomationMode))
+			enabled = task.AIManaged || taskMode == "cli"
 
-			cliType := strings.ToLower(strings.TrimSpace(task.CLIType))
-			switch cliType {
-			case "claude":
-				expectedType = detector.AIAgentClaudeCode
-				displayName = "Claude Code"
-			case "codex":
-				expectedType = detector.AIAgentCodex
-				displayName = "OpenAI Codex"
-			case "gemini":
-				expectedType = detector.AIAgentGemini
-				displayName = "Gemini CLI"
-			default:
+			// CLI 可选：只有 automation_mode=cli 时才“强绑定” cli_type；否则允许 unknown，由输出锚点/人工确认决定。
+			if taskMode == "cli" {
+				cliType := strings.ToLower(strings.TrimSpace(task.CLIType))
+				switch cliType {
+				case "claude":
+					expectedType = detector.AIAgentClaudeCode
+					displayName = "Claude Code"
+				case "codex":
+					expectedType = detector.AIAgentCodex
+					displayName = "OpenAI Codex"
+				case "gemini":
+					expectedType = detector.AIAgentGemini
+					displayName = "Gemini CLI"
+				default:
+					expectedType = detector.AIAgentUnknown
+					displayName = ""
+				}
+			} else {
 				expectedType = detector.AIAgentUnknown
-				displayName = ""
+				displayName = "AI CLI"
 			}
 		}
 	}
 
-	if !enabled || expectedType == detector.AIAgentUnknown {
+	if !enabled || (taskMode == "cli" && expectedType == detector.AIAgentUnknown) {
 		s.metaMutex.Lock()
 		s.cliTrackingEnabled = false
 		s.expectedAIAgentType = detector.AIAgentUnknown
 		s.aiAssistant = nil
 		s.metadata.AIAssistant = nil
+		s.cliManualPresent = nil
+		s.cliManualUntil = time.Time{}
 		s.metaMutex.Unlock()
 		s.broadcastMetadata()
 		return
@@ -1596,6 +1745,12 @@ func (s *Session) refreshTaskCLISelection() {
 			Detected:       false,
 			Version:        "",
 			ApprovalPrompt: "",
+			NeedsConfirm:   false,
+			ConfirmKind:    "",
+			ConfirmMessage: "",
+			Source:         "",
+			Confidence:     0,
+			Manual:         false,
 		}
 	} else if s.aiAssistant != nil && s.aiAssistant.DisplayName != displayName {
 		s.aiAssistant.DisplayName = displayName
@@ -1605,6 +1760,101 @@ func (s *Session) refreshTaskCLISelection() {
 	s.metaMutex.Unlock()
 
 	s.broadcastMetadata()
+}
+
+func normalizeAIAssistantType(value string) (detector.AIAgentType, string) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch v {
+	case "claude", "claude-code", "claude_code":
+		return detector.AIAgentClaudeCode, "Claude Code"
+	case "codex", "openai-codex":
+		return detector.AIAgentCodex, "OpenAI Codex"
+	case "gemini":
+		return detector.AIAgentGemini, "Gemini CLI"
+	default:
+		return detector.AIAgentUnknown, ""
+	}
+}
+
+// ConfirmCLIState allows user/AI to manually confirm whether the terminal is currently inside an AI CLI.
+//
+// decision: yes/no/unknown (also accepts y/n/true/false/unsure).
+// assistantType: optional hint (claude/codex/gemini).
+func (s *Session) ConfirmCLIState(decision string, assistantType string, ttl time.Duration) error {
+	if s == nil {
+		return errors.New("session is nil")
+	}
+
+	d := strings.ToLower(strings.TrimSpace(decision))
+	var present *bool
+	switch d {
+	case "yes", "y", "true", "in", "inside":
+		v := true
+		present = &v
+	case "no", "n", "false", "out", "outside":
+		v := false
+		present = &v
+	case "unknown", "unsure", "maybe", "idk", "":
+		present = nil
+	default:
+		return fmt.Errorf("invalid decision: %s", decision)
+	}
+
+	if ttl <= 0 {
+		ttl = 2 * time.Minute
+	}
+	until := time.Now().Add(ttl)
+
+	agentType, agentDisplay := normalizeAIAssistantType(assistantType)
+
+	s.metaMutex.Lock()
+	s.cliManualPresent = present
+	if present == nil {
+		s.cliManualUntil = time.Time{}
+	} else {
+		s.cliManualUntil = until
+	}
+
+	if s.aiAssistant == nil {
+		s.aiAssistant = &AIAssistant{
+			Type:           string(detector.AIAgentUnknown),
+			DisplayName:    "AI CLI",
+			State:          string(detector.StateUnknown),
+			StateUpdatedAt: time.Now(),
+			Detected:       false,
+		}
+	}
+
+	// Apply type hint if provided and known.
+	if agentType != detector.AIAgentUnknown && strings.TrimSpace(string(agentType)) != "" {
+		s.aiAssistant.Type = string(agentType)
+		if agentDisplay != "" {
+			s.aiAssistant.DisplayName = agentDisplay
+		}
+	}
+
+	s.aiAssistant.Manual = present != nil
+	s.aiAssistant.Source = "manual"
+	s.aiAssistant.Confidence = 1
+	s.aiAssistant.NeedsConfirm = false
+	s.aiAssistant.ConfirmKind = ""
+	s.aiAssistant.ConfirmMessage = ""
+
+	if present != nil {
+		s.aiAssistant.Detected = *present
+	} else {
+		// unknown => do not force detected=true; keep current value (but safe default is false).
+		s.aiAssistant.Detected = false
+		s.aiAssistant.Manual = false
+		s.aiAssistant.Source = ""
+		s.aiAssistant.Confidence = 0
+	}
+
+	s.metadata.AIAssistant = s.aiAssistant
+	s.metaMutex.Unlock()
+
+	s.broadcastMetadata()
+	return nil
 }
 
 // ToDBModel 转换为数据库模型
