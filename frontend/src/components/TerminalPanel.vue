@@ -135,11 +135,28 @@
             >
               {{ btn.label }}
             </button>
+            <button
+              class="quick-input-btn"
+              title="下拉到底部"
+              @click="scrollTerminalToBottom(terminal.id)"
+            >
+              ↓
+            </button>
+            <button
+              v-if="terminalConnectionStatus(terminal.id) === 'disconnected'"
+              class="quick-input-btn quick-input-btn-warn"
+              title="连接已断开，点击重连"
+              @click="reconnectTerminal(terminal.id)"
+            >
+              重连
+            </button>
           </div>
           <Terminal
             :ref="(el) => setTerminalRef(terminal.id, el)"
             :session-id="terminal.id"
+            :auto-scroll-seconds="terminalUiStore.getAutoScrollSeconds(terminal.id)"
             @metadata-update="(m) => updateMetadata(terminal.id, m)"
+            @connection-change="(s) => updateConnectionStatus(terminal.id, s)"
           />
         </div>
         <div v-if="terminals.length === 0" class="empty-terminal">
@@ -497,12 +514,13 @@
   import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
   import { useTaskStore, type Task } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
-import { useKeyBindingsStore } from '@/stores/keyBindings'
-import { useAuthStore } from '@/stores/auth'
-import { useApprovalStore, type PendingApproval } from '@/stores/approval'
-import Terminal from './Terminal.vue'
-import TerminalLogs from './TerminalLogs.vue'
-	import TerminalApprovals from './TerminalApprovals.vue'
+	import { useKeyBindingsStore } from '@/stores/keyBindings'
+	import { useAuthStore } from '@/stores/auth'
+	import { useApprovalStore, type PendingApproval } from '@/stores/approval'
+	import { useTerminalUiStore } from '@/stores/terminalUi'
+	import Terminal from './Terminal.vue'
+	import TerminalLogs from './TerminalLogs.vue'
+		import TerminalApprovals from './TerminalApprovals.vue'
 	import TerminalRuleConfig from './TerminalRuleConfig.vue'
 
 	const message = useMessage()
@@ -510,14 +528,18 @@ import TerminalLogs from './TerminalLogs.vue'
 	const terminalStore = useTerminalStore()
 	const taskStore = useTaskStore()
 	const serverStore = useServerStore()
-	const keyBindingsStore = useKeyBindingsStore()
-	const authStore = useAuthStore()
-const approvalStore = useApprovalStore()
-const isDemoMode = computed(() => authStore.isDemoMode)
+		const keyBindingsStore = useKeyBindingsStore()
+		const authStore = useAuthStore()
+	const approvalStore = useApprovalStore()
+	const terminalUiStore = useTerminalUiStore()
+	const isDemoMode = computed(() => authStore.isDemoMode)
 
-const terminals = computed(() => terminalStore.terminals)
-const activeTerminalId = computed(() => terminalStore.activeTerminalId)
-const activeTerminal = computed(() => terminals.value.find(t => t.id === activeTerminalId.value))
+	type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
+	const connectionStatusByTerminal = reactive<Record<string, ConnectionStatus>>({})
+
+	const terminals = computed(() => terminalStore.terminals)
+	const activeTerminalId = computed(() => terminalStore.activeTerminalId)
+	const activeTerminal = computed(() => terminals.value.find(t => t.id === activeTerminalId.value))
 const taskOptions = computed(() =>
   taskStore.tasks.map(t => ({ label: t.title, value: t.id }))
 )
@@ -1432,13 +1454,36 @@ watch([showWorkflow, activeTerminalId], ([visible, tid]) => {
 // Terminal 组件引用
 const terminalRefs = new Map<string, any>()
 
-function setTerminalRef(id: string, el: any) {
-  if (el) {
-    terminalRefs.set(id, el)
-  } else {
-    terminalRefs.delete(id)
-  }
-}
+	function setTerminalRef(id: string, el: any) {
+	  if (el) {
+	    terminalRefs.set(id, el)
+	  } else {
+	    terminalRefs.delete(id)
+	  }
+	}
+
+	function updateConnectionStatus(terminalId: string, status: ConnectionStatus) {
+	  const id = String(terminalId || '').trim()
+	  if (!id) return
+	  connectionStatusByTerminal[id] = status
+	}
+
+	function terminalConnectionStatus(terminalId: string): ConnectionStatus {
+	  const id = String(terminalId || '').trim()
+	  return (id && connectionStatusByTerminal[id]) || 'connecting'
+	}
+
+	function scrollTerminalToBottom(terminalId: string) {
+	  const id = String(terminalId || '').trim()
+	  if (!id) return
+	  terminalRefs.get(id)?.scrollToBottom?.()
+	}
+
+	function reconnectTerminal(terminalId: string) {
+	  const id = String(terminalId || '').trim()
+	  if (!id) return
+	  terminalRefs.get(id)?.reconnect?.()
+	}
 
 function fitActiveTerminal() {
   const id = activeTerminalId.value
@@ -1923,6 +1968,12 @@ function getStatusClass(terminal: TerminalTab) {
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
+}
+
+.quick-input-btn.quick-input-btn-warn {
+  border-color: rgba(240, 160, 32, 0.6);
+  background: rgba(240, 160, 32, 0.12);
+  color: #f0a020;
 }
 
 .quick-input-btn:hover {
