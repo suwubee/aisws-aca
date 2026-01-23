@@ -107,6 +107,8 @@ const total = ref(0)
 const logType = ref<string>('')
 const logsContainer = ref<HTMLElement | null>(null)
 const loading = ref(false)
+let fetchSeq = 0
+let inflightSessionId = ''
 
 const typeOptions = [
   { label: '全部', value: '' },
@@ -204,8 +206,11 @@ function handleScroll() {
 }
 
 async function fetchLatest(replace: boolean) {
-  if (loading.value) return
+  const seq = ++fetchSeq
+  const sid = String(props.sessionId || '').trim()
+  if (loading.value && inflightSessionId === sid) return
   loading.value = true
+  inflightSessionId = sid
 
   try {
     const shouldStick = replace ? true : isNearBottom()
@@ -215,6 +220,9 @@ async function fetchLatest(replace: boolean) {
       type: logType.value || undefined,
       order: 'desc'
     })
+
+    if (seq !== fetchSeq) return
+    if (String(props.sessionId || '').trim() !== sid) return
 
     const latestAsc = normalizeDescToAsc(data.items || [])
     total.value = data.total || 0
@@ -239,13 +247,18 @@ async function fetchLatest(replace: boolean) {
   } catch (error) {
     console.error('Failed to fetch logs:', error)
   } finally {
-    loading.value = false
+    if (seq === fetchSeq) {
+      loading.value = false
+      inflightSessionId = ''
+    }
   }
 }
 
 async function fetchOlder() {
   if (loading.value) return
   if (!hasMore.value) return
+  const seq = ++fetchSeq
+  const sid = String(props.sessionId || '').trim()
   loading.value = true
 
   try {
@@ -259,6 +272,9 @@ async function fetchOlder() {
       type: logType.value || undefined,
       order: 'desc'
     })
+
+    if (seq !== fetchSeq) return
+    if (String(props.sessionId || '').trim() !== sid) return
 
     const olderAsc = normalizeDescToAsc(data.items || [])
     total.value = data.total || total.value
@@ -275,7 +291,9 @@ async function fetchOlder() {
   } catch (error) {
     console.error('Failed to fetch older logs:', error)
   } finally {
-    loading.value = false
+    if (seq === fetchSeq) {
+      loading.value = false
+    }
   }
 }
 

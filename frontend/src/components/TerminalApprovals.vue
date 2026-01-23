@@ -131,6 +131,9 @@ const aiLogs = ref<AILogEntry[]>([])
 let aiLogWs: WebSocket | null = null
 let aiLogReconnectTimer: number | null = null
 let destroyed = false
+let aiLogStreamSeq = 0
+let aiPersistFetchSeq = 0
+let recordsFetchSeq = 0
 
 function formatLogTime(date: Date) {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
@@ -150,6 +153,7 @@ function getTypeLabel(type: string) {
 function connectAILogWs() {
   if (destroyed) return
   if (!props.terminalId) return
+  const streamSeq = ++aiLogStreamSeq
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token')
   const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws?sessionId=${props.terminalId}&token=${token}`
@@ -161,6 +165,8 @@ function connectAILogWs() {
 
   aiLogWs = new WebSocket(wsUrl)
   aiLogWs.onmessage = (event) => {
+    if (destroyed) return
+    if (streamSeq !== aiLogStreamSeq) return
     try {
       const msg = JSON.parse(event.data)
       if (msg.type === 'ai_log' && msg.ai_log?.type && msg.ai_log?.message) {
@@ -174,6 +180,7 @@ function connectAILogWs() {
     }
   }
   aiLogWs.onclose = () => {
+    if (streamSeq !== aiLogStreamSeq) return
     aiLogWs = null
     if (destroyed) return
     if (!props.terminalId) return
@@ -208,14 +215,18 @@ function parseAILogFromSystemLog(content: string) {
 }
 
 async function fetchPersistedAILogs(replace = true) {
-  if (!props.terminalId) return
+  const tid = String(props.terminalId || '').trim()
+  if (!tid) return
+  const seq = ++aiPersistFetchSeq
   try {
-    const { data } = await terminalApi.logs(props.terminalId, {
+    const { data } = await terminalApi.logs(tid, {
       limit: 200,
       offset: 0,
       type: 'system',
       order: 'asc'
     })
+    if (seq !== aiPersistFetchSeq) return
+    if (String(props.terminalId || '').trim() !== tid) return
     const items = (data?.items || []) as TerminalLogItem[]
     const parsed: AILogEntry[] = []
     for (const item of items) {
@@ -242,20 +253,26 @@ async function fetchPersistedAILogs(replace = true) {
     }
     if (aiLogs.value.length > 200) aiLogs.value = aiLogs.value.slice(-200)
   } catch (e) {
+    if (seq !== aiPersistFetchSeq) return
     console.error('Failed to fetch persisted AI logs:', e)
   }
 }
 
 async function fetchRecords(append = false) {
   if (loading.value) return
+  const tid = String(props.terminalId || '').trim()
+  if (!tid) return
+  const seq = ++recordsFetchSeq
   loading.value = true
   try {
     const offset = append ? records.value.length : 0
     const { data } = await automationApi.listApprovalRecords({
-      terminal_id: props.terminalId,
+      terminal_id: tid,
       limit: 50,
       offset
     })
+    if (seq !== recordsFetchSeq) return
+    if (String(props.terminalId || '').trim() !== tid) return
     if (append) {
       records.value = [...records.value, ...(data.items || [])]
     } else {
@@ -327,6 +344,9 @@ function cleanPrompt(content: string): string {
 }
 
 watch(() => props.terminalId, (newId) => {
+  recordsFetchSeq++
+  aiPersistFetchSeq++
+  aiLogStreamSeq++
   fetchRecords(false)
   // 重连AI日志WebSocket
   if (aiLogReconnectTimer) {
@@ -334,7 +354,10 @@ watch(() => props.terminalId, (newId) => {
     aiLogReconnectTimer = null
   }
   if (aiLogWs) {
+    aiLogWs.onopen = null
+    aiLogWs.onmessage = null
     aiLogWs.onclose = null
+    aiLogWs.onerror = null
     aiLogWs.close()
     aiLogWs = null
   }

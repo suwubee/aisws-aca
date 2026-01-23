@@ -36,6 +36,9 @@ export interface Task {
   // AI运行状态
   ai_status?: string
   ai_pause_reason?: string
+
+  // AI任务绑定与终端管理
+  active_terminal_id?: string | null
 }
 
 export interface TerminalSession {

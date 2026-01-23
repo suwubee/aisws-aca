@@ -136,6 +136,11 @@ export interface Task {
   ai_prompt: string
   ai_end_condition: string
   ai_error_handling: string
+
+  // AI任务绑定与终端管理
+  active_terminal_id?: string | null
+  ai_status?: string
+  ai_pause_reason?: string
 }
 
 export interface ListTasksParams {

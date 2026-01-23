@@ -153,6 +153,24 @@
 
 入口：`backend/api/task.go` 的 `StartTask()` → `backend/service/task/automation.go` 的 `AutomationService.StartTask()`
 
+### 4.0 多终端一致性：Task 级 AI 状态 vs Terminal 级 CLI/审批（避免“串消息”）
+
+本项目允许 **一个任务关联多个终端**（`TerminalSession.task_id`），但 **AI 托管运行态是任务级别**：
+
+- **Task 级别（全局）**：`ai_managed`、`ai_status`、`agent_session_id`、`active_terminal_id`
+- **Terminal 级别（局部）**：`metadata.ai_assistant.*`（是否进入 CLI、waiting_input/working 等）、审批提示与输入（Approval/Ask-user）
+
+因此在多终端场景中，常见误解是：
+
+- 在 A 终端启用 AI 托管后，切到 B 终端仍看到 “AI运行中”，以为 AI 也在 B 上执行；
+- UI 轮询/WS 未做“终端切换竞态保护”，导致 A 的异步结果覆盖到 B 的面板上，形成“串消息”的错觉。
+
+**建议的闭环原则（当前前端已按此方向修复）**
+
+1. 当任务 `active_terminal_id` 存在且任务处于 AI 托管/Agent 模式时，AI 控制面板需要显式展示“AI活跃终端”并提供一键切换。
+2. AI 控制面板的日志订阅/审批轮询需要按“当前控制目标终端”做作用域隔离，并在异步请求返回时校验作用域，避免跨终端覆盖。
+3. 用户点击 AI 控制入口时，若当前查看终端不是任务的 `active_terminal_id`，应优先引导/切换到活跃终端，避免把“查看终端”和“控制终端”混淆。
+
 ### 4.1 CLI 托管：启动阶段（创建终端 + 启动 CLI + 发送提示）
 
 1. 创建本地/远程工作目录（可选）。
