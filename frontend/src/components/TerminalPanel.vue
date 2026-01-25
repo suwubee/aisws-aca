@@ -135,11 +135,28 @@
             >
               {{ btn.label }}
             </button>
+            <button
+              class="quick-input-btn"
+              title="下拉到底部"
+              @click="scrollTerminalToBottom(terminal.id)"
+            >
+              ↓
+            </button>
+            <button
+              v-if="terminalConnectionStatus(terminal.id) === 'disconnected'"
+              class="quick-input-btn quick-input-btn-warn"
+              title="连接已断开，点击重连"
+              @click="reconnectTerminal(terminal.id)"
+            >
+              重连
+            </button>
           </div>
           <Terminal
             :ref="(el) => setTerminalRef(terminal.id, el)"
             :session-id="terminal.id"
+            :auto-scroll-seconds="terminalUiStore.getAutoScrollSeconds(terminal.id)"
             @metadata-update="(m) => updateMetadata(terminal.id, m)"
+            @connection-change="(s) => updateConnectionStatus(terminal.id, s)"
           />
         </div>
         <div v-if="terminals.length === 0" class="empty-terminal">
@@ -214,10 +231,24 @@
 	                  </n-tag>
 	                </div>
 	              </div>
+                <div v-if="(isAIManaged || isAgentMode) && taskActiveTerminalId" class="ai-control-subheader">
+                  <span class="ai-control-subheader-label">AI活跃终端</span>
+                  <span class="ai-control-subheader-value">
+                    {{ aiControlTerminal?.title || taskActiveTerminalId }}
+                  </span>
+                  <n-button
+                    v-if="isAIControlOtherTerminal"
+                    size="tiny"
+                    quaternary
+                    @click="setActiveTerminal(aiControlTerminalId)"
+                  >
+                    切换
+                  </n-button>
+                </div>
 	            </div>
 	            <div class="ai-control-content">
 	              <!-- AI 托管需要手动接管时，使用旧的“对话框 + 下方日志输出”模式 -->
-	              <div v-if="handoffKind" class="ai-handoff">
+		              <div v-if="handoffKind" class="ai-handoff">
 	                <div class="ai-handoff-header">
 	                  <div class="ai-handoff-title">需要手动接管</div>
                   <n-tag v-if="handoffKind === 'terminal'" size="small" :bordered="false" type="warning">terminal</n-tag>
@@ -228,18 +259,25 @@
                 <pre v-else class="ai-handoff-prompt">{{ (pendingWorkflowMessage?.content || '').trim() || '—' }}</pre>
 
                 <div class="ai-handoff-actions">
-                  <template v-if="handoffKind === 'terminal'">
-                    <n-space align="center" wrap>
-                      <n-button size="small" type="success" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('y')">
-                        允许 (y)
-                      </n-button>
-                      <n-button size="small" type="error" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('n')">
-                        拒绝 (n)
-                      </n-button>
-                      <n-input
-                        v-model:value="handoffResponse"
-                        placeholder="自定义响应（回车发送）"
-                        clearable
+	                  <template v-if="handoffKind === 'terminal'">
+	                    <n-space align="center" wrap>
+	                      <n-button size="small" type="success" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('y')">
+	                        允许 (y)
+	                      </n-button>
+	                      <n-button size="small" type="error" secondary :loading="handoffSending" :disabled="isDemoMode" @click="quickRespond('n')">
+	                        拒绝 (n)
+	                      </n-button>
+	                      <n-button
+	                        size="small"
+	                        :disabled="isDemoMode"
+	                        @click="dismissTerminalHandoff"
+	                      >
+	                        取消提示
+	                      </n-button>
+	                      <n-input
+	                        v-model:value="handoffResponse"
+	                        placeholder="自定义响应（回车发送）"
+	                        clearable
                         :disabled="isDemoMode"
                         @keyup.enter="submitHandoffResponse"
                         style="min-width: 220px"
@@ -256,10 +294,10 @@
                     </n-space>
                   </template>
 
-                  <template v-else>
-                    <n-space align="center" wrap>
-                      <n-input
-                        v-model:value="workflowResponse"
+	                  <template v-else>
+	                    <n-space align="center" wrap>
+	                      <n-input
+	                        v-model:value="workflowResponse"
                         placeholder="补充信息/确认内容（回车发送）"
                         clearable
                         :disabled="isDemoMode"
@@ -275,22 +313,82 @@
                       >
                         发送给 AI
                       </n-button>
-                      <n-button
-                        size="small"
-                        :loading="workflowSending"
-                        :disabled="isDemoMode"
-                        @click="quickConfirmWorkflow"
-                      >
-                        直接确认继续
-                      </n-button>
-                    </n-space>
-                  </template>
-                </div>
-              </div>
+	                      <n-button
+	                        size="small"
+	                        :loading="workflowSending"
+	                        :disabled="isDemoMode"
+	                        @click="quickConfirmWorkflow"
+	                      >
+	                        直接确认继续
+	                      </n-button>
+	                      <n-button
+	                        size="small"
+	                        :loading="workflowSending"
+	                        :disabled="isDemoMode"
+	                        @click="dismissWorkflowHandoff"
+	                      >
+	                        取消提示
+	                      </n-button>
+	                    </n-space>
+	                  </template>
+	                </div>
+	              </div>
 
-			              <div v-else-if="aiHandoffEmptyText.trim()" class="ai-handoff-empty">
-			                <p>{{ aiHandoffEmptyText }}</p>
-			              </div>
+	              <!-- CLI 状态不确定：允许人工确认“是/否/不确定”，也可让系统基于上下文预判 -->
+	              <div v-else-if="cliConfirmNeeded" class="ai-handoff">
+	                <div class="ai-handoff-header">
+	                  <div class="ai-handoff-title">需要确认：AI CLI 状态</div>
+	                  <n-tag v-if="cliConfirmKind" size="small" :bordered="false" type="warning">{{ cliConfirmKind }}</n-tag>
+	                </div>
+
+	                <pre class="ai-handoff-prompt">{{ cliConfirmMessage }}</pre>
+	                <div v-if="cliEvalHint.trim()" class="ai-handoff-hint">{{ cliEvalHint }}</div>
+
+	                <div class="ai-handoff-actions">
+	                  <n-space align="center" wrap>
+	                    <n-button
+	                      size="small"
+	                      type="success"
+	                      secondary
+	                      :loading="cliConfirmLoading"
+	                      :disabled="isDemoMode"
+	                      @click="confirmCLIState('yes')"
+	                    >
+	                      是（在 CLI）
+	                    </n-button>
+	                    <n-button
+	                      size="small"
+	                      type="error"
+	                      secondary
+	                      :loading="cliConfirmLoading"
+	                      :disabled="isDemoMode"
+	                      @click="confirmCLIState('no')"
+	                    >
+	                      否（不在 CLI）
+	                    </n-button>
+	                    <n-button
+	                      size="small"
+	                      :loading="cliConfirmLoading"
+	                      :disabled="isDemoMode"
+	                      @click="confirmCLIState('unknown')"
+	                    >
+	                      不确定
+	                    </n-button>
+	                    <n-button
+	                      size="small"
+	                      :loading="cliEvalLoading"
+	                      :disabled="isDemoMode"
+	                      @click="evaluateCLIState"
+	                    >
+	                      让 AI 预判
+	                    </n-button>
+	                  </n-space>
+	                </div>
+	              </div>
+
+				              <div v-else-if="aiHandoffEmptyText.trim()" class="ai-handoff-empty">
+				                <p>{{ aiHandoffEmptyText }}</p>
+				              </div>
 	
 	              <!-- 始终保留输入框：用于下发指令/补充信息，避免“启用AI后无处输入”卡住 -->
 	              <div class="ai-command-box">
@@ -430,12 +528,13 @@
   import { useTerminalStore, type TerminalTab } from '@/stores/terminal'
   import { useTaskStore, type Task } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
-import { useKeyBindingsStore } from '@/stores/keyBindings'
-import { useAuthStore } from '@/stores/auth'
-import { useApprovalStore, type PendingApproval } from '@/stores/approval'
-import Terminal from './Terminal.vue'
-import TerminalLogs from './TerminalLogs.vue'
-	import TerminalApprovals from './TerminalApprovals.vue'
+	import { useKeyBindingsStore } from '@/stores/keyBindings'
+	import { useAuthStore } from '@/stores/auth'
+	import { useApprovalStore, type PendingApproval } from '@/stores/approval'
+	import { useTerminalUiStore } from '@/stores/terminalUi'
+	import Terminal from './Terminal.vue'
+	import TerminalLogs from './TerminalLogs.vue'
+		import TerminalApprovals from './TerminalApprovals.vue'
 	import TerminalRuleConfig from './TerminalRuleConfig.vue'
 
 	const message = useMessage()
@@ -443,14 +542,18 @@ import TerminalLogs from './TerminalLogs.vue'
 	const terminalStore = useTerminalStore()
 	const taskStore = useTaskStore()
 	const serverStore = useServerStore()
-	const keyBindingsStore = useKeyBindingsStore()
-	const authStore = useAuthStore()
-const approvalStore = useApprovalStore()
-const isDemoMode = computed(() => authStore.isDemoMode)
+		const keyBindingsStore = useKeyBindingsStore()
+		const authStore = useAuthStore()
+	const approvalStore = useApprovalStore()
+	const terminalUiStore = useTerminalUiStore()
+	const isDemoMode = computed(() => authStore.isDemoMode)
 
-const terminals = computed(() => terminalStore.terminals)
-const activeTerminalId = computed(() => terminalStore.activeTerminalId)
-const activeTerminal = computed(() => terminals.value.find(t => t.id === activeTerminalId.value))
+	type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
+	const connectionStatusByTerminal = reactive<Record<string, ConnectionStatus>>({})
+
+	const terminals = computed(() => terminalStore.terminals)
+	const activeTerminalId = computed(() => terminalStore.activeTerminalId)
+	const activeTerminal = computed(() => terminals.value.find(t => t.id === activeTerminalId.value))
 const taskOptions = computed(() =>
   taskStore.tasks.map(t => ({ label: t.title, value: t.id }))
 )
@@ -525,9 +628,129 @@ const quickInputButtons = computed(() => {
 	  return taskStore.tasks.find(t => t.id === taskId) || null
 	})
 
-	const aiAssistant = computed(() => {
-	  return activeTerminal.value?.metadata?.ai_assistant || null
-	})
+const taskActiveTerminalId = computed(() => {
+  const raw = activeTask.value?.active_terminal_id
+  return String(raw || '').trim()
+})
+
+const aiControlTerminalId = computed(() => {
+  const current = String(activeTerminalId.value || '').trim()
+  const taskBound = taskActiveTerminalId.value
+  if (!current) return taskBound
+  if ((isAIManaged.value || isAgentMode.value) && taskBound) return taskBound
+  return current
+})
+
+const aiControlTerminal = computed(() => {
+  const tid = aiControlTerminalId.value
+  if (!tid) return activeTerminal.value || null
+  return terminals.value.find(t => t.id === tid) || activeTerminal.value || null
+})
+
+const isAIControlOtherTerminal = computed(() => {
+  const current = String(activeTerminalId.value || '').trim()
+  const target = String(aiControlTerminalId.value || '').trim()
+  return Boolean(current && target && current !== target)
+})
+
+const aiAssistant = computed(() => {
+  return aiControlTerminal.value?.metadata?.ai_assistant || null
+})
+
+// CLI 状态确认（CLI 可选/不强制）：当系统未能可靠判断进入/退出时，允许人工确认（是/否/不确定）或让 AI 预判。
+const cliConfirmForced = ref(false)
+const cliConfirmLoading = ref(false)
+const cliEvalLoading = ref(false)
+const cliEvalHint = ref('')
+
+const cliConfirmNeeded = computed(() => {
+  if (!aiControlTerminalId.value) return false
+  if (isAgentMode.value) return false
+  if (!isAIManaged.value) return false
+  const a: any = aiAssistant.value
+  return cliConfirmForced.value || !!a?.needs_confirm
+})
+
+const cliConfirmKind = computed(() => {
+  const a: any = aiAssistant.value
+  const k = String(a?.confirm_kind || '').trim()
+  return k || (cliConfirmForced.value ? 'send_blocked' : '')
+})
+
+const cliConfirmMessage = computed(() => {
+  const a: any = aiAssistant.value
+  const msg = String(a?.confirm_message || '').trim()
+  if (msg) return msg
+  return '系统未确认当前是否在 AI CLI 交互界面。你可以在终端中确认后选择：是/否/不确定。'
+})
+
+watch(aiAssistant, (a: any) => {
+  if (a?.detected) {
+    cliConfirmForced.value = false
+  }
+  if (!a?.needs_confirm && !cliConfirmForced.value) {
+    cliEvalHint.value = ''
+  }
+})
+
+watch(aiControlTerminalId, () => {
+  cliConfirmForced.value = false
+  cliEvalHint.value = ''
+})
+
+async function confirmCLIState(decision: 'yes' | 'no' | 'unknown') {
+  const terminalId = String(aiControlTerminalId.value || '').trim()
+  if (!terminalId) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (cliConfirmLoading.value) return
+  cliConfirmLoading.value = true
+  try {
+    const a: any = aiAssistant.value
+    await terminalApi.confirmAIAssistant(terminalId, {
+      decision,
+      assistant_type: String(a?.type || '').trim() || undefined,
+      ttl_seconds: 120
+    })
+    cliConfirmForced.value = false
+    cliEvalHint.value = ''
+    message.success('已更新 AI CLI 状态')
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || e?.message || '确认失败')
+  } finally {
+    cliConfirmLoading.value = false
+  }
+}
+
+async function evaluateCLIState() {
+  const terminalId = String(aiControlTerminalId.value || '').trim()
+  if (!terminalId) return
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (cliEvalLoading.value) return
+  cliEvalLoading.value = true
+  try {
+    const { data } = await terminalApi.evaluateAIAssistant(terminalId, {
+      use_ai: true,
+      max_lines: 80,
+      max_runes: 900,
+      timeout_ms: 1500
+    })
+    const present = String((data as any)?.present || 'unknown').trim()
+    const conf = Number((data as any)?.confidence ?? 0)
+    const name = String((data as any)?.display_name || (data as any)?.type || '').trim()
+    const reason = String((data as any)?.reason || '').trim()
+    cliEvalHint.value = `AI 预判：${present}${name ? ` / ${name}` : ''}（${(conf * 100).toFixed(0)}%）${reason ? ` · ${reason}` : ''}`
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || e?.message || '预判失败')
+  } finally {
+    cliEvalLoading.value = false
+  }
+}
 
 const isAgentMode = computed(() => {
   const mode = String(activeTask.value?.automation_mode || '').trim().toLowerCase()
@@ -615,10 +838,11 @@ const isAIRunning = computed(() => {
 	const aiMenuLabel = computed(() => {
 	  if (!activeTerminal.value) return 'AI'
 	  if (!activeTask.value) return 'AI未关联任务'
+	  const suffix = isAIControlOtherTerminal.value ? '·其他终端' : ''
 	  if (aiControlStatusLabel.value === '未启用') return 'AI未启用'
-	  if (aiControlStatusLabel.value === '运行中') return 'AI运行中'
-	  if (aiControlStatusLabel.value === '已暂停') return 'AI已暂停'
-	  return `AI${aiControlStatusLabel.value}`
+	  if (aiControlStatusLabel.value === '运行中') return `AI运行中${suffix}`
+	  if (aiControlStatusLabel.value === '已暂停') return `AI已暂停${suffix}`
+	  return `AI${aiControlStatusLabel.value}${suffix}`
 	})
 
 	const aiMenuTitle = computed(() => {
@@ -632,6 +856,12 @@ const isAIRunning = computed(() => {
 	})
 
 	async function openAIControlPanel() {
+	  const current = String(activeTerminalId.value || '').trim()
+	  const target = String(aiControlTerminalId.value || '').trim()
+	  if (target && current && target !== current) {
+	    terminalStore.setActiveTerminal(target)
+	    await nextTick()
+	  }
 	  showWorkflow.value = true
 	  showLogs.value = false
 	  showApprovals.value = false
@@ -759,12 +989,24 @@ async function quickRespond(value: 'y' | 'n') {
   }
 }
 
-async function fetchPendingWorkflowMessage() {
-  const tid = String(activeTerminalId.value || '').trim()
+function dismissTerminalHandoff() {
+  const approval = activePendingApproval.value
+  if (!approval) return
+  approvalStore.dismissPendingApproval(approval.terminalId)
+  message.info('已取消提示（你可以在终端中手动处理）')
+}
+
+let workflowFetchSeq = 0
+
+async function fetchPendingWorkflowMessage(terminalId: string) {
+  const tid = String(terminalId || '').trim()
+  const seq = ++workflowFetchSeq
+
   if (!tid) {
-    pendingWorkflowMessage.value = null
+    if (seq === workflowFetchSeq) pendingWorkflowMessage.value = null
     return
   }
+
   try {
     const { data } = await automationApi.listMessages({
       status: 'unread',
@@ -773,30 +1015,37 @@ async function fetchPendingWorkflowMessage() {
       limit: 20,
       offset: 0
     })
+    if (seq !== workflowFetchSeq) return
+
+    const currentScope = String(aiControlTerminalId.value || '').trim()
+    if (currentScope && currentScope !== tid) return
+
     const items = (data?.items || []) as ApprovalNeededMessage[]
     const found = items.find(m => Boolean(getWorkflowSessionId(m)))
     pendingWorkflowMessage.value = found || null
   } catch (e) {
+    if (seq !== workflowFetchSeq) return
     console.error('Failed to fetch approval_needed messages:', e)
   }
 }
 
 let workflowPollTimer: number | null = null
 function stopWorkflowPoll() {
+  workflowFetchSeq++
   if (workflowPollTimer) {
     window.clearInterval(workflowPollTimer)
     workflowPollTimer = null
   }
 }
 
-function startWorkflowPoll() {
+function startWorkflowPoll(terminalId: string) {
   stopWorkflowPoll()
   workflowPollTimer = window.setInterval(() => {
-    void fetchPendingWorkflowMessage()
+    void fetchPendingWorkflowMessage(terminalId)
   }, 5000)
 }
 
-watch([showWorkflow, activeTerminalId], ([visible, tid]) => {
+watch([showWorkflow, aiControlTerminalId], ([visible, tid]) => {
   if (!visible) {
     stopWorkflowPoll()
     pendingWorkflowMessage.value = null
@@ -807,8 +1056,9 @@ watch([showWorkflow, activeTerminalId], ([visible, tid]) => {
     pendingWorkflowMessage.value = null
     return
   }
-  void fetchPendingWorkflowMessage()
-  startWorkflowPoll()
+  const id = String(tid || '').trim()
+  void fetchPendingWorkflowMessage(id)
+  startWorkflowPoll(id)
 })
 
 async function submitWorkflowResponse() {
@@ -830,7 +1080,7 @@ async function submitWorkflowResponse() {
     await postAIWorkflowMessage(sessionId, input)
     workflowResponse.value = ''
     await automationApi.handleMessage(mid, 'submitted_workflow_message')
-    await fetchPendingWorkflowMessage()
+    await fetchPendingWorkflowMessage(String(aiControlTerminalId.value || ''))
     message.success('已发送给 AI，会话继续执行')
   } catch (e: any) {
     message.error(e?.response?.data?.error || '提交失败')
@@ -845,12 +1095,37 @@ async function quickConfirmWorkflow() {
   await submitWorkflowResponse()
 }
 
+async function dismissWorkflowHandoff() {
+  const msg = pendingWorkflowMessage.value
+  const mid = String(msg?.id || '').trim()
+  if (!mid) {
+    pendingWorkflowMessage.value = null
+    return
+  }
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (workflowSending.value) return
+  workflowSending.value = true
+  try {
+    await automationApi.dismissMessage(mid)
+    pendingWorkflowMessage.value = null
+    message.info('已取消提示')
+    await fetchPendingWorkflowMessage(String(aiControlTerminalId.value || ''))
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '取消失败')
+  } finally {
+    workflowSending.value = false
+  }
+}
+
 	async function submitAICommand() {
 	  if (isDemoMode.value) {
 	    message.warning('演示模式：只读')
 	    return
 	  }
-	  const terminalId = String(activeTerminalId.value || '').trim()
+	  const terminalId = String(aiControlTerminalId.value || activeTerminalId.value || '').trim()
 	  if (!terminalId) {
 	    message.error('请先选择一个终端')
 	    return
@@ -951,26 +1226,41 @@ async function quickConfirmWorkflow() {
 		    return
 		  }
 
-	  if (!isAIManaged.value) {
-	    message.warning('请先启用 AI 托管')
-	    return
-	  }
+		  if (!isAIManaged.value) {
+		    message.warning('请先启用 AI 托管')
+		    return
+		  }
 
-	  const assistant = aiAssistant.value
-	  if (!assistant?.detected) {
-	    message.warning('未检测到 AI CLI 就绪，请先在终端进入 AI CLI 后再发送')
-	    return
-	  }
-	  const state = String(assistant.state || '').trim()
-	  if (state && state !== 'waiting_input') {
-	    message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，请等待可输入`)
-	    return
-	  }
+		  const assistant: any = aiAssistant.value
+		  if (!assistant?.detected) {
+		    cliConfirmForced.value = true
+		    cliEvalHint.value = ''
+		    message.warning('需要先确认是否已进入 AI CLI（上方可选择“是/否/不确定”）')
+		    return
+		  }
+		  const state = String(assistant.state || '').trim()
+		  if (state === 'waiting_approval') {
+		    message.warning('AI 当前在等待确认/选择（waiting_approval），请先处理审批后再发送')
+		    return
+		  }
+		  if (state === 'working') {
+		    message.warning('AI 正在执行中（working），请稍后再发送')
+		    return
+		  }
+		  if (state && state !== 'waiting_input') {
+		    if (assistant.manual) {
+		      message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，将按人工确认继续发送`)
+		    } else {
+		      cliConfirmForced.value = true
+		      message.warning(`AI 当前状态：${assistant.display_name || assistant.type || 'AI'} / ${state}，请先确认/等待可输入`)
+		      return
+		    }
+		  }
 
-	  const normalized = normalizeResponseInput(input)
-	  terminalRefs.get(terminalId)?.sendInput?.(normalized)
-	  aiCommand.value = ''
-	  message.success('已发送给 AI')
+		  const normalized = normalizeResponseInput(input)
+		  terminalRefs.get(terminalId)?.sendInput?.(normalized)
+		  aiCommand.value = ''
+		  message.success('已发送给 AI')
 	  await nextTick()
 	  aiCommandInputRef.value?.focus?.()
 	}
@@ -1098,6 +1388,8 @@ const aiLogLoading = ref(false)
 let aiLogWs: WebSocket | null = null
 let aiLogReconnectTimer: number | null = null
 let aiLogDestroyed = false
+let aiLogStreamSeq = 0
+let aiLogFetchSeq = 0
 
 function formatAILogTime(date: Date) {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
@@ -1129,6 +1421,7 @@ function parseAILogFromSystemLog(content: string) {
 async function fetchPersistedAILogs(terminalId: string) {
   const tid = String(terminalId || '').trim()
   if (!tid) return
+  const seq = ++aiLogFetchSeq
   try {
     const { data } = await terminalApi.logs(tid, {
       limit: 200,
@@ -1136,6 +1429,10 @@ async function fetchPersistedAILogs(terminalId: string) {
       type: 'system',
       order: 'asc'
     })
+    if (seq !== aiLogFetchSeq) return
+    if (!showWorkflow.value) return
+    const currentScope = String(aiControlTerminalId.value || '').trim()
+    if (currentScope && currentScope !== tid) return
     const items = (data?.items || []) as Array<{ content: string; created_at: string }>
     const parsed: AILogEntry[] = []
     for (const item of items) {
@@ -1151,17 +1448,23 @@ async function fetchPersistedAILogs(terminalId: string) {
     }
     aiLogs.value = parsed.slice(-200)
   } catch (e) {
+    if (seq !== aiLogFetchSeq) return
     console.error('Failed to fetch persisted AI logs:', e)
   }
 }
 
 function stopAILogStream() {
+  aiLogStreamSeq++
+  aiLogFetchSeq++
   if (aiLogReconnectTimer) {
     window.clearTimeout(aiLogReconnectTimer)
     aiLogReconnectTimer = null
   }
   if (aiLogWs) {
+    aiLogWs.onopen = null
+    aiLogWs.onmessage = null
     aiLogWs.onclose = null
+    aiLogWs.onerror = null
     aiLogWs.close()
     aiLogWs = null
   }
@@ -1173,6 +1476,7 @@ function connectAILogWs(terminalId: string) {
   if (!tid) return
 
   stopAILogStream()
+  const streamSeq = aiLogStreamSeq
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token')
@@ -1180,6 +1484,7 @@ function connectAILogWs(terminalId: string) {
 
   aiLogWs = new WebSocket(wsUrl)
   aiLogWs.onmessage = (event) => {
+    if (streamSeq !== aiLogStreamSeq) return
     try {
       const msg = JSON.parse(event.data)
       if (msg.type === 'ai_log' && msg.ai_log?.type && msg.ai_log?.message) {
@@ -1193,6 +1498,7 @@ function connectAILogWs(terminalId: string) {
     }
   }
   aiLogWs.onclose = () => {
+    if (streamSeq !== aiLogStreamSeq) return
     aiLogWs = null
     if (aiLogDestroyed) return
     aiLogReconnectTimer = window.setTimeout(() => {
@@ -1203,8 +1509,9 @@ function connectAILogWs(terminalId: string) {
   }
 }
 
-async function refreshAILogs() {
-  const tid = String(activeTerminalId.value || '').trim()
+async function refreshAILogs(terminalId?: string | Event) {
+  const provided = typeof terminalId === 'string' ? terminalId : ''
+  const tid = String(provided || aiControlTerminalId.value || '').trim()
   if (!tid || aiLogLoading.value) return
   aiLogLoading.value = true
   try {
@@ -1214,27 +1521,50 @@ async function refreshAILogs() {
   }
 }
 
-watch([showWorkflow, activeTerminalId], ([visible, tid]) => {
+watch([showWorkflow, aiControlTerminalId], ([visible, tid]) => {
   stopAILogStream()
   aiLogs.value = []
 
   if (!visible) return
   const id = String(tid || '').trim()
   if (!id) return
-  void refreshAILogs()
+  void refreshAILogs(id)
   connectAILogWs(id)
 })
 
 // Terminal 组件引用
 const terminalRefs = new Map<string, any>()
 
-function setTerminalRef(id: string, el: any) {
-  if (el) {
-    terminalRefs.set(id, el)
-  } else {
-    terminalRefs.delete(id)
-  }
-}
+	function setTerminalRef(id: string, el: any) {
+	  if (el) {
+	    terminalRefs.set(id, el)
+	  } else {
+	    terminalRefs.delete(id)
+	  }
+	}
+
+	function updateConnectionStatus(terminalId: string, status: ConnectionStatus) {
+	  const id = String(terminalId || '').trim()
+	  if (!id) return
+	  connectionStatusByTerminal[id] = status
+	}
+
+	function terminalConnectionStatus(terminalId: string): ConnectionStatus {
+	  const id = String(terminalId || '').trim()
+	  return (id && connectionStatusByTerminal[id]) || 'connecting'
+	}
+
+	function scrollTerminalToBottom(terminalId: string) {
+	  const id = String(terminalId || '').trim()
+	  if (!id) return
+	  terminalRefs.get(id)?.scrollToBottom?.()
+	}
+
+	function reconnectTerminal(terminalId: string) {
+	  const id = String(terminalId || '').trim()
+	  if (!id) return
+	  terminalRefs.get(id)?.reconnect?.()
+	}
 
 function fitActiveTerminal() {
   const id = activeTerminalId.value
@@ -1306,7 +1636,7 @@ watch(activeTerminalId, () => {
 
   // AI托管任务：默认展示会话详情，避免“终端静止/无感知”
   if (!showLogs.value && !showApprovals.value && !showWorkflow.value) {
-    if (activeWorkflowSessionId.value) {
+    if (activeWorkflowSessionId.value && !isAIControlOtherTerminal.value) {
       showWorkflow.value = true
     }
   }
@@ -1315,7 +1645,9 @@ watch(activeTerminalId, () => {
 watch(activeWorkflowSessionId, (id) => {
   if (!id) return
   if (showLogs.value || showApprovals.value || showWorkflow.value) return
-  showWorkflow.value = true
+  if (!isAIControlOtherTerminal.value) {
+    showWorkflow.value = true
+  }
 })
 
 watch([showLogs, showApprovals, showWorkflow, isFullscreen, isFloating], () => {
@@ -1721,6 +2053,12 @@ function getStatusClass(terminal: TerminalTab) {
   white-space: nowrap;
 }
 
+.quick-input-btn.quick-input-btn-warn {
+  border-color: rgba(240, 160, 32, 0.6);
+  background: rgba(240, 160, 32, 0.12);
+  color: #f0a020;
+}
+
 .quick-input-btn:hover {
   background: #4a4a4a;
   color: #fff;
@@ -1768,6 +2106,29 @@ function getStatusClass(terminal: TerminalTab) {
 	  gap: 10px;
 	  flex-wrap: wrap;
 	}
+
+  .ai-control-subheader {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #9ca3af;
+    min-width: 0;
+  }
+
+  .ai-control-subheader-label {
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
+
+  .ai-control-subheader-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #e5e7eb;
+  }
 
 	.ai-control-toolbar {
 	  display: flex;
@@ -1835,6 +2196,14 @@ function getStatusClass(terminal: TerminalTab) {
 
 .ai-handoff-actions {
   margin-top: 10px;
+}
+
+.ai-handoff-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ai-handoff-empty {

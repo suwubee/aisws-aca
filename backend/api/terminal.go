@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/ai"
+	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/gofiber/fiber/v2"
@@ -466,17 +470,17 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		Metadata: session.Metadata(),
 	})
 
-		// 发送历史输出
-		scrollback := session.Scrollback()
-		if len(scrollback) > 0 {
-			scrollback = terminal.FilterInternalMarkers(scrollback)
-		}
-		if len(scrollback) > 0 {
-			c.WriteJSON(WSMessage{
-				Type: "data",
-				Data: base64.StdEncoding.EncodeToString(scrollback),
-			})
-		}
+	// 发送历史输出
+	scrollback := session.Scrollback()
+	if len(scrollback) > 0 {
+		scrollback = terminal.FilterInternalMarkers(scrollback)
+	}
+	if len(scrollback) > 0 {
+		c.WriteJSON(WSMessage{
+			Type: "data",
+			Data: base64.StdEncoding.EncodeToString(scrollback),
+		})
+	}
 
 	// 订阅会话
 	subID, eventCh := session.Subscribe()
@@ -523,28 +527,28 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 	}()
 
 	// 转发会话事件
-		for event := range eventCh {
-			wsMsg := WSMessage{
-				Type:           string(event.Type),
-				Data:           event.Data,
-				Metadata:       event.Metadata,
-				ExitCode:       event.ExitCode,
-				Message:        event.Message,
-				ApprovalResult: event.ApprovalResult,
-				AILog:          event.AILog,
-			}
-			if event.Type == terminal.StreamEventData && strings.TrimSpace(event.Data) != "" {
-				if raw, err := base64.StdEncoding.DecodeString(event.Data); err == nil && len(raw) > 0 {
-					filtered := terminal.FilterInternalMarkers(raw)
-					wsMsg.Data = base64.StdEncoding.EncodeToString(filtered)
-				}
-			}
-			if err := c.WriteJSON(wsMsg); err != nil {
-				utils.Debug("WebSocket write error", zap.Error(err))
-				return
+	for event := range eventCh {
+		wsMsg := WSMessage{
+			Type:           string(event.Type),
+			Data:           event.Data,
+			Metadata:       event.Metadata,
+			ExitCode:       event.ExitCode,
+			Message:        event.Message,
+			ApprovalResult: event.ApprovalResult,
+			AILog:          event.AILog,
+		}
+		if event.Type == terminal.StreamEventData && strings.TrimSpace(event.Data) != "" {
+			if raw, err := base64.StdEncoding.DecodeString(event.Data); err == nil && len(raw) > 0 {
+				filtered := terminal.FilterInternalMarkers(raw)
+				wsMsg.Data = base64.StdEncoding.EncodeToString(filtered)
 			}
 		}
+		if err := c.WriteJSON(wsMsg); err != nil {
+			utils.Debug("WebSocket write error", zap.Error(err))
+			return
+		}
 	}
+}
 
 // SendInput 通过HTTP向终端发送输入（用于审批中心等非WS场景）
 func (ctrl *TerminalController) SendInput(c *fiber.Ctx) error {
@@ -719,6 +723,236 @@ func (ctrl *TerminalController) EmitAILog(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "AI log recorded"})
 }
 
+// ConfirmAIAssistant allows user/AI to manually confirm whether the terminal is currently inside an AI CLI.
+func (ctrl *TerminalController) ConfirmAIAssistant(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+	if ctrl.manager == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
+	}
+
+	session := ctrl.manager.GetSession(id)
+	if session == nil {
+		if s, err := ctrl.manager.GetOrResumeSession(id); err == nil {
+			session = s
+		}
+	}
+	if session == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	var req struct {
+		Decision      string `json:"decision"`       // yes / no / unknown
+		AssistantType string `json:"assistant_type"` // optional: claude/codex/gemini
+		TTLSeconds    int    `json:"ttl_seconds"`    // optional
+	}
+	if err := c.BodyParser(&req); err != nil {
+		req = struct {
+			Decision      string `json:"decision"`
+			AssistantType string `json:"assistant_type"`
+			TTLSeconds    int    `json:"ttl_seconds"`
+		}{}
+	}
+
+	ttl := 2 * time.Minute
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+
+	if err := session.ConfirmCLIState(req.Decision, req.AssistantType, ttl); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "Confirmed"})
+}
+
+// EvaluateAIAssistant returns a best-effort guess about whether the terminal is currently inside an AI CLI.
+// It prefers deterministic heuristics, and optionally uses the configured AI provider when available.
+func (ctrl *TerminalController) EvaluateAIAssistant(c *fiber.Ctx) error {
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+	if ctrl.manager == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
+	}
+
+	session := ctrl.manager.GetSession(id)
+	if session == nil {
+		if s, err := ctrl.manager.GetOrResumeSession(id); err == nil {
+			session = s
+		}
+	}
+	if session == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+	}
+
+	var req struct {
+		UseAI     bool `json:"use_ai"`
+		MaxLines  int  `json:"max_lines"`
+		MaxRunes  int  `json:"max_runes"`
+		TimeoutMs int  `json:"timeout_ms"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		req = struct {
+			UseAI     bool `json:"use_ai"`
+			MaxLines  int  `json:"max_lines"`
+			MaxRunes  int  `json:"max_runes"`
+			TimeoutMs int  `json:"timeout_ms"`
+		}{}
+	}
+
+	lines := req.MaxLines
+	if lines <= 0 {
+		lines = 80
+	}
+	if lines > 200 {
+		lines = 200
+	}
+
+	maxRunes := req.MaxRunes
+	if maxRunes <= 0 {
+		maxRunes = 1200
+	}
+	if maxRunes > 4000 {
+		maxRunes = 4000
+	}
+
+	ctxTimeout := 1500
+	if req.TimeoutMs > 0 {
+		ctxTimeout = req.TimeoutMs
+	}
+	if ctxTimeout < 200 {
+		ctxTimeout = 200
+	}
+	if ctxTimeout > 5000 {
+		ctxTimeout = 5000
+	}
+
+	// Deterministic heuristics based on scrollback + detector.
+	scrollback := session.Scrollback()
+	contextText := detector.GetRecentContext(scrollback, lines)
+	d := detector.NewDetector()
+
+	meta := session.Metadata()
+	if meta != nil && meta.AIAssistant != nil && meta.AIAssistant.Detected {
+		// Already confirmed by output anchors/manual.
+		ev := strings.TrimSpace(contextText)
+		if ev != "" {
+			runes := []rune(ev)
+			if len(runes) > maxRunes {
+				ev = string(runes[len(runes)-maxRunes:])
+			}
+		}
+		return c.JSON(fiber.Map{
+			"present":      "yes",
+			"confidence":   1,
+			"type":         meta.AIAssistant.Type,
+			"display_name": meta.AIAssistant.DisplayName,
+			"reason":       "already_confirmed",
+			"evidence":     ev,
+		})
+	}
+
+	state, _ := d.DetectState(contextText)
+	agent := d.DetectAgent(contextText)
+
+	present := "unknown"
+	confidence := 0.3
+	reason := "insufficient_signal"
+	agentType := ""
+	displayName := ""
+
+	if agent != nil {
+		present = "yes"
+		confidence = 0.7
+		reason = "output_anchor_matched"
+		agentType = string(agent.Type)
+		displayName = agent.DisplayName
+	} else if state == detector.StateIdle {
+		present = "no"
+		confidence = 0.7
+		reason = "shell_prompt_idle"
+	} else if state == detector.StateWaitingApproval {
+		present = "unknown"
+		confidence = 0.5
+		reason = "waiting_approval"
+	} else if state == detector.StateWaitingInput || state == detector.StateWorking {
+		present = "unknown"
+		confidence = 0.4
+		reason = "interactive_but_untyped"
+	}
+
+	evidence := strings.TrimSpace(contextText)
+	if evidence != "" {
+		runes := []rune(evidence)
+		if len(runes) > maxRunes {
+			evidence = string(runes[len(runes)-maxRunes:])
+		}
+	}
+
+	// Optional AI assist (best effort). Only used when explicitly requested and configured.
+	if req.UseAI {
+		if model.DB != nil {
+			provider := ai.NewAIProvider()
+			if cfg, err := provider.GetDefaultConfig(); err == nil && cfg != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(ctxTimeout)*time.Millisecond)
+				defer cancel()
+
+				systemPrompt := "You are a terminal interaction classifier. Decide if the terminal is currently inside an AI CLI (Claude Code/Codex/Gemini) interactive session.\n" +
+					"Return JSON only: {\"present\":\"yes|no|unknown\",\"type\":\"claude-code|codex|gemini|unknown\",\"confidence\":0-1,\"reason\":\"...\"}.\n" +
+					"Be conservative: if unclear, use unknown."
+				userMsg := "Recent terminal context:\n\n" + evidence
+
+				if raw, err := provider.ChatSimple(ctx, cfg, systemPrompt, userMsg); err == nil {
+					parsed := map[string]any{}
+					if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(raw)), &parsed); jsonErr == nil {
+						if v, ok := parsed["present"].(string); ok && strings.TrimSpace(v) != "" {
+							present = strings.ToLower(strings.TrimSpace(v))
+						}
+						if v, ok := parsed["type"].(string); ok && strings.TrimSpace(v) != "" {
+							agentType = strings.TrimSpace(v)
+						}
+						if v, ok := parsed["confidence"].(float64); ok {
+							confidence = v
+						}
+						if v, ok := parsed["reason"].(string); ok && strings.TrimSpace(v) != "" {
+							reason = strings.TrimSpace(v)
+						} else {
+							reason = "ai_judgement"
+						}
+						// Display name best effort
+						switch strings.ToLower(strings.TrimSpace(agentType)) {
+						case string(detector.AIAgentClaudeCode), "claude":
+							displayName = "Claude Code"
+							agentType = string(detector.AIAgentClaudeCode)
+						case string(detector.AIAgentCodex):
+							displayName = "OpenAI Codex"
+							agentType = string(detector.AIAgentCodex)
+						case string(detector.AIAgentGemini):
+							displayName = "Gemini CLI"
+							agentType = string(detector.AIAgentGemini)
+						default:
+							// keep existing
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"present":      present,
+		"confidence":   confidence,
+		"type":         agentType,
+		"display_name": displayName,
+		"reason":       reason,
+		"evidence":     evidence,
+	})
+}
+
 // GetTerminalStats 获取终端统计
 func (ctrl *TerminalController) GetTerminalStats(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
@@ -741,6 +975,8 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Post("/:id/input", ctrl.SendInput)
 	terminals.Post("/:id/key-action", ctrl.SendKeyAction)
 	terminals.Post("/:id/ai-log", ctrl.EmitAILog)
+	terminals.Post("/:id/ai-assistant/confirm", ctrl.ConfirmAIAssistant)
+	terminals.Post("/:id/ai-assistant/evaluate", ctrl.EvaluateAIAssistant)
 	terminals.Get("/:id/logs", ctrl.GetLogs)
 	terminals.Delete("/:id/logs", ctrl.ClearLogs)
 	terminals.Delete("/:id/logs/:logId", ctrl.DeleteLog)

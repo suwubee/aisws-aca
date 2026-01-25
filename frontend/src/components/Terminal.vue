@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
@@ -13,6 +13,7 @@ import { useApprovalStore } from '@/stores/approval'
 
 const props = defineProps<{
   sessionId: string
+  autoScrollSeconds?: number
 }>()
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
@@ -40,6 +41,8 @@ let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let didReportDisconnect = false
 let didShowDemoNotice = false
+let autoScrollTimer: number | null = null
+let pendingScrollback = false
 
 onMounted(() => {
   initTerminal()
@@ -74,6 +77,10 @@ onUnmounted(() => {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+  if (autoScrollTimer) {
+    window.clearInterval(autoScrollTimer)
+    autoScrollTimer = null
+  }
   if (ws) {
     ws.onopen = null
     ws.onmessage = null
@@ -86,6 +93,13 @@ onUnmounted(() => {
     terminal.dispose()
   }
 })
+
+watch(
+  () => props.autoScrollSeconds,
+  () => {
+    configureAutoScroll()
+  }
+)
 
 function initTerminal() {
   terminal = new Terminal({
@@ -119,6 +133,19 @@ function initTerminal() {
   openIfPossible()
 }
 
+function configureAutoScroll() {
+  if (autoScrollTimer) {
+    window.clearInterval(autoScrollTimer)
+    autoScrollTimer = null
+  }
+  const seconds = Number(props.autoScrollSeconds || 0)
+  if (!Number.isFinite(seconds) || seconds <= 0) return
+  const ms = Math.max(1000, Math.floor(seconds * 1000))
+  autoScrollTimer = window.setInterval(() => {
+    scrollToBottom({ alsoFit: false })
+  }, ms)
+}
+
 function connectWebSocket() {
   if (destroyed) return
   emit('connection-change', 'connecting')
@@ -149,8 +176,10 @@ function connectWebSocket() {
     didReportDisconnect = false
     reconnectAttempts = 0
     decoder = new TextDecoder('utf-8')
+    pendingScrollback = true
     // 确保在可见尺寸下先 fit，再同步到后端（避免光标/换行错位）
     handleResize()
+    configureAutoScroll()
   }
 
   ws.onmessage = (event) => {
@@ -197,6 +226,9 @@ function handleMessage(msg: any) {
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
       }
+      // Server sends a scrollback snapshot right after ready. On reconnect, avoid duplicating output:
+      // clear local buffer and rehydrate from the snapshot (keeps "log context" while staying deterministic).
+      pendingScrollback = true
       if (isDemoMode.value && terminal && !didShowDemoNotice) {
         terminal.write('\r\n\x1b[33m[演示模式] 终端只读，已禁用输入。\x1b[0m\r\n')
         didShowDemoNotice = true
@@ -207,9 +239,19 @@ function handleMessage(msg: any) {
       if (terminal && msg.data) {
         // 使用 TextDecoder stream 模式，避免 UTF-8 分片导致乱码
         const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))
-        terminal.write(decoder.decode(bytes, { stream: true }), () => {
-          if (!didInitialScroll) {
-            terminal?.scrollToBottom()
+        const text = decoder.decode(bytes, { stream: true })
+        if (pendingScrollback) {
+          pendingScrollback = false
+          try {
+            terminal.clear()
+          } catch {
+            // ignore
+          }
+        }
+        terminal.write(text, () => {
+          const shouldAutoScroll = Number(props.autoScrollSeconds || 0) > 0
+          if (shouldAutoScroll || !didInitialScroll) {
+            scrollToBottom({ alsoFit: false })
             didInitialScroll = true
           }
         })
@@ -288,6 +330,25 @@ function sendInput(data: string) {
   }
 }
 
+function scrollToBottom(options?: { alsoFit?: boolean }) {
+  if (!terminal) return
+  if (options?.alsoFit) {
+    handleResize()
+  }
+  terminal.scrollToBottom()
+}
+
+function forceReconnect() {
+  if (destroyed) return
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  reconnectAttempts = 0
+  didReportDisconnect = false
+  connectWebSocket()
+}
+
 function sendKeyAction(action: string) {
   if (isDemoMode.value) return
   if (!action) return
@@ -323,6 +384,11 @@ function handleResize() {
     const { clientWidth, clientHeight } = terminalRef.value!
     if (clientWidth === 0 || clientHeight === 0) return
     fitAddon?.fit()
+    try {
+      terminal?.refresh(0, Math.max(0, (terminal?.rows || 1) - 1))
+    } catch {
+      // ignore
+    }
   })
 }
 
@@ -359,7 +425,9 @@ defineExpose({
   sendInput,
   sendKeyAction,
   focus: focusTerminal,
-  fit: handleResize
+  fit: handleResize,
+  scrollToBottom: () => scrollToBottom({ alsoFit: true }),
+  reconnect: forceReconnect
 })
 </script>
 
@@ -367,6 +435,7 @@ defineExpose({
 .terminal {
   height: 100%;
   padding: 4px;
+  box-sizing: border-box;
 }
 
 :deep(.xterm) {

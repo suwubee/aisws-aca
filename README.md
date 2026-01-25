@@ -170,21 +170,6 @@ docs/
 └── research/                    # 研究文档
     └── ANALYSIS_REPORT.md       # 功能分析报告
 ```
-### 图片演示
-
-- 发布任务
-- ![AI任务](docs/aca_task.png)
-
-- 任务执行-检查系统
-- ![AI任务](docs/aca_work.png)
-
-- 任务执行-详细检查系统
-- ![AI任务](docs/aca_work0.png)
-
-
-- 任务执行-更新程序
-- ![AI任务](docs/aca_work2.png)
-
 
 ## License / Brand
 

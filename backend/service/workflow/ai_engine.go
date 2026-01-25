@@ -31,6 +31,8 @@ type runtimeSession struct {
 	session  *AIWorkflowSession
 	aiConfig *model.AIProviderConfig
 	pending  []ai.ChatMessage
+	closing  bool
+	done     chan struct{}
 
 	// Cached identifiers for safe logging without touching the mutable Context map
 	// while tools may be executing and mutating it.
@@ -185,6 +187,8 @@ func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *
 	rt := &runtimeSession{
 		session:  session,
 		aiConfig: aiConfig,
+		closing:  false,
+		done:     make(chan struct{}),
 	}
 	if session != nil && session.Context != nil {
 		rt.terminalID = strings.TrimSpace(getStringFromMap(session.Context, "terminal_id"))
@@ -195,8 +199,33 @@ func (e *AIWorkflowEngine) startExecution(session *AIWorkflowSession, aiConfig *
 	}
 
 	go func() {
-		defer e.inflight.Delete(id)
-		e.executeLoop(context.Background(), rt)
+		defer func() {
+			e.inflight.Delete(id)
+			close(rt.done)
+		}()
+
+		for {
+			e.executeLoop(context.Background(), rt)
+
+			// If a user message slips in right as the loop is terminating (race window),
+			// it can be queued in rt.pending but never drained by executeLoop. Recover by
+			// appending and restarting the loop.
+			rt.mu.Lock()
+			if len(rt.pending) == 0 {
+				rt.closing = true
+				rt.mu.Unlock()
+				return
+			}
+
+			rt.session.Messages = append(rt.session.Messages, rt.pending...)
+			rt.pending = nil
+			rt.session.Status = "running"
+			rt.session.Summary = ""
+			rt.session.CompletedAt = nil
+			rt.closing = false
+			_ = e.saveSession(rt.session)
+			rt.mu.Unlock()
+		}
 	}()
 
 	return true
@@ -244,6 +273,9 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 	if e == nil {
 		return nil, errors.New("engine is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	id := strings.TrimSpace(sessionID)
 	if id == "" {
@@ -259,18 +291,31 @@ func (e *AIWorkflowEngine) ResumeWorkflow(ctx context.Context, sessionID string,
 	if rtValue, ok := e.inflight.Load(id); ok {
 		if rt, ok := rtValue.(*runtimeSession); ok && rt != nil && rt.session != nil {
 			rt.mu.Lock()
-			// Preserve message ordering: queue user messages to be appended at the next loop boundary,
-			// so we don't insert a "late" user message before the assistant response of an in-flight AI call.
-			rt.pending = append(rt.pending, ai.ChatMessage{
-				Role:    "user",
-				Content: msg,
-			})
-			rt.session.Status = "running"
-			rt.session.CompletedAt = nil
-			session := rt.session
-			rt.mu.Unlock()
-			e.emitUserMessageLogFromRuntime(rt, msg)
-			return session, nil
+			if rt.closing {
+				done := rt.done
+				rt.mu.Unlock()
+				if done != nil {
+					select {
+					case <-done:
+					case <-ctx.Done():
+					case <-time.After(2 * time.Second):
+					}
+				}
+				// Fall back to the persisted resume path below.
+			} else {
+				// Preserve message ordering: queue user messages to be appended at the next loop boundary,
+				// so we don't insert a "late" user message before the assistant response of an in-flight AI call.
+				rt.pending = append(rt.pending, ai.ChatMessage{
+					Role:    "user",
+					Content: msg,
+				})
+				rt.session.Status = "running"
+				rt.session.CompletedAt = nil
+				session := rt.session
+				rt.mu.Unlock()
+				e.emitUserMessageLogFromRuntime(rt, msg)
+				return session, nil
+			}
 		}
 	}
 

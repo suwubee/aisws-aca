@@ -35,6 +35,8 @@ func setupCommentTestApp(t *testing.T) (*fiber.App, string) {
 	app := fiber.New()
 	apiGroup := app.Group("/api", func(c *fiber.Ctx) error {
 		c.Locals("username", "tester")
+		c.Locals("userID", "u-1")
+		c.Locals("role", "admin")
 		return c.Next()
 	})
 

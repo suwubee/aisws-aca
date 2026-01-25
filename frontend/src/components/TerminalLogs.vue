@@ -107,6 +107,8 @@ const total = ref(0)
 const logType = ref<string>('')
 const logsContainer = ref<HTMLElement | null>(null)
 const loading = ref(false)
+let fetchSeq = 0
+let inflightSessionId = ''
 
 const typeOptions = [
   { label: '全部', value: '' },
@@ -117,10 +119,23 @@ const typeOptions = [
 const hasMore = computed(() => rawLogs.value.length < total.value)
 const showScrollToBottom = ref(false)
 
+function detectLogOrder(items: LogEntry[]): 'asc' | 'desc' {
+  for (let i = 1; i < items.length; i++) {
+    const prev = Date.parse(items[i - 1].created_at)
+    const curr = Date.parse(items[i].created_at)
+    if (Number.isNaN(prev) || Number.isNaN(curr)) continue
+    if (curr > prev) return 'asc'
+    if (curr < prev) return 'desc'
+  }
+  return 'asc'
+}
+
 // 合并连续相同类型的日志
 const groupedLogs = computed(() => {
   const groups: LogGroup[] = []
   let currentGroup: LogGroup | null = null
+  const order = detectLogOrder(rawLogs.value)
+  const shouldPrepend = order === 'desc'
 
   for (const log of rawLogs.value) {
     // 清理并处理内容
@@ -129,9 +144,16 @@ const groupedLogs = computed(() => {
 
     if (currentGroup && currentGroup.type === log.log_type) {
       // 合并到当前组
-      currentGroup.content += content
+      if (shouldPrepend) {
+        // 当列表为倒序时，为保证段落内仍按时间正序阅读，需要前插
+        currentGroup.content = content + currentGroup.content
+        currentGroup.startTime = log.created_at
+        currentGroup.ids.unshift(log.id)
+      } else {
+        currentGroup.content += content
+        currentGroup.ids.push(log.id)
+      }
       currentGroup.count++
-      currentGroup.ids.push(log.id)
     } else {
       // 创建新组
       currentGroup = {
@@ -184,8 +206,11 @@ function handleScroll() {
 }
 
 async function fetchLatest(replace: boolean) {
-  if (loading.value) return
+  const seq = ++fetchSeq
+  const sid = String(props.sessionId || '').trim()
+  if (loading.value && inflightSessionId === sid) return
   loading.value = true
+  inflightSessionId = sid
 
   try {
     const shouldStick = replace ? true : isNearBottom()
@@ -195,6 +220,9 @@ async function fetchLatest(replace: boolean) {
       type: logType.value || undefined,
       order: 'desc'
     })
+
+    if (seq !== fetchSeq) return
+    if (String(props.sessionId || '').trim() !== sid) return
 
     const latestAsc = normalizeDescToAsc(data.items || [])
     total.value = data.total || 0
@@ -219,13 +247,18 @@ async function fetchLatest(replace: boolean) {
   } catch (error) {
     console.error('Failed to fetch logs:', error)
   } finally {
-    loading.value = false
+    if (seq === fetchSeq) {
+      loading.value = false
+      inflightSessionId = ''
+    }
   }
 }
 
 async function fetchOlder() {
   if (loading.value) return
   if (!hasMore.value) return
+  const seq = ++fetchSeq
+  const sid = String(props.sessionId || '').trim()
   loading.value = true
 
   try {
@@ -239,6 +272,9 @@ async function fetchOlder() {
       type: logType.value || undefined,
       order: 'desc'
     })
+
+    if (seq !== fetchSeq) return
+    if (String(props.sessionId || '').trim() !== sid) return
 
     const olderAsc = normalizeDescToAsc(data.items || [])
     total.value = data.total || total.value
@@ -255,7 +291,9 @@ async function fetchOlder() {
   } catch (error) {
     console.error('Failed to fetch older logs:', error)
   } finally {
-    loading.value = false
+    if (seq === fetchSeq) {
+      loading.value = false
+    }
   }
 }
 
