@@ -245,6 +245,57 @@ func ParseAIResponse(response string) (*ParsedResponse, error) {
 		return result, fmt.Errorf("invalid action JSON")
 	}
 
+	// Fallback: Some models may output a raw JSON object without <action>/<complete> tags.
+	// Try to interpret it as either an ActionCall or CompleteCall (or a wrapper with "action"/"complete").
+	if obj := extractJSONObject(response); obj != "" {
+		var action ActionCall
+		if err := json.Unmarshal([]byte(obj), &action); err == nil && strings.TrimSpace(action.Tool) != "" {
+			if action.Args == nil {
+				action.Args = map[string]any{}
+			}
+			result.Action = &action
+			return result, nil
+		}
+
+		var complete CompleteCall
+		if err := json.Unmarshal([]byte(obj), &complete); err == nil && (strings.TrimSpace(complete.Status) != "" || strings.TrimSpace(complete.Summary) != "") {
+			if strings.TrimSpace(complete.Status) == "" {
+				complete.Status = "success"
+			}
+			result.Complete = &complete
+			return result, nil
+		}
+
+		var wrapper map[string]any
+		if err := json.Unmarshal([]byte(obj), &wrapper); err == nil {
+			if rawAction, ok := wrapper["action"].(map[string]any); ok {
+				tool, _ := rawAction["tool"].(string)
+				tool = strings.TrimSpace(tool)
+				if tool != "" {
+					args, _ := rawAction["args"].(map[string]any)
+					if args == nil {
+						args = map[string]any{}
+					}
+					result.Action = &ActionCall{Tool: tool, Args: args}
+					return result, nil
+				}
+			}
+			if rawComplete, ok := wrapper["complete"].(map[string]any); ok {
+				status, _ := rawComplete["status"].(string)
+				summary, _ := rawComplete["summary"].(string)
+				status = strings.TrimSpace(status)
+				summary = strings.TrimSpace(summary)
+				if status != "" || summary != "" {
+					if status == "" {
+						status = "success"
+					}
+					result.Complete = &CompleteCall{Status: status, Summary: summary}
+					return result, nil
+				}
+			}
+		}
+	}
+
 	return result, nil
 }
 

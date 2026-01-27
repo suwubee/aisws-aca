@@ -628,6 +628,36 @@ const quickInputButtons = computed(() => {
 	  return taskStore.tasks.find(t => t.id === taskId) || null
 	})
 
+const isAgentMode = computed(() => {
+  const mode = String(activeTask.value?.automation_mode || '').trim().toLowerCase()
+  return mode === 'agent'
+})
+
+const isAgentRunning = computed(() => {
+  return isAgentMode.value && activeTask.value?.status === 'in_progress'
+})
+
+const isAgentPaused = computed(() => {
+  return isAgentMode.value && activeTask.value?.status === 'paused'
+})
+
+const isAIManaged = computed(() => {
+  return activeTask.value?.ai_managed === true
+})
+
+const isAIRunning = computed(() => {
+  // AI 托管并且状态为 running 或 ai_status 未设置但 ai_managed 为 true
+  if (!activeTask.value) return false
+  if (!activeTask.value.ai_managed) return false
+  const status = activeTask.value.ai_status
+  // 如果 ai_status 未定义或为 running，且任务在进行中，显示暂停按钮
+  return (status === 'running' || (!status && activeTask.value.status === 'in_progress'))
+})
+
+const isAIPaused = computed(() => {
+  return activeTask.value?.ai_managed === true && activeTask.value?.ai_status === 'paused'
+})
+
 const taskActiveTerminalId = computed(() => {
   const raw = activeTask.value?.active_terminal_id
   return String(raw || '').trim()
@@ -752,36 +782,6 @@ async function evaluateCLIState() {
   }
 }
 
-const isAgentMode = computed(() => {
-  const mode = String(activeTask.value?.automation_mode || '').trim().toLowerCase()
-  return mode === 'agent'
-})
-
-const isAgentRunning = computed(() => {
-  return isAgentMode.value && activeTask.value?.status === 'in_progress'
-})
-
-const isAgentPaused = computed(() => {
-  return isAgentMode.value && activeTask.value?.status === 'paused'
-})
-
-const isAIManaged = computed(() => {
-  return activeTask.value?.ai_managed === true
-})
-
-const isAIRunning = computed(() => {
-  // AI 托管并且状态为 running 或 ai_status 未设置但 ai_managed 为 true
-  if (!activeTask.value) return false
-  if (!activeTask.value.ai_managed) return false
-  const status = activeTask.value.ai_status
-  // 如果 ai_status 未定义或为 running，且任务在进行中，显示暂停按钮
-  return (status === 'running' || (!status && activeTask.value.status === 'in_progress'))
-})
-
-	const isAIPaused = computed(() => {
-	  return activeTask.value?.ai_managed === true && activeTask.value?.ai_status === 'paused'
-	})
-
 	function formatAIStatusLabel(status: string) {
 	  const normalized = String(status || '').trim().toLowerCase()
 	  const map: Record<string, string> = {
@@ -815,6 +815,11 @@ const isAIRunning = computed(() => {
 	    return formatAIStatusLabel(activeTask.value.status) || '未启动'
 	  }
 
+    const mode = String(activeTask.value.automation_mode || '').trim().toLowerCase()
+    if (mode === 'none' && isAIManaged.value) {
+      return '待输入目标'
+    }
+
 	  if (!isAIManaged.value) return '未启用'
 	  if (isAIRunning.value) return '运行中'
 	  if (isAIPaused.value) return '已暂停'
@@ -825,6 +830,9 @@ const isAIRunning = computed(() => {
 	const aiHandoffEmptyText = computed(() => {
 	  if (!activeTerminalId.value) return '请先选择一个终端'
 	  if (!activeTask.value) return '当前终端未关联任务'
+    if (!isAgentMode.value && isAIManaged.value && String(activeTask.value.automation_mode || '').trim().toLowerCase() === 'none') {
+      return '请输入目标后按 Ctrl+Enter 开始 AI 托管(动态)'
+    }
 	  if (!isAgentMode.value && !isAIManaged.value) return 'AI 托管未启用'
 	  return ''
 	})
@@ -882,12 +890,12 @@ const isAIRunning = computed(() => {
 	  }
 	}
 
-	const aiControlLoading = ref(false)
+const aiControlLoading = ref(false)
 
 type HandoffKind = 'terminal' | 'workflow' | null
 
 const activePendingApproval = computed<PendingApproval | null>(() => {
-  const tid = String(activeTerminalId.value || '').trim()
+  const tid = String(aiControlTerminalId.value || '').trim()
   if (!tid) return null
   return approvalStore.pendingApprovals.find(p => p.terminalId === tid || p.id === tid) || null
 })
@@ -1291,8 +1299,7 @@ async function handleEnableAIFromPanel() {
     // 如果已有任务，直接启用 AI
     if (activeTask.value) {
       await taskStore.updateTask(activeTask.value.id, {
-        ai_managed: true,
-        ai_status: 'running'
+        ai_managed: true
       })
       message.success('AI托管已启用')
       await taskStore.fetchTasks()
@@ -1324,9 +1331,6 @@ async function handleEnableAIFromPanel() {
 
     // 绑定当前终端为该任务的活跃终端（同时写回终端 task_id）
     await taskStore.bindTerminal(newTask.id, terminalId)
-
-    // 将 AI 状态置为 running（便于展示暂停/恢复按钮）
-    await taskStore.updateTask(newTask.id, { ai_status: 'running' })
 
     // 刷新数据
     await taskStore.fetchTasks()
