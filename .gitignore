@@ -66,8 +66,6 @@ backend/.gocache/
 release/ai-coding-assistant
 release/ai-coding-assistant.exe
 
-# Release data/static (tracked for easy download)
-!release/data/
-!release/data/*
-!release/static/
-!release/static/**
+# Release build output (do not track; generated)
+release/data/
+release/static/
