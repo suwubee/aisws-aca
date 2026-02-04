@@ -194,6 +194,58 @@ type StartTaskResult struct {
 	Error           string       `json:"error,omitempty"`
 }
 
+// ResumeCLISessionResult 恢复 CLI 会话结果（用于 claude/codex）
+type ResumeCLISessionResult struct {
+	Task            *model.Task `json:"task"`
+	TerminalID      string      `json:"terminal_id"`
+	WorkDir         string      `json:"work_dir"`
+	ResumeCommand   string      `json:"resume_command"`
+	CLIStarted      bool        `json:"cli_started"`
+	NeedsUserAction bool        `json:"needs_user_action,omitempty"`
+	UserActionHint  string      `json:"user_action_hint,omitempty"`
+	Error           string      `json:"error,omitempty"`
+}
+
+func normalizeResumeTool(taskCLIType, aiType string) string {
+	v := strings.ToLower(strings.TrimSpace(aiType))
+	switch v {
+	case "claude-code", "claude", "claude_code", "claude-code-cli":
+		return "claude"
+	case "codex", "openai-codex":
+		return "codex"
+	case "gemini":
+		return "gemini"
+	}
+
+	taskCLIType = strings.ToLower(strings.TrimSpace(taskCLIType))
+	switch taskCLIType {
+	case "claude", "codex", "gemini":
+		return taskCLIType
+	default:
+		return ""
+	}
+}
+
+func buildResumeCommand(tool string, sessionID string) (string, error) {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	sessionID = strings.TrimSpace(sessionID)
+
+	switch tool {
+	case "claude":
+		if sessionID != "" {
+			return "claude --resume " + sessionID, nil
+		}
+		return "claude --continue", nil
+	case "codex":
+		if sessionID != "" {
+			return "codex resume " + sessionID, nil
+		}
+		return "codex resume --last", nil
+	default:
+		return "", fmt.Errorf("unsupported resume tool: %s", tool)
+	}
+}
+
 // StartTask 启动自动化任务
 func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error) {
 	result := &StartTaskResult{Task: task}
@@ -530,6 +582,178 @@ PROMPT_SENT:
 	go s.monitorTaskCompletion(task.ID, session.ID())
 
 	result.TerminalIDs = []string{session.ID()}
+
+	return result, nil
+}
+
+// ResumeCLISession creates a new terminal and resumes an existing CLI session (claude/codex).
+//
+// Behavior (MVP):
+// - Always creates a new terminal session for the task to avoid "resume command sent inside CLI" edge cases.
+// - Updates task.active_terminal_id and sets status=in_progress.
+// - Starts task monitor loop on the new terminal.
+func (s *AutomationService) ResumeCLISession(taskID string, aiSessionID string) (*ResumeCLISessionResult, error) {
+	result := &ResumeCLISessionResult{}
+
+	taskID = strings.TrimSpace(taskID)
+	aiSessionID = strings.TrimSpace(aiSessionID)
+	if taskID == "" {
+		result.Error = "Task id is required"
+		return result, errors.New("task id is required")
+	}
+	if aiSessionID == "" {
+		result.Error = "AI session id is required"
+		return result, errors.New("ai session id is required")
+	}
+	if model.DB == nil {
+		result.Error = "Database not initialized"
+		return result, errors.New("database not initialized")
+	}
+
+	var task model.Task
+	if err := model.DB.First(&task, "id = ?", taskID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			result.Error = "Task not found"
+			return result, errors.New("task not found")
+		}
+		result.Error = "Failed to query task"
+		return result, err
+	}
+	result.Task = &task
+
+	var aiSession model.AISession
+	if err := model.DB.First(&aiSession, "id = ?", aiSessionID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			result.Error = "AI session not found"
+			return result, errors.New("ai session not found")
+		}
+		result.Error = "Failed to query AI session"
+		return result, err
+	}
+	if strings.TrimSpace(aiSession.TaskID) != taskID {
+		result.Error = "AI session does not belong to task"
+		return result, errors.New("ai session does not belong to task")
+	}
+
+	tool := normalizeResumeTool(task.CLIType, aiSession.AIType)
+	resumeCmd, err := buildResumeCommand(tool, aiSession.SessionID)
+	if err != nil {
+		result.Error = err.Error()
+		return result, err
+	}
+	result.ResumeCommand = resumeCmd
+
+	serverID := ""
+	if task.ServerID != nil {
+		serverID = strings.TrimSpace(*task.ServerID)
+	}
+
+	// 1) Ensure work_dir exists (remote default: ~/.aca/tasks/<id>)
+	workDir := strings.TrimSpace(task.WorkDir)
+	if workDir == "" {
+		workDir = defaultTaskWorkDir(task.ID, serverID != "")
+		task.WorkDir = workDir
+		_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
+			"work_dir":   workDir,
+			"updated_at": time.Now(),
+		}).Error
+	}
+	result.WorkDir = workDir
+
+	// 2) Create a new terminal session (prefer SSH when server_id is present)
+	terminalTitle := fmt.Sprintf("[%s] %s (resume)", tool, task.Title)
+	if serverLabel := resolveServerLabel(serverID); serverLabel != "" {
+		terminalTitle = fmt.Sprintf("%s @ %s", terminalTitle, serverLabel)
+	}
+
+	var session taskTerminal
+	if serverID != "" {
+		session, err = s.terminalManager.CreateSSHSession(serverID)
+	} else {
+		// Backward compatible / test-friendly: allow local PTY when server_id is empty.
+		session, err = s.terminalManager.CreateSession(terminalTitle, &task.ID)
+	}
+	if err != nil {
+		result.Error = fmt.Sprintf("Failed to create terminal: %v", err)
+		return result, err
+	}
+	terminalID := session.ID()
+	result.TerminalID = terminalID
+
+	if serverID != "" {
+		_ = s.terminalManager.LinkTask(terminalID, &task.ID)
+		_ = s.terminalManager.RenameSession(terminalID, terminalTitle)
+	}
+
+	// 3) Update task state to reflect the new active terminal.
+	now := time.Now()
+	_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status":             "in_progress",
+		"completed_at":       nil,
+		"active_terminal_id": terminalID,
+		"ai_status":          "running",
+		"ai_pause_reason":    "",
+		"expect_disconnect":  false,
+		"reconnect_attempts": 0,
+		"last_reconnect_at":  nil,
+		"updated_at":         now,
+	}).Error
+	task.Status = "in_progress"
+	task.CompletedAt = nil
+	task.ActiveTerminalID = &terminalID
+	task.AIStatus = "running"
+	task.AIPauseReason = ""
+
+	// 4) Prepare working directory
+	if task.AutoCreateDir && workDir != "" {
+		if serverID != "" {
+			_ = session.Write([]byte(fmt.Sprintf("mkdir -p %s\r", workDir)))
+		} else {
+			_ = os.MkdirAll(workDir, 0755)
+		}
+	}
+	if workDir != "" {
+		_ = session.Write([]byte(fmt.Sprintf("cd %s\r", workDir)))
+	}
+
+	// 5) Start CLI with resume command
+	if err := session.Write([]byte(resumeCmd + "\r")); err != nil {
+		result.Error = fmt.Sprintf("Failed to resume CLI: %v", err)
+		return result, err
+	}
+	result.CLIStarted = true
+
+	if termSession, ok := session.(*terminal.Session); ok {
+		termSession.BroadcastAILog("action", fmt.Sprintf("恢复会话：%s", resumeCmd))
+	}
+
+	// Quick check (async): command not found
+	if termSession, ok := session.(*terminal.Session); ok {
+		go func() {
+			sleep(800 * time.Millisecond)
+			scroll := strings.ToLower(string(termSession.Scrollback()))
+			var hint string
+			switch tool {
+			case "claude":
+				if strings.Contains(scroll, "claude: command not found") || strings.Contains(scroll, "claude: not found") || strings.Contains(scroll, "command not found: claude") {
+					hint = "未检测到 claude 命令可用：请在目标服务器安装 Claude Code CLI 或确认 PATH 后重试。"
+				}
+			case "codex":
+				if strings.Contains(scroll, "codex: command not found") || strings.Contains(scroll, "codex: not found") || strings.Contains(scroll, "command not found: codex") {
+					hint = "未检测到 codex 命令可用：请在目标服务器安装 Codex CLI 或确认 PATH 后重试。"
+				}
+			}
+			if strings.TrimSpace(hint) == "" {
+				return
+			}
+			s.updateTaskStatus(task.ID, "paused", hint)
+			s.createTaskMessage(task.ID, terminalID, "approval_needed", "需要确认：CLI 安装/启动方式", hint)
+			termSession.BroadcastAILog("warning", hint)
+		}()
+	}
+
+	// 6) Start monitor loop on the new active terminal.
+	go s.monitorTaskCompletion(task.ID, terminalID)
 
 	return result, nil
 }
@@ -1001,10 +1225,13 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 
 			// 如果任务状态已经变化（例如终端关闭触发的自动完成），不要覆盖现有结果
 			var current model.Task
-			if err := model.DB.Select("id", "status").First(&current, "id = ?", taskID).Error; err != nil {
+			if err := model.DB.Select("id", "status", "active_terminal_id").First(&current, "id = ?", taskID).Error; err != nil {
 				return
 			}
 			if strings.TrimSpace(current.Status) != "in_progress" {
+				return
+			}
+			if current.ActiveTerminalID == nil || strings.TrimSpace(*current.ActiveTerminalID) != terminalID {
 				return
 			}
 
@@ -1034,6 +1261,12 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 			utils.Info("Task status changed, stopping monitor",
 				zap.String("task_id", taskID),
 				zap.String("status", task.Status))
+			return
+		}
+		if task.ActiveTerminalID == nil || strings.TrimSpace(*task.ActiveTerminalID) != terminalID {
+			utils.Info("Task active terminal changed, stopping monitor",
+				zap.String("task_id", taskID),
+				zap.String("terminal_id", terminalID))
 			return
 		}
 

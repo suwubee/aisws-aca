@@ -3,9 +3,13 @@ package api
 import (
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
+	"github.com/ai-coding-assistant/service/clisession"
+	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/service/workflow"
@@ -18,6 +22,9 @@ type TaskController struct {
 	automationService *task.AutomationService
 	aiWorkflowEngine  *workflow.AIWorkflowEngine
 	terminalManager   *terminal.Manager
+
+	sshMu      sync.Mutex
+	sshManager clisession.SSHExecutor
 }
 
 func NewTaskController(tm *terminal.Manager) *TaskController {
@@ -25,6 +32,24 @@ func NewTaskController(tm *terminal.Manager) *TaskController {
 		automationService: task.NewAutomationService(tm),
 		terminalManager:   tm,
 	}
+}
+
+func (ctrl *TaskController) getSSHManager() (clisession.SSHExecutor, error) {
+	ctrl.sshMu.Lock()
+	defer ctrl.sshMu.Unlock()
+
+	if ctrl.sshManager != nil {
+		return ctrl.sshManager, nil
+	}
+
+	cfg := config.Load()
+	masterKey := strings.TrimSpace(cfg.Auth.JWTSecret)
+	if masterKey == "" {
+		return nil, errors.New("missing ssh master key")
+	}
+
+	ctrl.sshManager = sshservice.NewSSHManager(masterKey)
+	return ctrl.sshManager, nil
 }
 
 func (ctrl *TaskController) SetAIWorkflowEngine(engine *workflow.AIWorkflowEngine) {
@@ -1157,6 +1182,353 @@ func (ctrl *TaskController) GetTaskTerminals(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": terminals})
 }
 
+// ListTaskAISessions lists tracked AI CLI sessions (AISession) under a task.
+func (ctrl *TaskController) ListTaskAISessions(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id").First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	limit := c.QueryInt("limit", 50)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	var sessions []model.AISession
+	if err := model.DB.Where("task_id = ?", taskID).Order("updated_at desc").Limit(limit).Find(&sessions).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list AI sessions"})
+	}
+
+	return c.JSON(fiber.Map{"items": sessions})
+}
+
+type DiscoveredTaskAISession struct {
+	clisession.DiscoveredSession
+	Imported    bool   `json:"imported"`
+	AISessionID string `json:"ai_session_id,omitempty"`
+}
+
+// DiscoverTaskAISessions scans native Claude/Codex CLI session files and returns candidates under this task.
+func (ctrl *TaskController) DiscoverTaskAISessions(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id", "server_id", "work_dir", "cli_type").First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	tool := strings.TrimSpace(c.Query("tool"))
+	if tool == "" {
+		tool = strings.TrimSpace(taskModel.CLIType)
+	}
+	scope := strings.TrimSpace(c.Query("scope"))
+	if scope == "" {
+		scope = "task"
+	}
+
+	limit := c.QueryInt("limit", 50)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	serverID := ""
+	if taskModel.ServerID != nil {
+		serverID = strings.TrimSpace(*taskModel.ServerID)
+	}
+
+	var exec clisession.SSHExecutor
+	if serverID != "" {
+		mgr, err := ctrl.getSSHManager()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		exec = mgr
+	}
+
+	found, err := clisession.DiscoverSessions(serverID, exec, clisession.DiscoverOptions{
+		Tool:    tool,
+		WorkDir: strings.TrimSpace(taskModel.WorkDir),
+		Scope:   scope,
+		Limit:   limit,
+	})
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to discover sessions"})
+	}
+
+	var existing []model.AISession
+	if err := model.DB.Select("id", "ai_type", "session_id").Where("task_id = ?", taskID).Find(&existing).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query existing sessions"})
+	}
+	existingMap := make(map[string]string, len(existing))
+	for _, s := range existing {
+		key := strings.ToLower(strings.TrimSpace(s.AIType)) + "|" + strings.TrimSpace(s.SessionID)
+		if strings.TrimSpace(s.SessionID) == "" {
+			continue
+		}
+		existingMap[key] = s.ID
+	}
+
+	items := make([]DiscoveredTaskAISession, 0, len(found))
+	for _, s := range found {
+		key := strings.ToLower(strings.TrimSpace(s.AIType)) + "|" + strings.TrimSpace(s.SessionID)
+		item := DiscoveredTaskAISession{DiscoveredSession: s}
+		if id, ok := existingMap[key]; ok && strings.TrimSpace(id) != "" {
+			item.Imported = true
+			item.AISessionID = id
+		}
+		items = append(items, item)
+	}
+
+	return c.JSON(fiber.Map{"items": items})
+}
+
+type ImportTaskAISessionRequest struct {
+	Tool        string `json:"tool"`
+	AIType      string `json:"ai_type"`
+	SessionID   string `json:"session_id"`
+	SessionFile string `json:"session_file"`
+}
+
+func canonicalAISessionType(tool, aiType string) (string, error) {
+	t := strings.ToLower(strings.TrimSpace(aiType))
+	switch t {
+	case "claude-code", "claude", "claude_code", "claude-code-cli":
+		return "claude-code", nil
+	case "codex", "openai-codex":
+		return "codex", nil
+	case "":
+		// fall through
+	default:
+		return "", errors.New("unsupported ai_type: " + aiType)
+	}
+
+	rawTool := strings.ToLower(strings.TrimSpace(tool))
+	switch rawTool {
+	case "claude":
+		return "claude-code", nil
+	case "codex":
+		return "codex", nil
+	case "":
+		return "", errors.New("tool is required")
+	default:
+		return "", errors.New("unsupported tool: " + tool)
+	}
+}
+
+func importAISession(taskID string, aiType string, sessionID string, sessionFile string, updatedAt time.Time) (*model.AISession, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	aiType = strings.TrimSpace(aiType)
+	sessionID = strings.TrimSpace(sessionID)
+	sessionFile = strings.TrimSpace(sessionFile)
+	if taskID == "" {
+		return nil, false, errors.New("task id is required")
+	}
+	if aiType == "" {
+		return nil, false, errors.New("ai_type is required")
+	}
+	if sessionID == "" {
+		return nil, false, errors.New("session_id is required")
+	}
+
+	var existing model.AISession
+	err := model.DB.Where("task_id = ? AND ai_type = ? AND session_id = ?", taskID, aiType, sessionID).First(&existing).Error
+	if err == nil {
+		return &existing, false, nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, err
+	}
+
+	now := time.Now()
+	if !updatedAt.IsZero() {
+		now = updatedAt
+	}
+
+	aiSession := &model.AISession{
+		ID:          uuid.NewString(),
+		TerminalID:  "",
+		TaskID:      taskID,
+		AIType:      aiType,
+		State:       "unknown",
+		SessionID:   sessionID,
+		SessionFile: sessionFile,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := model.DB.Create(aiSession).Error; err != nil {
+		return nil, false, err
+	}
+	return aiSession, true, nil
+}
+
+// ImportTaskAISession imports a discovered/native CLI session into this task as an AISession record.
+func (ctrl *TaskController) ImportTaskAISession(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var req ImportTaskAISessionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	aiType, err := canonicalAISessionType(req.Tool, req.AIType)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id").First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	aiSession, created, err := importAISession(taskID, aiType, req.SessionID, req.SessionFile, time.Time{})
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to import session"})
+	}
+
+	msg := "AI session imported"
+	if !created {
+		msg = "AI session already imported"
+	}
+	return c.JSON(fiber.Map{"message": msg, "item": aiSession})
+}
+
+// CollectTaskAISessions discovers native CLI sessions and imports them into the task in one-click.
+func (ctrl *TaskController) CollectTaskAISessions(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+
+	var taskModel model.Task
+	if err := model.DB.Select("id", "server_id", "work_dir", "cli_type").First(&taskModel, "id = ?", taskID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
+	}
+
+	tool := strings.TrimSpace(c.Query("tool"))
+	if tool == "" {
+		tool = strings.TrimSpace(taskModel.CLIType)
+	}
+
+	limit := c.QueryInt("limit", 50)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	serverID := ""
+	if taskModel.ServerID != nil {
+		serverID = strings.TrimSpace(*taskModel.ServerID)
+	}
+
+	var exec clisession.SSHExecutor
+	if serverID != "" {
+		mgr, err := ctrl.getSSHManager()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		exec = mgr
+	}
+
+	found, err := clisession.DiscoverSessions(serverID, exec, clisession.DiscoverOptions{
+		Tool:    tool,
+		WorkDir: strings.TrimSpace(taskModel.WorkDir),
+		Scope:   "task",
+		Limit:   limit,
+	})
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to discover sessions"})
+	}
+
+	importedCount := 0
+	existingCount := 0
+	importedItems := make([]model.AISession, 0, len(found))
+
+	for _, s := range found {
+		aiType, err := canonicalAISessionType(s.Tool, s.AIType)
+		if err != nil {
+			continue
+		}
+		item, created, err := importAISession(taskID, aiType, s.SessionID, s.SessionFile, s.UpdatedAt)
+		if err != nil || item == nil {
+			continue
+		}
+		if created {
+			importedCount++
+		} else {
+			existingCount++
+		}
+		importedItems = append(importedItems, *item)
+	}
+
+	return c.JSON(fiber.Map{
+		"message":        "AI sessions collected",
+		"imported_count": importedCount,
+		"existing_count": existingCount,
+		"items":          importedItems,
+	})
+}
+
+// ResumeTaskAISession resumes an existing AI CLI session (claude/codex) in a new terminal and binds it as active terminal.
+func (ctrl *TaskController) ResumeTaskAISession(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("id"))
+	aiSessionID := strings.TrimSpace(c.Params("aiSessionId"))
+	if taskID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
+	}
+	if aiSessionID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "AI session id is required"})
+	}
+	if ctrl.automationService == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Automation service not initialized"})
+	}
+
+	result, err := ctrl.automationService.ResumeCLISession(taskID, aiSessionID)
+	if err != nil {
+		msg := strings.TrimSpace(err.Error())
+		if msg == "" {
+			msg = "Resume failed"
+		}
+		status := 500
+		switch {
+		case strings.Contains(msg, "not found"):
+			status = 404
+		case strings.Contains(msg, "unsupported"), strings.Contains(msg, "does not belong"), strings.Contains(msg, "required"):
+			status = 400
+		}
+		return c.Status(status).JSON(fiber.Map{"error": msg, "result": result})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":           "AI session resumed",
+		"task":              result.Task,
+		"terminal_id":       result.TerminalID,
+		"work_dir":          result.WorkDir,
+		"resume_command":    result.ResumeCommand,
+		"cli_started":       result.CLIStarted,
+		"needs_user_action": result.NeedsUserAction,
+		"user_action_hint":  result.UserActionHint,
+	})
+}
+
 // BindTerminal 绑定任务的活跃终端（同任务内允许切换，不允许复用其他任务的终端）
 func (ctrl *TaskController) BindTerminal(c *fiber.Ctx) error {
 	taskID := strings.TrimSpace(c.Params("id"))
@@ -1372,4 +1744,9 @@ func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks.Post("/:id/pause", ctrl.PauseAI)
 	tasks.Post("/:id/bind-terminal", ctrl.BindTerminal)
 	tasks.Get("/:id/terminals", ctrl.GetTaskTerminals)
+	tasks.Get("/:id/ai-sessions", ctrl.ListTaskAISessions)
+	tasks.Get("/:id/ai-sessions/discover", ctrl.DiscoverTaskAISessions)
+	tasks.Post("/:id/ai-sessions/import", ctrl.ImportTaskAISession)
+	tasks.Post("/:id/ai-sessions/collect", ctrl.CollectTaskAISessions)
+	tasks.Post("/:id/ai-sessions/:aiSessionId/resume", ctrl.ResumeTaskAISession)
 }

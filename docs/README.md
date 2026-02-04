@@ -31,6 +31,7 @@ AISWS-ACA 是 AISWS（AI SUPER WORKSTATION / AI超站）品牌下的开源项目
 ## 4) 研发与交付（Engineering）
 
 - `docs/engineering/ARCHITECTURE.md`：系统架构与关键流程概览
+- `docs/engineering/CLI_SESSION_MANAGEMENT.md`：Claude/Codex CLI 会话（session/resume）统一管理 MVP 方案
 - `docs/engineering/DEVELOPMENT.md`：本地开发/构建/调试指南
 - `docs/engineering/DEPLOYMENT.md`：部署、升级与备份指南
 - `docs/engineering/SCRIPTS.md`：脚本使用说明（Quickstart/开发启动等）

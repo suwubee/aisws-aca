@@ -179,6 +179,59 @@
           <n-empty description="尚未启动会话" />
         </n-card>
 
+        <!-- CLI 会话（用于一键 resume） -->
+        <n-card v-if="automationMode === 'cli'" title="CLI 会话" size="small">
+          <template #header-extra>
+            <n-space size="small">
+              <n-button
+                size="small"
+                :loading="collectingAISessions"
+                :disabled="isDemoMode"
+                @click="handleCollectAISessions"
+              >
+                收纳历史
+              </n-button>
+              <n-button size="small" :loading="aiSessionsLoading" :disabled="isDemoMode" @click="loadAISessions">
+                刷新
+              </n-button>
+            </n-space>
+          </template>
+          <n-empty
+            v-if="aiSessions.length === 0"
+            description="暂无会话（进入 Claude/Codex CLI 后会自动记录，可用于一键恢复）"
+          />
+          <div v-else class="ai-session-list">
+            <div v-for="s in aiSessions" :key="s.id" class="ai-session-item">
+              <div class="ai-session-row">
+                <n-tag size="small" type="info">{{ prettyTool(s.ai_type) }}</n-tag>
+                <n-text depth="3" class="mono">{{ s.session_id || s.session_file || s.id }}</n-text>
+                <n-tag size="small" :type="s.state === 'waiting_input' ? 'success' : 'default'">
+                  {{ s.state || 'unknown' }}
+                </n-tag>
+              </div>
+              <div class="ai-session-row ai-session-meta">
+                <span>{{ formatTime(s.updated_at || s.created_at) }}</span>
+                <span class="mono">终端: {{ s.terminal_id || '-' }}</span>
+              </div>
+              <div class="ai-session-actions">
+                <n-space justify="end" size="small">
+                  <n-button
+                    size="tiny"
+                    type="primary"
+                    :loading="resumingAISessionId === s.id"
+                    :disabled="isDemoMode"
+                    @click.stop="handleResumeAISession(s)"
+                  >
+                    一键恢复
+                  </n-button>
+                  <n-button size="tiny" @click.stop="handleCopyResumeCommand(s)">复制命令</n-button>
+                  <n-button size="tiny" :disabled="!s.terminal_id" @click.stop="handleOpenTerminal(s.terminal_id)">打开终端</n-button>
+                </n-space>
+              </div>
+            </div>
+          </div>
+        </n-card>
+
         <!-- 关联终端 -->
         <n-card title="关联终端" size="small">
           <template #header-extra>
@@ -246,7 +299,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useMessage, NTag } from 'naive-ui'
 import { getServer } from '@/api/server'
 import { useAuthStore } from '@/stores/auth'
-import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
+import { useTaskStore, type AISession, type Task, type TerminalSession } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
 import { useIsMobile } from '@/utils/useIsMobile'
@@ -269,6 +322,10 @@ const terminals = ref<TerminalSession[]>([])
 const showCreateTask = ref(false)
 const remarkDraft = ref('')
 const savingRemark = ref(false)
+const aiSessions = ref<AISession[]>([])
+const aiSessionsLoading = ref(false)
+const resumingAISessionId = ref('')
+const collectingAISessions = ref(false)
 
 const linkedTerminal = computed(() => {
   return terminals.value.find(t => t.status === 'running')
@@ -399,10 +456,119 @@ async function loadTaskDetail() {
 
     const firstServerId = detail.task.target_server_ids?.[0] || detail.task.server_id
     void ensureServerLoaded(firstServerId)
+    void loadAISessions(true)
   } catch (error) {
     message.error('加载任务详情失败')
   } finally {
     loading.value = false
+  }
+}
+
+function prettyTool(aiType: string) {
+  const t = String(aiType || '').trim().toLowerCase()
+  if (t === 'claude-code' || t === 'claude') return 'Claude'
+  if (t === 'codex') return 'Codex'
+  if (t === 'gemini') return 'Gemini'
+  return aiType || 'unknown'
+}
+
+function buildResumeCommand(s: AISession): string {
+  const t = String(s.ai_type || '').trim().toLowerCase()
+  const sessionId = String(s.session_id || '').trim()
+  if (t === 'claude-code' || t === 'claude') return sessionId ? `claude --resume ${sessionId}` : 'claude --continue'
+  if (t === 'codex') return sessionId ? `codex resume ${sessionId}` : 'codex resume --last'
+  return ''
+}
+
+async function loadAISessions(silent = false) {
+  if (aiSessionsLoading.value) return
+  aiSessionsLoading.value = true
+  try {
+    aiSessions.value = await taskStore.listAISessions(taskId.value)
+  } catch (e: any) {
+    if (!silent) message.error(e?.response?.data?.error || '加载会话失败')
+  } finally {
+    aiSessionsLoading.value = false
+  }
+}
+
+async function handleCollectAISessions() {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (collectingAISessions.value) return
+
+  collectingAISessions.value = true
+  try {
+    const result = await taskStore.collectAISessions(taskId.value)
+    const imported = Number(result?.imported_count || 0)
+    const existing = Number(result?.existing_count || 0)
+
+    if (imported === 0 && existing === 0) {
+      message.info('未发现可收纳的历史会话（请确认 work_dir/CLI 类型）')
+    } else if (existing > 0) {
+      message.success(`已收纳 ${imported} 个（跳过 ${existing} 个已存在）`)
+    } else {
+      message.success(`已收纳 ${imported} 个历史会话`)
+    }
+
+    void loadAISessions(true)
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '收纳历史会话失败')
+  } finally {
+    collectingAISessions.value = false
+  }
+}
+
+async function handleCopyResumeCommand(s: AISession) {
+  const cmd = buildResumeCommand(s)
+  if (!cmd) {
+    message.warning('该会话暂不支持一键恢复')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(cmd)
+    message.success('已复制')
+  } catch {
+    message.error('复制失败，请手动复制')
+  }
+}
+
+async function handleResumeAISession(s: AISession) {
+  if (isDemoMode.value) {
+    message.warning('演示模式：只读')
+    return
+  }
+  if (!s?.id) return
+  if (resumingAISessionId.value) return
+
+  const cmd = buildResumeCommand(s)
+  if (!cmd) {
+    message.warning('该会话暂不支持一键恢复')
+    return
+  }
+
+  resumingAISessionId.value = s.id
+  try {
+    const result = await taskStore.resumeAISession(taskId.value, s.id)
+    if (result?.needs_user_action) {
+      message.warning(result.user_action_hint || '需要用户确认后继续')
+    } else {
+      message.success('会话已恢复')
+    }
+    if (result?.terminal_id) {
+      await terminalStore.fetchTerminals()
+      terminalStore.setActiveTerminal(result.terminal_id)
+      router.push({ path: '/', query: { terminal: result.terminal_id } })
+    } else {
+      await loadTaskDetail()
+    }
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '一键恢复失败')
+  } finally {
+    resumingAISessionId.value = ''
+    void loadAISessions(true)
   }
 }
 
@@ -498,6 +664,10 @@ async function handleCreateTerminal() {
 }
 
 function handleOpenTerminal(terminalId: string) {
+  if (!terminalId) {
+    message.warning('该会话暂无可打开的终端（可能为历史导入）')
+    return
+  }
   router.push({ path: '/', query: { terminal: terminalId } })
 }
 
@@ -637,6 +807,41 @@ onMounted(() => {
   color: #888;
 }
 
+.ai-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-session-item {
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ai-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-session-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #888;
+  gap: 12px;
+}
+
+.ai-session-actions {
+  margin-top: 8px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
 .log-list {
   max-height: 400px;
   overflow-y: auto;
@@ -668,7 +873,8 @@ onMounted(() => {
 .log-content {
   flex: 1;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 .log-time {

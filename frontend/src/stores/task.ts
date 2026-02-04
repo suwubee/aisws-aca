@@ -62,6 +62,18 @@ export interface TaskDetail {
   approvals: any[]
 }
 
+export interface AISession {
+  id: string
+  terminal_id: string
+  task_id: string
+  ai_type: string
+  state: string
+  session_id: string
+  session_file: string
+  created_at: string
+  updated_at: string
+}
+
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived'
 
 export const useTaskStore = defineStore('task', () => {
@@ -114,6 +126,23 @@ export const useTaskStore = defineStore('task', () => {
 
   async function getTaskDetail(id: string): Promise<TaskDetail> {
     const { data } = await taskApi.getDetail(id)
+    return data
+  }
+
+  async function listAISessions(taskId: string): Promise<AISession[]> {
+    const { data } = await taskApi.listAISessions(taskId)
+    return data.items || []
+  }
+
+  async function resumeAISession(taskId: string, aiSessionId: string) {
+    const { data } = await taskApi.resumeAISession(taskId, aiSessionId)
+    await fetchTasks()
+    return data
+  }
+
+  async function collectAISessions(taskId: string, params?: { tool?: string; limit?: number }) {
+    const { data } = await taskApi.collectAISessions(taskId, params || {})
+    await fetchTasks()
     return data
   }
 
@@ -178,6 +207,9 @@ export const useTaskStore = defineStore('task', () => {
     deleteTask,
     moveTask,
     getTaskDetail,
+    listAISessions,
+    resumeAISession,
+    collectAISessions,
     startTask,
     bindTerminal,
     pauseAI,

@@ -232,6 +232,57 @@ export interface StartTaskResponse {
   user_action_hint?: string
 }
 
+export interface AISession {
+  id: string
+  terminal_id: string
+  task_id: string
+  ai_type: string
+  state: string
+  session_id: string
+  session_file: string
+  created_at: ISODateTimeString
+  updated_at: ISODateTimeString
+}
+
+export type ListTaskAISessionsResponse = ApiItemsResponse<AISession>
+
+export interface DiscoveredTaskAISession {
+  tool: string
+  ai_type: string
+  session_id: string
+  session_file: string
+  project_key?: string
+  cwd?: string
+  updated_at: ISODateTimeString
+  imported: boolean
+  ai_session_id?: string
+}
+
+export type DiscoverTaskAISessionsResponse = ApiItemsResponse<DiscoveredTaskAISession>
+
+export interface ImportTaskAISessionResponse {
+  message: string
+  item: AISession
+}
+
+export interface CollectTaskAISessionsResponse {
+  message: string
+  imported_count: number
+  existing_count: number
+  items: AISession[]
+}
+
+export interface ResumeAISessionResponse {
+  message: string
+  task: Task
+  terminal_id: string
+  work_dir: string
+  resume_command: string
+  cli_started: boolean
+  needs_user_action?: boolean
+  user_action_hint?: string
+}
+
 // ===== Comments =====
 
 export interface TaskComment {
@@ -266,6 +317,9 @@ export interface TerminalAIAssistant {
   detected: boolean
   version?: string
   approval_prompt?: string
+  ai_session_id?: string
+  session_id?: string
+  session_file?: string
 }
 
 export interface TerminalSessionMetadata {

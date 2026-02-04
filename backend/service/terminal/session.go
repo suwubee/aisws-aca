@@ -19,6 +19,7 @@ import (
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/approval"
+	clisession "github.com/ai-coding-assistant/service/clisession"
 	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/service/keybinding"
 	"github.com/ai-coding-assistant/utils"
@@ -103,6 +104,10 @@ type AIAssistant struct {
 	Detected       bool      `json:"detected"`
 	Version        string    `json:"version,omitempty"`
 	ApprovalPrompt string    `json:"approval_prompt,omitempty"` // 当前的审批提示
+	// AI CLI 会话（用于 --resume）
+	AISessionID string `json:"ai_session_id,omitempty"` // ACA 内部 AISession 主键
+	SessionID   string `json:"session_id,omitempty"`    // 外部 CLI 的 session id（claude UUID / codex UUID）
+	SessionFile string `json:"session_file,omitempty"`  // 外部 CLI 的会话文件路径/文件名（如 codex rollout jsonl）
 	// CLI 状态确认（用于“CLI可选/不强制”的场景：允许人工确认 + AI/启发式预判）
 	NeedsConfirm   bool    `json:"needs_confirm,omitempty"`   // 是否需要用户确认 CLI 状态
 	ConfirmKind    string  `json:"confirm_kind,omitempty"`    // enter_cli / exit_cli
@@ -139,14 +144,16 @@ type Session struct {
 	logMutex     sync.Mutex
 	logFlushChan chan struct{}
 	// 输入/输出日志聚合（避免按字符记录）
-	ioBufMutex        sync.Mutex
-	inputLineBuf      []rune
-	inputEscState     int    // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
-	outputLineBuf     []rune // 当前输出行（处理 \r/\b/ANSI 清行等）
-	outputCursor      int
-	outputRemainder   []byte // 残留的半个 UTF-8/ANSI 序列
-	outputSavedCursor int
-	outputLineBufSize int
+	ioBufMutex             sync.Mutex
+	inputLineBuf           []rune
+	inputEscState          int    // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
+	outputLineBuf          []rune // 当前输出行（处理 \r/\b/ANSI 清行等）
+	outputCursor           int
+	outputRemainder        []byte // 残留的半个 UTF-8/ANSI 序列
+	outputSavedCursor      int
+	outputCursorSaveActive bool // between save/restore (ESC7/ESC8 or CSI s/u)
+	outputSuppressWrites   bool // suppress output writes for off-screen UI regions (e.g., status bar)
+	outputLineBufSize      int
 	// 检测和审批相关
 	detector               *detector.Detector
 	approvalEngine         *approval.Engine
@@ -154,6 +161,7 @@ type Session struct {
 	expectedAIAgentType    detector.AIAgentType
 	cliManualPresent       *bool
 	cliManualUntil         time.Time
+	cliSessionManager      *clisession.SessionManager
 	lastOutput             string // 用于检测状态变化
 	lastOutputMu           sync.Mutex
 	approvalEvalMu         sync.Mutex
@@ -727,6 +735,61 @@ func (s *Session) detectAndHandle(data []byte) {
 		}
 	}
 
+	// ===== CLI 会话跟踪（AISession） =====
+	// 仅在任务绑定且检测到进入/疑似进入 AI CLI 时创建会话记录，并持续从输出提取 session_id/session_file。
+	// 目的：为“一键 resume”与审批审计提供稳定的会话对象。
+	if cliTrackingEnabled {
+		taskID := ""
+		assistantType := ""
+		assistantDetected := false
+		assistantNeedsConfirm := false
+		assistantSource := ""
+		s.metaMutex.RLock()
+		if s.taskID != nil {
+			taskID = strings.TrimSpace(*s.taskID)
+		}
+		sessionMgr := s.cliSessionManager
+		if s.aiAssistant != nil {
+			assistantType = strings.TrimSpace(s.aiAssistant.Type)
+			assistantDetected = s.aiAssistant.Detected
+			assistantNeedsConfirm = s.aiAssistant.NeedsConfirm
+			assistantSource = s.aiAssistant.Source
+		}
+		s.metaMutex.RUnlock()
+
+		// detected=true 或 needs_confirm(由输出锚点触发) 都视为足够强的信号
+		shouldTrack := taskID != "" && (assistantDetected || (assistantNeedsConfirm && assistantSource == "anchor"))
+
+		if shouldTrack && sessionMgr == nil {
+			if mgr, err := clisession.NewSessionManager(s.id, s.taskID, assistantType); err == nil {
+				s.metaMutex.Lock()
+				// double check: avoid racing with refreshTaskAutomationTracking
+				if s.cliTrackingEnabled && s.cliSessionManager == nil {
+					s.cliSessionManager = mgr
+				}
+				sessionMgr = s.cliSessionManager
+				s.metaMutex.Unlock()
+			} else {
+				utils.Debug("Failed to init CLI session manager", zap.Error(err), zap.String("terminal", s.id))
+			}
+		}
+
+		if sessionMgr != nil {
+			if snap, err := sessionMgr.UpdateFromOutput(output); err == nil {
+				s.metaMutex.Lock()
+				if s.aiAssistant != nil {
+					s.aiAssistant.AISessionID = snap.AISessionID
+					s.aiAssistant.SessionID = snap.SessionID
+					s.aiAssistant.SessionFile = snap.SessionFile
+					s.metadata.AIAssistant = s.aiAssistant
+				}
+				s.metaMutex.Unlock()
+			} else {
+				utils.Debug("Failed to update CLI session from output", zap.Error(err), zap.String("terminal", s.id))
+			}
+		}
+	}
+
 	// 检测状态变化
 	state, approvalPrompt := s.detector.DetectState(output)
 
@@ -740,27 +803,27 @@ func (s *Session) detectAndHandle(data []byte) {
 		go s.handleApproval(output)
 	}
 
-		// 更新AI助手状态（如果存在）
-		s.metaMutex.Lock()
-		if s.aiAssistant != nil {
-			oldState := s.aiAssistant.State
-			s.aiAssistant.State = string(state)
+	// 更新AI助手状态（如果存在）
+	s.metaMutex.Lock()
+	if s.aiAssistant != nil {
+		oldState := s.aiAssistant.State
+		s.aiAssistant.State = string(state)
 		s.aiAssistant.StateUpdatedAt = now
 		if approvalPrompt != "" {
 			s.aiAssistant.ApprovalPrompt = approvalPrompt
 		}
 		s.metadata.AIAssistant = s.aiAssistant
 
-			// CLI 退出（疑似）：从可交互/工作态回到 shell prompt。
-			// 为了安全默认先将 detected=false（避免把 prompt 当作 shell 命令执行），并交由用户确认闭环。
-			if cliTrackingEnabled && s.aiAssistant.Detected &&
-				oldState != string(detector.StateIdle) &&
-				state == detector.StateIdle &&
-				lastNonEmptyLineLooksLikeShellPrompt(output) &&
-				!(manualActive && manualPresent != nil && *manualPresent) {
-				s.aiAssistant.Detected = false
-				s.aiAssistant.ApprovalPrompt = ""
-				s.aiAssistant.NeedsConfirm = true
+		// CLI 退出（疑似）：从可交互/工作态回到 shell prompt。
+		// 为了安全默认先将 detected=false（避免把 prompt 当作 shell 命令执行），并交由用户确认闭环。
+		if cliTrackingEnabled && s.aiAssistant.Detected &&
+			oldState != string(detector.StateIdle) &&
+			state == detector.StateIdle &&
+			lastNonEmptyLineLooksLikeShellPrompt(output) &&
+			!(manualActive && manualPresent != nil && *manualPresent) {
+			s.aiAssistant.Detected = false
+			s.aiAssistant.ApprovalPrompt = ""
+			s.aiAssistant.NeedsConfirm = true
 			s.aiAssistant.ConfirmKind = "exit_cli"
 			s.aiAssistant.ConfirmMessage = "检测到可能已退出 AI CLI（出现 shell 提示符），请确认当前是否仍在 AI CLI（是/否/不确定）"
 			s.aiAssistant.Source = "heuristic"
@@ -886,8 +949,9 @@ func (s *Session) handleApproval(output string) {
 	// 记录审批操作
 	var aiSessionID *string
 	s.metaMutex.RLock()
-	if s.aiAssistant != nil {
-		// 这里可以关联AI会话ID
+	if s.aiAssistant != nil && strings.TrimSpace(s.aiAssistant.AISessionID) != "" {
+		id := strings.TrimSpace(s.aiAssistant.AISessionID)
+		aiSessionID = &id
 	}
 	s.metaMutex.RUnlock()
 
@@ -1727,6 +1791,7 @@ func (s *Session) refreshTaskCLISelection() {
 		s.metadata.AIAssistant = nil
 		s.cliManualPresent = nil
 		s.cliManualUntil = time.Time{}
+		s.cliSessionManager = nil
 		s.metaMutex.Unlock()
 		s.broadcastMetadata()
 		return
@@ -1737,6 +1802,8 @@ func (s *Session) refreshTaskCLISelection() {
 	s.expectedAIAgentType = expectedType
 
 	if s.aiAssistant == nil || strings.TrimSpace(s.aiAssistant.Type) != string(expectedType) {
+		// 任务关键字段变化（automation_mode/cli_type）时，清理旧的会话跟踪器，避免把旧会话误关联到新 CLI。
+		s.cliSessionManager = nil
 		s.aiAssistant = &AIAssistant{
 			Type:           string(expectedType),
 			DisplayName:    displayName,
@@ -1997,6 +2064,8 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			switch seqType {
 			case "CSI":
 				s.applyCSISequenceLocked(seq)
+			case "ESC":
+				s.applyESCSequenceLocked(seq)
 			}
 			i += seqLen
 			continue
@@ -2004,10 +2073,18 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 
 		switch b {
 		case '\n':
+			if s.outputSuppressWrites {
+				i++
+				continue
+			}
 			s.flushOutputLineLocked(&lines)
 			i++
 			continue
 		case '\r':
+			if s.outputSuppressWrites {
+				i++
+				continue
+			}
 			// 回车：回到行首
 			// 检查下一个字符是否是 \n（\r\n 是正常换行）
 			if i+1 < len(buf) && buf[i+1] != '\n' {
@@ -2018,6 +2095,10 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			i++
 			continue
 		case '\b', 0x7f:
+			if s.outputSuppressWrites {
+				i++
+				continue
+			}
 			// 退格：仅移动光标（是否擦除由后续输出决定）
 			if s.outputCursor > 0 {
 				s.outputCursor--
@@ -2025,6 +2106,10 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			i++
 			continue
 		case '\t':
+			if s.outputSuppressWrites {
+				i++
+				continue
+			}
 			s.writeOutputRuneLocked('\t')
 			i++
 			continue
@@ -2045,6 +2130,10 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			}
 			// 非法字节，跳过
 			i++
+			continue
+		}
+		if s.outputSuppressWrites {
+			i += size
 			continue
 		}
 		s.writeOutputRuneLocked(r)
@@ -2118,6 +2207,29 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 		return params[0]
 	}
 
+	// When we are in an off-screen UI write section (e.g. status bar rendered via save+cursorTo+restore),
+	// ignore all mutations to the current line buffer until cursor restore arrives.
+	if s.outputSuppressWrites {
+		switch final {
+		case 'u': // Restore cursor
+			s.outputCursor = s.outputSavedCursor
+			s.outputCursorSaveActive = false
+			s.outputSuppressWrites = false
+		}
+		return
+	}
+
+	// Heuristic: if a program uses save/restore and then issues clear-line / clear-screen,
+	// it's very likely updating a transient UI region (status bar / spinner). Our log line
+	// buffer is single-line only, so applying these clears would corrupt the current line.
+	if s.outputCursorSaveActive {
+		switch final {
+		case 'K', 'J':
+			s.outputSuppressWrites = true
+			return
+		}
+	}
+
 	switch final {
 	case 'K': // EL - Erase in Line
 		mode := 0
@@ -2158,10 +2270,38 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 			n = 1
 		}
 		s.outputCursor = n - 1
+	case 'A', 'B', 'E', 'F': // Cursor up/down/next/prev line
+		// We don't model row changes for log lines. When a TUI uses save+move+restore
+		// to paint a status bar, treat vertical cursor moves as an off-screen update.
+		if s.outputCursorSaveActive {
+			s.outputSuppressWrites = true
+		}
+	case 'H', 'f': // CUP/HVP - Cursor Position
+		// ESC[row;colH : default 1;1
+		row := 1
+		col := 1
+		if len(params) >= 1 && params[0] != 0 {
+			row = params[0]
+		}
+		if len(params) >= 2 && params[1] != 0 {
+			col = params[1]
+		}
+		if s.outputCursorSaveActive && row > 1 {
+			// Treat cursor move to another row during a save/restore block as a transient UI update
+			// (common in AI CLIs). Suppress writes & buffer mutations until restore.
+			s.outputSuppressWrites = true
+		}
+		if col < 1 {
+			col = 1
+		}
+		s.outputCursor = col - 1
 	case 's': // Save cursor
 		s.outputSavedCursor = s.outputCursor
+		s.outputCursorSaveActive = true
 	case 'u': // Restore cursor
 		s.outputCursor = s.outputSavedCursor
+		s.outputCursorSaveActive = false
+		s.outputSuppressWrites = false
 	case 'm':
 		// SGR - ignore
 	default:
@@ -2174,6 +2314,25 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 	}
 	if s.outputLineBufSize > 0 && s.outputCursor > s.outputLineBufSize {
 		s.outputCursor = s.outputLineBufSize
+	}
+}
+
+func (s *Session) applyESCSequenceLocked(seq []byte) {
+	// Common 2-byte ESC sequences used by TUI libraries (e.g. ansi-escapes in Node):
+	// - ESC 7 : DECSC (Save cursor)
+	// - ESC 8 : DECRC (Restore cursor)
+	if len(seq) != 2 || seq[0] != 0x1b {
+		return
+	}
+
+	switch seq[1] {
+	case '7':
+		s.outputSavedCursor = s.outputCursor
+		s.outputCursorSaveActive = true
+	case '8':
+		s.outputCursor = s.outputSavedCursor
+		s.outputCursorSaveActive = false
+		s.outputSuppressWrites = false
 	}
 }
 

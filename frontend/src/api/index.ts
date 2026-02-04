@@ -81,6 +81,16 @@ export const taskApi = {
   get: (id: string) => api.get(`/tasks/${id}`),
   getDetail: (id: string) => api.get(`/tasks/${id}/detail`),
   getTerminals: (id: string) => api.get(`/tasks/${id}/terminals`),
+  listAISessions: (id: string, params?: { limit?: number }) =>
+    api.get(`/tasks/${id}/ai-sessions`, { params: params || {} }),
+  discoverAISessions: (id: string, params?: { tool?: string; scope?: string; limit?: number }) =>
+    api.get(`/tasks/${id}/ai-sessions/discover`, { params: params || {} }),
+  importAISession: (id: string, data: { tool?: string; ai_type?: string; session_id: string; session_file?: string }) =>
+    api.post(`/tasks/${id}/ai-sessions/import`, data),
+  collectAISessions: (id: string, params?: { tool?: string; limit?: number }) =>
+    api.post(`/tasks/${id}/ai-sessions/collect`, null, { params: params || {} }),
+  resumeAISession: (taskId: string, aiSessionId: string) =>
+    api.post(`/tasks/${taskId}/ai-sessions/${aiSessionId}/resume`),
   create: (data: CreateTaskRequest) => api.post('/tasks', data),
   update: (id: string, data: UpdateTaskRequest) => api.put(`/tasks/${id}`, data),
   delete: (id: string) => api.delete(`/tasks/${id}`),

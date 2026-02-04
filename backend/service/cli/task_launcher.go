@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,10 @@ import (
 	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/service/terminal"
 )
+
+const maxTailBytes = 8192
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)`)
 
 type TaskLauncher struct {
 	terminalManager *terminal.Manager
@@ -270,4 +275,8 @@ func ensureEnter(s string) string {
 		return strings.TrimSuffix(s, "\n") + "\r"
 	}
 	return s + "\r"
+}
+
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
 }
