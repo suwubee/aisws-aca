@@ -441,6 +441,10 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		c.WriteJSON(WSMessage{Type: "error", Message: "Missing sessionId"})
 		return
 	}
+	if ctrl.manager == nil {
+		c.WriteJSON(WSMessage{Type: "error", Message: "Terminal manager not configured"})
+		return
+	}
 
 	sessionID = strings.TrimSpace(sessionID)
 	session := ctrl.manager.GetSession(sessionID)
@@ -454,8 +458,56 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		session = resumed
 	}
 	if session == nil {
-		c.WriteJSON(WSMessage{Type: "error", Message: "Session not found"})
-		return
+		// History-only mode: allow viewing persisted logs even when the live session is gone.
+		if model.DB == nil {
+			c.WriteJSON(WSMessage{Type: "error", Message: "Database not initialized"})
+			return
+		}
+
+		var dbSession model.TerminalSession
+		if err := model.DB.First(&dbSession, "id = ?", sessionID).Error; err != nil {
+			c.WriteJSON(WSMessage{Type: "error", Message: "Session not found"})
+			return
+		}
+
+		meta := &terminal.SessionMetadata{
+			Title:       dbSession.Title,
+			PID:         dbSession.PID,
+			Status:      dbSession.Status,
+			TaskID:      dbSession.TaskID,
+			ServerID:    dbSession.ServerID,
+			TmuxSession: dbSession.TmuxSession,
+		}
+
+		c.WriteJSON(WSMessage{
+			Type:     "ready",
+			Metadata: meta,
+		})
+
+		maxBytes := config.Load().Terminal.ScrollbackBytes
+		snapshot, _ := terminal.BuildTranscriptSnapshotFromLogs(sessionID, maxBytes)
+		if len(snapshot) > 0 {
+			c.WriteJSON(WSMessage{
+				Type: "data",
+				Data: base64.StdEncoding.EncodeToString(snapshot),
+			})
+		}
+
+		// Keep the socket open so the UI doesn't enter a reconnect loop; reject inputs.
+		for {
+			var msg WSMessage
+			if err := c.ReadJSON(&msg); err != nil {
+				return
+			}
+			switch msg.Type {
+			case "close":
+				return
+			case "input", "key_action":
+				_ = c.WriteJSON(WSMessage{Type: "error", Message: "Session is not running (history-only)"})
+			default:
+				// ignore
+			}
+		}
 	}
 
 	// 更新连接状态为 connected
@@ -465,20 +517,60 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 	defer ctrl.updateConnectionStatus(sessionID, "disconnected", "websocket_closed")
 
 	// 发送ready消息
+	meta := session.Metadata()
 	c.WriteJSON(WSMessage{
 		Type:     "ready",
-		Metadata: session.Metadata(),
+		Metadata: meta,
 	})
 
 	// 发送历史输出
-	scrollback := session.Scrollback()
-	if len(scrollback) > 0 {
-		scrollback = terminal.FilterInternalMarkers(scrollback)
+	maxBytes := session.ScrollbackLimitBytes()
+	if maxBytes <= 0 {
+		maxBytes = config.Load().Terminal.ScrollbackBytes
 	}
-	if len(scrollback) > 0 {
+
+	var snapshot []byte
+	if session.RecoveredFromTmux() && meta != nil && strings.TrimSpace(meta.TmuxSession) != "" {
+		if captured, err := terminal.CaptureTmuxSnapshot(strings.TrimSpace(meta.TmuxSession), maxBytes); err == nil && len(captured) > 0 {
+			snapshot = captured
+		}
+	}
+	if len(snapshot) == 0 {
+		scrollback := session.Scrollback()
+		if len(scrollback) > 0 {
+			scrollback = terminal.FilterInternalMarkers(scrollback)
+		}
+		snapshot = scrollback
+	}
+	if len(snapshot) == 0 {
+		if rebuilt, err := terminal.BuildTranscriptSnapshotFromLogs(sessionID, maxBytes); err == nil && len(rebuilt) > 0 {
+			snapshot = rebuilt
+		}
+	}
+	if len(snapshot) > 0 {
 		c.WriteJSON(WSMessage{
 			Type: "data",
-			Data: base64.StdEncoding.EncodeToString(scrollback),
+			Data: base64.StdEncoding.EncodeToString(snapshot),
+		})
+	}
+
+	// If the terminal is currently waiting for approval, replay the prompt once for this connection
+	// so the UI can rehydrate pending approvals after reconnect/page refresh.
+	if meta != nil && meta.AIAssistant != nil &&
+		meta.AIAssistant.State == string(detector.StateWaitingApproval) &&
+		strings.TrimSpace(meta.AIAssistant.ApprovalPrompt) != "" {
+		_ = c.WriteJSON(WSMessage{
+			Type:    "approval",
+			Message: strings.TrimSpace(meta.AIAssistant.ApprovalPrompt),
+			ApprovalResult: &terminal.ApprovalEvent{
+				Action:      "wait",
+				Input:       "",
+				Reasoning:   "reconnect_replay",
+				Confidence:  1,
+				RuleMatched: "",
+				AIDecision:  false,
+				AutoHandled: false,
+			},
 		})
 	}
 

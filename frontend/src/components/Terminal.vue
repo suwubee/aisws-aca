@@ -41,8 +41,10 @@ let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let didReportDisconnect = false
 let didShowDemoNotice = false
+let didShowReadOnlyNotice = false
 let autoScrollTimer: number | null = null
 let pendingScrollback = false
+const isReadOnly = ref(false)
 
 onMounted(() => {
   initTerminal()
@@ -177,6 +179,8 @@ function connectWebSocket() {
     reconnectAttempts = 0
     decoder = new TextDecoder('utf-8')
     pendingScrollback = true
+    isReadOnly.value = false
+    didShowReadOnlyNotice = false
     // 确保在可见尺寸下先 fit，再同步到后端（避免光标/换行错位）
     handleResize()
     configureAutoScroll()
@@ -225,6 +229,14 @@ function handleMessage(msg: any) {
     case 'ready':
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
+        const status = String(msg.metadata?.status || '').trim()
+        if (status && status !== 'running') {
+          isReadOnly.value = true
+          if (terminal && !didShowReadOnlyNotice) {
+            terminal.write('\r\n\x1b[33m[只读] 会话未运行，当前为历史回放模式（输入已禁用）。\x1b[0m\r\n')
+            didShowReadOnlyNotice = true
+          }
+        }
       }
       // Server sends a scrollback snapshot right after ready. On reconnect, avoid duplicating output:
       // clear local buffer and rehydrate from the snapshot (keeps "log context" while staying deterministic).
@@ -261,6 +273,14 @@ function handleMessage(msg: any) {
     case 'metadata':
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
+        const status = String(msg.metadata?.status || '').trim()
+        if (status && status !== 'running') {
+          isReadOnly.value = true
+          if (terminal && !didShowReadOnlyNotice) {
+            terminal.write('\r\n\x1b[33m[只读] 会话未运行，当前为历史回放模式（输入已禁用）。\x1b[0m\r\n')
+            didShowReadOnlyNotice = true
+          }
+        }
       }
       break
 
@@ -314,6 +334,7 @@ function handleMessage(msg: any) {
 
 function sendInput(data: string) {
   if (isDemoMode.value) return
+  if (isReadOnly.value) return
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
       // 使用 TextEncoder 正确编码 UTF-8，并避免长粘贴触发展开参数上限
@@ -351,6 +372,7 @@ function forceReconnect() {
 
 function sendKeyAction(action: string) {
   if (isDemoMode.value) return
+  if (isReadOnly.value) return
   if (!action) return
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({

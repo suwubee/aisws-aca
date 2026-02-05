@@ -104,10 +104,9 @@
                       <n-button
                         size="small"
                         type="primary"
-                        :disabled="t.status !== 'running'"
                         @click="openReconnect(t)"
                       >
-                        重连
+                        {{ t.status === 'running' ? '重连' : '回放' }}
                       </n-button>
                       <n-button size="small" @click="openLogs(t)">日志</n-button>
                       <n-popconfirm
@@ -262,7 +261,9 @@ const reconnectTerminal = ref<TerminalSession | null>(null)
 const reconnectTerminalId = computed(() => reconnectTerminal.value?.id || null)
 const reconnectModalTitle = computed(() => {
   if (!reconnectTerminal.value) return '终端重连'
-  return `终端重连：${reconnectTerminal.value.title || reconnectTerminal.value.id.slice(0, 8)}`
+  const isRunning = reconnectTerminal.value.status === 'running'
+  const prefix = isRunning ? '终端重连' : '终端回放'
+  return `${prefix}：${reconnectTerminal.value.title || reconnectTerminal.value.id.slice(0, 8)}`
 })
 
 const showLogsModal = ref(false)
@@ -401,9 +402,8 @@ const columns: DataTableColumns<TerminalSession> = [
         size: 'tiny',
         type: 'primary',
         quaternary: true,
-        disabled: row.status !== 'running',
         onClick: () => openReconnect(row)
-      }, () => '重连'),
+      }, () => row.status === 'running' ? '重连' : '回放'),
       h(NButton, {
         size: 'tiny',
         quaternary: true,

@@ -132,13 +132,17 @@ type Session struct {
 	subscribers map[string]chan StreamEvent
 	subMutex    sync.RWMutex
 	scrollback  *ScrollbackBuffer
-	metadata    *SessionMetadata
-	metaMutex   sync.RWMutex
-	aiAssistant *AIAssistant
-	createdAt   time.Time
-	closedAt    *time.Time
-	done        chan struct{}
-	doneOnce    sync.Once // 确保 done channel 只关闭一次
+	// recoveredFromTmux indicates this Session was attached to an existing tmux session.
+	// In that case, in-memory scrollback only contains output since the attach time; the full
+	// history should be sourced from tmux (capture-pane) or persisted logs when reconnecting.
+	recoveredFromTmux bool
+	metadata          *SessionMetadata
+	metaMutex         sync.RWMutex
+	aiAssistant       *AIAssistant
+	createdAt         time.Time
+	closedAt          *time.Time
+	done              chan struct{}
+	doneOnce          sync.Once // 确保 done channel 只关闭一次
 	// 日志相关
 	logBuffer    []LogEntry
 	logMutex     sync.Mutex
@@ -330,6 +334,7 @@ func (s *Session) RecoverFromTmux() error {
 // StartWithTmux 使用 tmux 启动会话
 func (s *Session) StartWithTmux(attach bool) error {
 	var cmd *exec.Cmd
+	resuming := attach
 
 	if attach {
 		// 重新连接到已有的 tmux 会话
@@ -340,6 +345,7 @@ func (s *Session) StartWithTmux(attach bool) error {
 		checkCmd := execCommand("tmux", "has-session", "-t", s.id)
 		if checkCmd.Run() == nil {
 			// 会话已存在，直接 attach
+			resuming = true
 			cmd = execCommand("tmux", "attach-session", "-t", s.id)
 		} else {
 			// 创建新会话
@@ -370,6 +376,7 @@ func (s *Session) StartWithTmux(attach bool) error {
 	s.cmd = cmd
 	s.metadata.PID = cmd.Process.Pid
 	s.metadata.TmuxSession = s.id
+	s.recoveredFromTmux = resuming
 
 	// 加载自动化配置
 	s.loadAutomationConfig()
@@ -1401,6 +1408,13 @@ func (s *Session) Status() string       { return s.status }
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 func (s *Session) ClosedAt() *time.Time { return s.closedAt }
 func (s *Session) Scrollback() []byte   { return s.scrollback.Read() }
+func (s *Session) ScrollbackLimitBytes() int {
+	if s == nil || s.scrollback == nil {
+		return 0
+	}
+	return s.scrollback.maxSize
+}
+func (s *Session) RecoveredFromTmux() bool { return s != nil && s.recoveredFromTmux }
 func (s *Session) Metadata() *SessionMetadata {
 	s.metaMutex.RLock()
 	defer s.metaMutex.RUnlock()
