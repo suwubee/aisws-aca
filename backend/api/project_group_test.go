@@ -23,8 +23,6 @@ func setupProjectGroupTestApp(t *testing.T) *fiber.App {
 	app := fiber.New()
 	apiGroup := app.Group("/api", func(c *fiber.Ctx) error {
 		c.Locals("username", "tester")
-		c.Locals("userID", "u-1")
-		c.Locals("role", "admin")
 		return c.Next()
 	})
 
@@ -121,3 +119,4 @@ func TestProjectGroupController_CRUD_AndUnbindProjects(t *testing.T) {
 		t.Fatalf("expected project group_id to be nil after group delete, got %v", updatedProject.GroupID)
 	}
 }
+

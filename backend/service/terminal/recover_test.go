@@ -35,9 +35,6 @@ func TestSessionRecoverFromTmux_UsesAttach(t *testing.T) {
 	if err := s.RecoverFromTmux(); err != nil {
 		t.Fatalf("RecoverFromTmux() error: %v", err)
 	}
-	if !s.RecoveredFromTmux() {
-		t.Fatalf("expected RecoveredFromTmux()=true")
-	}
 
 	meta := s.Metadata()
 	if meta.TmuxSession != "s1" {

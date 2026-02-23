@@ -33,3 +33,27 @@ func TestConsumeOutputLinesLocked_UTF8AcrossChunks(t *testing.T) {
 		t.Fatalf("expected [中文], got %#v", lines)
 	}
 }
+
+func TestConsumeOutputLinesLocked_CarriageReturnKeepsMeaningfulLineBeforeSpinner(t *testing.T) {
+	s := NewSession("t3", "/bin/bash", 1024)
+
+	s.ioBufMutex.Lock()
+	lines := s.consumeOutputLinesLocked([]byte("我是 Claude Code\r✶\n"))
+	s.ioBufMutex.Unlock()
+
+	if len(lines) != 1 || lines[0] != "我是 Claude Code" {
+		t.Fatalf("expected [我是 Claude Code], got %#v", lines)
+	}
+}
+
+func TestConsumeOutputLinesLocked_CSIEraseLinePreservesLineBeforeClear(t *testing.T) {
+	s := NewSession("t4", "/bin/bash", 1024)
+
+	s.ioBufMutex.Lock()
+	lines := s.consumeOutputLinesLocked([]byte("Claude 正在回答\x1b[2K\n"))
+	s.ioBufMutex.Unlock()
+
+	if len(lines) != 1 || lines[0] != "Claude 正在回答" {
+		t.Fatalf("expected [Claude 正在回答], got %#v", lines)
+	}
+}

@@ -25,7 +25,6 @@ func setupRuleSetImportExportTestApp(t *testing.T) *fiber.App {
 	apiGroup := app.Group("/api", func(c *fiber.Ctx) error {
 		c.Locals("role", "admin")
 		c.Locals("username", "tester")
-		c.Locals("userID", "u-1")
 		return c.Next()
 	})
 

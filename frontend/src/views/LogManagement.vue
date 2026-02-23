@@ -8,15 +8,28 @@
     <div class="content-area">
       <!-- 会话列表 -->
       <div v-if="!isMobile || !selectedSession" class="sessions-panel">
-        <div class="panel-header">
-          <span class="panel-title">终端会话</span>
-          <n-button size="small" quaternary @click="fetchSessions" :loading="loadingSessions">
-            <template #icon><span>↻</span></template>
-          </n-button>
+        <div class="panel-header panel-header--stacked">
+          <div class="panel-header__row">
+            <span class="panel-title">
+              终端会话
+              <n-tag size="small" :bordered="false" type="default">{{ filteredSessions.length }}</n-tag>
+            </span>
+            <n-button size="small" quaternary @click="fetchSessions" :loading="loadingSessions">
+              <template #icon><span>↻</span></template>
+            </n-button>
+          </div>
+          <n-input
+            v-model:value="sessionKeyword"
+            size="small"
+            clearable
+            placeholder="搜索会话标题 / ID"
+            class="sessions-filter"
+            @update:value="handleSessionKeywordChange"
+          />
         </div>
         <div class="sessions-list">
           <div
-            v-for="session in sessions"
+            v-for="session in pagedSessions"
             :key="session.terminal_id"
             class="session-item"
             :class="{ active: selectedSession?.terminal_id === session.terminal_id }"
@@ -30,9 +43,21 @@
               <span>{{ formatDate(session.last_log) }}</span>
             </div>
           </div>
-          <div v-if="sessions.length === 0" class="empty-state">
+          <div v-if="!loadingSessions && filteredSessions.length === 0" class="empty-state">
             暂无日志会话
           </div>
+        </div>
+        <div v-if="filteredSessions.length > 0" class="sessions-pagination">
+          <n-pagination
+            :page="sessionPagination.page"
+            :page-size="sessionPagination.pageSize"
+            :item-count="sessionPagination.itemCount"
+            :page-sizes="sessionPagination.pageSizes"
+            size="small"
+            show-size-picker
+            @update:page="handleSessionPageChange"
+            @update:page-size="handleSessionPageSizeChange"
+          />
         </div>
       </div>
 
@@ -158,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, h, reactive, onMounted } from 'vue'
+import { computed, ref, h, reactive, onMounted, watch } from 'vue'
 import {
   NButton,
   NCard,
@@ -213,6 +238,14 @@ const loadingLogs = ref(false)
 const { isMobile } = useIsMobile()
 const searchKeyword = ref('')
 const filterType = ref<string>('')
+const sessionKeyword = ref('')
+
+const sessionPagination = reactive({
+  page: 1,
+  pageSize: 20,
+  pageSizes: [20, 50, 100],
+  itemCount: 0
+})
 
 const typeOptions = [
   { label: '全部', value: '' },
@@ -226,6 +259,22 @@ const pagination = reactive({
   showSizePicker: true,
   pageSizes: [20, 50, 100, 200],
   itemCount: 0
+})
+
+const filteredSessions = computed(() => {
+  const keyword = sessionKeyword.value.trim().toLowerCase()
+  if (!keyword) return sessions.value
+
+  return sessions.value.filter((session) => {
+    const title = String(session.title || '').toLowerCase()
+    const id = String(session.terminal_id || '').toLowerCase()
+    return title.includes(keyword) || id.includes(keyword)
+  })
+})
+
+const pagedSessions = computed(() => {
+  const start = (sessionPagination.page - 1) * sessionPagination.pageSize
+  return filteredSessions.value.slice(start, start + sessionPagination.pageSize)
 })
 
 const columns: DataTableColumns<LogEntry> = [
@@ -303,6 +352,10 @@ async function fetchSessions() {
   try {
     const { data } = await logApi.listSessions()
     sessions.value = data.items || []
+    if (selectedSession.value) {
+      const matched = sessions.value.find((item) => item.terminal_id === selectedSession.value?.terminal_id) || null
+      selectedSession.value = matched
+    }
   } catch (error) {
     console.error('Failed to fetch sessions:', error)
   } finally {
@@ -313,7 +366,7 @@ async function fetchSessions() {
 function selectSession(session: LogSession) {
   selectedSession.value = session
   pagination.page = 1
-  fetchLogs()
+  void fetchLogs()
 }
 
 async function fetchLogs() {
@@ -346,8 +399,8 @@ async function deleteLog(id: string) {
   try {
     await logApi.delete(id)
     message.success('日志已删除')
-    fetchLogs()
-    fetchSessions() // 刷新统计
+    void fetchLogs()
+    void fetchSessions() // 刷新统计
   } catch (error) {
     message.error('删除失败')
   }
@@ -365,7 +418,7 @@ async function clearSessionLogs() {
     logs.value = []
     logsTotal.value = 0
     pagination.itemCount = 0
-    fetchSessions()
+    void fetchSessions()
   } catch (error) {
     message.error('清空失败')
   }
@@ -376,19 +429,32 @@ function debounceSearch() {
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = window.setTimeout(() => {
     pagination.page = 1
-    fetchLogs()
+    void fetchLogs()
   }, 300)
 }
 
 function handlePageChange(page: number) {
   pagination.page = page
-  fetchLogs()
+  void fetchLogs()
 }
 
 function handlePageSizeChange(pageSize: number) {
   pagination.pageSize = pageSize
   pagination.page = 1
-  fetchLogs()
+  void fetchLogs()
+}
+
+function handleSessionKeywordChange() {
+  sessionPagination.page = 1
+}
+
+function handleSessionPageChange(page: number) {
+  sessionPagination.page = page
+}
+
+function handleSessionPageSizeChange(pageSize: number) {
+  sessionPagination.pageSize = pageSize
+  sessionPagination.page = 1
 }
 
 function formatDate(dateStr: string) {
@@ -412,8 +478,24 @@ function formatTime(dateStr: string) {
 }
 
 onMounted(() => {
-  fetchSessions()
+  void fetchSessions()
 })
+
+watch(
+  [filteredSessions, () => sessionPagination.pageSize],
+  ([items]) => {
+    sessionPagination.itemCount = items.length
+    if (items.length === 0) {
+      sessionPagination.page = 1
+      return
+    }
+    const maxPage = Math.max(1, Math.ceil(items.length / sessionPagination.pageSize))
+    if (sessionPagination.page > maxPage) {
+      sessionPagination.page = maxPage
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
@@ -477,11 +559,28 @@ onMounted(() => {
   background: #252525;
 }
 
+.panel-header--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.panel-header__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-title {
   font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sessions-filter {
+  width: 100%;
 }
 
 .panel-actions {
@@ -494,6 +593,14 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+}
+
+.sessions-pagination {
+  border-top: 1px solid #333;
+  padding: 10px 8px;
+  display: flex;
+  justify-content: center;
+  background: #1f1f1f;
 }
 
 .session-item {
@@ -596,6 +703,10 @@ onMounted(() => {
   .panel-header {
     padding: 10px 12px;
     gap: 10px;
+  }
+
+  .sessions-pagination {
+    padding: 8px;
   }
 
   .panel-actions {

@@ -12,17 +12,10 @@
         </n-button>
         <!-- 进行中状态：显示终端和终止按钮 -->
         <template v-else-if="taskStatus === 'in_progress' || taskStatus === 'paused'">
-          <n-button v-if="linkedTerminal" type="info" @click="handleOpenTerminal(linkedTerminal.id)">
+          <n-button v-if="linkedTerminal" type="info" @click="handleOpenTerminal(linkedTerminal)">
             📺 打开终端
           </n-button>
-          <!-- AI托管暂停/恢复按钮 -->
-          <n-button v-if="isAIRunning" type="warning" :disabled="isDemoMode" @click="handlePauseAI">
-            ⏸ 暂停AI
-          </n-button>
-          <n-button v-else-if="isAIPaused" type="success" :disabled="isDemoMode" @click="handleResumeAI">
-            ▶ 恢复AI
-          </n-button>
-          <n-button type="error" :disabled="isDemoMode" @click="handleStopTask">
+          <n-button type="warning" :disabled="isDemoMode" @click="handleStopTask">
             ⏹ 终止任务
           </n-button>
         </template>
@@ -33,12 +26,7 @@
           </n-button>
         </template>
         <!-- 通用按钮 -->
-        <n-button
-          type="error"
-          :disabled="isDemoMode || !canDeleteTask"
-          :title="canDeleteTask ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除'"
-          @click="handleDeleteTask"
-        >
+        <n-button type="error" :disabled="isDemoMode" @click="handleDeleteTask">
           🗑 删除
         </n-button>
       </div>
@@ -48,7 +36,7 @@
       <div v-if="task" class="task-content">
         <!-- 任务基本信息 -->
         <n-card title="基本信息" size="small">
-          <n-descriptions :column="isMobileView ? 2 : 4" label-placement="left">
+          <n-descriptions :column="2" label-placement="left">
             <n-descriptions-item label="标题">{{ task.title }}</n-descriptions-item>
             <n-descriptions-item label="状态">
               <n-tag :type="statusType">{{ statusLabel }}</n-tag>
@@ -63,40 +51,32 @@
             <n-descriptions-item label="创建时间">
               {{ formatTime(task.created_at) }}
             </n-descriptions-item>
-            <n-descriptions-item label="AI状态" v-if="task.ai_status">
-              <n-tag :type="task.ai_status === 'running' ? 'success' : task.ai_status === 'paused' ? 'warning' : 'default'">
-                {{ task.ai_status }}
-              </n-tag>
-            </n-descriptions-item>
-            <n-descriptions-item v-if="task.description" label="描述" :span="isMobileView ? 2 : 4">
+            <n-descriptions-item v-if="task.description" label="描述" :span="2">
               {{ task.description }}
             </n-descriptions-item>
+            <n-descriptions-item label="备注" :span="2">
+              <n-space vertical :size="6" style="width: 100%">
+                <n-input
+                  v-model:value="remarkDraft"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="可用于临时提醒/记录关键结论（可选）"
+                  :disabled="isDemoMode"
+                />
+                <n-space justify="end" :size="6">
+                  <n-button
+                    size="small"
+                    type="primary"
+                    :loading="savingRemark"
+                    :disabled="isDemoMode"
+                    @click="saveRemark"
+                  >
+                    保存备注
+                  </n-button>
+                </n-space>
+              </n-space>
+            </n-descriptions-item>
           </n-descriptions>
-        </n-card>
-
-        <!-- 备注（单独卡片，容量更大） -->
-        <n-card title="备注" size="small">
-          <n-input
-            v-model:value="remarkDraft"
-            type="textarea"
-            :rows="4"
-            placeholder="可用于临时提醒/记录关键结论（可选）"
-            :disabled="isDemoMode"
-            style="width: 100%"
-          />
-          <template #footer>
-            <n-space justify="end">
-              <n-button
-                size="small"
-                type="primary"
-                :loading="savingRemark"
-                :disabled="isDemoMode"
-                @click="saveRemark"
-              >
-                保存备注
-              </n-button>
-            </n-space>
-          </template>
         </n-card>
 
         <!-- 自动化配置 -->
@@ -179,63 +159,17 @@
           <n-empty description="尚未启动会话" />
         </n-card>
 
-        <!-- CLI 会话（用于一键 resume） -->
-        <n-card v-if="automationMode === 'cli'" title="CLI 会话" size="small">
-          <template #header-extra>
-            <n-space size="small">
-              <n-button
-                size="small"
-                :loading="collectingAISessions"
-                :disabled="isDemoMode"
-                @click="handleCollectAISessions"
-              >
-                收纳历史
-              </n-button>
-              <n-button size="small" :loading="aiSessionsLoading" :disabled="isDemoMode" @click="loadAISessions">
-                刷新
-              </n-button>
-            </n-space>
-          </template>
-          <n-empty
-            v-if="aiSessions.length === 0"
-            description="暂无会话（进入 Claude/Codex CLI 后会自动记录，可用于一键恢复）"
-          />
-          <div v-else class="ai-session-list">
-            <div v-for="s in aiSessions" :key="s.id" class="ai-session-item">
-              <div class="ai-session-row">
-                <n-tag size="small" type="info">{{ prettyTool(s.ai_type) }}</n-tag>
-                <n-text depth="3" class="mono">{{ s.session_id || s.session_file || s.id }}</n-text>
-                <n-tag size="small" :type="s.state === 'waiting_input' ? 'success' : 'default'">
-                  {{ s.state || 'unknown' }}
-                </n-tag>
-              </div>
-              <div class="ai-session-row ai-session-meta">
-                <span>{{ formatTime(s.updated_at || s.created_at) }}</span>
-                <span class="mono">终端: {{ s.terminal_id || '-' }}</span>
-              </div>
-              <div class="ai-session-actions">
-                <n-space justify="end" size="small">
-                  <n-button
-                    size="tiny"
-                    type="primary"
-                    :loading="resumingAISessionId === s.id"
-                    :disabled="isDemoMode"
-                    @click.stop="handleResumeAISession(s)"
-                  >
-                    一键恢复
-                  </n-button>
-                  <n-button size="tiny" @click.stop="handleCopyResumeCommand(s)">复制命令</n-button>
-                  <n-button size="tiny" :disabled="!s.terminal_id" @click.stop="handleOpenTerminal(s.terminal_id)">打开终端</n-button>
-                </n-space>
-              </div>
-            </div>
-          </div>
-        </n-card>
-
         <!-- 关联终端 -->
         <n-card title="关联终端" size="small">
           <template #header-extra>
-            <n-button size="small" :disabled="isDemoMode" @click="handleCreateTerminal">+ 新建终端</n-button>
+            <n-button
+              size="small"
+              :loading="creatingTerminal"
+              :disabled="isDemoMode || creatingTerminal"
+              @click="handleCreateTerminal"
+            >
+              + 新建终端
+            </n-button>
           </template>
           <n-empty v-if="terminals.length === 0" description="暂无关联终端" />
           <div v-else class="terminal-list">
@@ -243,7 +177,8 @@
               v-for="terminal in terminals"
               :key="terminal.id"
               class="terminal-item"
-              @click="handleOpenTerminal(terminal.id)"
+              :class="{ disconnected: terminal.status !== 'running' }"
+              @click="handleOpenTerminal(terminal)"
             >
               <div class="terminal-info">
                 <n-text strong>{{ terminal.title || 'Terminal' }}</n-text>
@@ -299,10 +234,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useMessage, NTag } from 'naive-ui'
 import { getServer } from '@/api/server'
 import { useAuthStore } from '@/stores/auth'
-import { useTaskStore, type AISession, type Task, type TerminalSession } from '@/stores/task'
+import { useTaskStore, type Task, type TerminalSession } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
-import { useIsMobile } from '@/utils/useIsMobile'
 import AIWorkflowSessionPanel from '@/components/AIWorkflowSessionPanel.vue'
 
 const route = useRoute()
@@ -312,9 +246,7 @@ const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
-const { isMobile } = useIsMobile()
 const isDemoMode = computed(() => authStore.isDemoMode)
-const isMobileView = computed(() => isMobile.value)
 
 const loading = ref(true)
 const task = ref<Task | null>(null)
@@ -322,10 +254,7 @@ const terminals = ref<TerminalSession[]>([])
 const showCreateTask = ref(false)
 const remarkDraft = ref('')
 const savingRemark = ref(false)
-const aiSessions = ref<AISession[]>([])
-const aiSessionsLoading = ref(false)
-const resumingAISessionId = ref('')
-const collectingAISessions = ref(false)
+const creatingTerminal = ref(false)
 
 const linkedTerminal = computed(() => {
   return terminals.value.find(t => t.status === 'running')
@@ -337,10 +266,6 @@ const serverLoading = ref(false)
 const taskId = computed(() => route.params.id as string)
 
 const taskStatus = computed(() => task.value?.status || '')
-const canDeleteTask = computed(() => {
-  const s = String(taskStatus.value || '').trim().toLowerCase()
-  return s === 'done' || s === 'failed' || s === 'timeout' || s === 'archived'
-})
 
 const statusLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -403,14 +328,6 @@ const canStartTask = computed(() => {
   )
 })
 
-const isAIRunning = computed(() => {
-  return task.value?.ai_status === 'running'
-})
-
-const isAIPaused = computed(() => {
-  return task.value?.ai_status === 'paused' || task.value?.ai_pause_reason === 'user_paused'
-})
-
 const serverLabel = computed(() => {
   const ids = task.value?.target_server_ids || []
   if (ids.length > 1) return `${ids.length}台服务器`
@@ -456,119 +373,10 @@ async function loadTaskDetail() {
 
     const firstServerId = detail.task.target_server_ids?.[0] || detail.task.server_id
     void ensureServerLoaded(firstServerId)
-    void loadAISessions(true)
   } catch (error) {
     message.error('加载任务详情失败')
   } finally {
     loading.value = false
-  }
-}
-
-function prettyTool(aiType: string) {
-  const t = String(aiType || '').trim().toLowerCase()
-  if (t === 'claude-code' || t === 'claude') return 'Claude'
-  if (t === 'codex') return 'Codex'
-  if (t === 'gemini') return 'Gemini'
-  return aiType || 'unknown'
-}
-
-function buildResumeCommand(s: AISession): string {
-  const t = String(s.ai_type || '').trim().toLowerCase()
-  const sessionId = String(s.session_id || '').trim()
-  if (t === 'claude-code' || t === 'claude') return sessionId ? `claude --resume ${sessionId}` : 'claude --continue'
-  if (t === 'codex') return sessionId ? `codex resume ${sessionId}` : 'codex resume --last'
-  return ''
-}
-
-async function loadAISessions(silent = false) {
-  if (aiSessionsLoading.value) return
-  aiSessionsLoading.value = true
-  try {
-    aiSessions.value = await taskStore.listAISessions(taskId.value)
-  } catch (e: any) {
-    if (!silent) message.error(e?.response?.data?.error || '加载会话失败')
-  } finally {
-    aiSessionsLoading.value = false
-  }
-}
-
-async function handleCollectAISessions() {
-  if (isDemoMode.value) {
-    message.warning('演示模式：只读')
-    return
-  }
-  if (collectingAISessions.value) return
-
-  collectingAISessions.value = true
-  try {
-    const result = await taskStore.collectAISessions(taskId.value)
-    const imported = Number(result?.imported_count || 0)
-    const existing = Number(result?.existing_count || 0)
-
-    if (imported === 0 && existing === 0) {
-      message.info('未发现可收纳的历史会话（请确认 work_dir/CLI 类型）')
-    } else if (existing > 0) {
-      message.success(`已收纳 ${imported} 个（跳过 ${existing} 个已存在）`)
-    } else {
-      message.success(`已收纳 ${imported} 个历史会话`)
-    }
-
-    void loadAISessions(true)
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || '收纳历史会话失败')
-  } finally {
-    collectingAISessions.value = false
-  }
-}
-
-async function handleCopyResumeCommand(s: AISession) {
-  const cmd = buildResumeCommand(s)
-  if (!cmd) {
-    message.warning('该会话暂不支持一键恢复')
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(cmd)
-    message.success('已复制')
-  } catch {
-    message.error('复制失败，请手动复制')
-  }
-}
-
-async function handleResumeAISession(s: AISession) {
-  if (isDemoMode.value) {
-    message.warning('演示模式：只读')
-    return
-  }
-  if (!s?.id) return
-  if (resumingAISessionId.value) return
-
-  const cmd = buildResumeCommand(s)
-  if (!cmd) {
-    message.warning('该会话暂不支持一键恢复')
-    return
-  }
-
-  resumingAISessionId.value = s.id
-  try {
-    const result = await taskStore.resumeAISession(taskId.value, s.id)
-    if (result?.needs_user_action) {
-      message.warning(result.user_action_hint || '需要用户确认后继续')
-    } else {
-      message.success('会话已恢复')
-    }
-    if (result?.terminal_id) {
-      await terminalStore.fetchTerminals()
-      terminalStore.setActiveTerminal(result.terminal_id)
-      router.push({ path: '/', query: { terminal: result.terminal_id } })
-    } else {
-      await loadTaskDetail()
-    }
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || '一键恢复失败')
-  } finally {
-    resumingAISessionId.value = ''
-    void loadAISessions(true)
   }
 }
 
@@ -649,6 +457,8 @@ async function handleCreateTerminal() {
     message.warning('演示模式：只读')
     return
   }
+  if (creatingTerminal.value) return
+  creatingTerminal.value = true
   try {
     const serverId = task.value?.server_id || task.value?.target_server_ids?.[0] || null
     if (!serverId) {
@@ -660,45 +470,21 @@ async function handleCreateTerminal() {
     await loadTaskDetail()
   } catch (error) {
     message.error('创建终端失败')
+  } finally {
+    creatingTerminal.value = false
   }
 }
 
-function handleOpenTerminal(terminalId: string) {
-  if (!terminalId) {
-    message.warning('该会话暂无可打开的终端（可能为历史导入）')
+function handleOpenTerminal(terminal: TerminalSession | string) {
+  const target = typeof terminal === 'string'
+    ? terminals.value.find(item => item.id === terminal)
+    : terminal
+  if (!target || !target.id) return
+  if (String(target.status || '').toLowerCase() !== 'running') {
+    message.warning('该终端会话不存在或已退出，请先恢复后再连接。')
     return
   }
-  router.push({ path: '/', query: { terminal: terminalId } })
-}
-
-async function handlePauseAI() {
-  if (isDemoMode.value) {
-    message.warning('演示模式：只读')
-    return
-  }
-  if (!task.value) return
-  try {
-    await taskStore.pauseAI(task.value.id)
-    message.success('AI已暂停')
-    await loadTaskDetail()
-  } catch (error: any) {
-    message.error(error.response?.data?.error || '暂停AI失败')
-  }
-}
-
-async function handleResumeAI() {
-  if (isDemoMode.value) {
-    message.warning('演示模式：只读')
-    return
-  }
-  if (!task.value) return
-  try {
-    await taskStore.resumeAI(task.value.id)
-    message.success('AI已恢复')
-    await loadTaskDetail()
-  } catch (error: any) {
-    message.error(error.response?.data?.error || '恢复AI失败')
-  }
+  router.push({ path: '/', query: { terminal: target.id } })
 }
 
 async function handleStopTask() {
@@ -730,17 +516,13 @@ async function handleDeleteTask() {
     message.warning('演示模式：只读')
     return
   }
-  if (!canDeleteTask.value) {
-    message.warning('仅已完成/失败/超时/归档的任务可删除')
-    return
-  }
   if (!task.value) return
   try {
     await taskStore.deleteTask(task.value.id)
     message.success('任务已删除')
     router.push('/tasks')
-  } catch (error: any) {
-    message.error(error?.response?.data?.error || error?.message || '删除任务失败')
+  } catch (error) {
+    message.error('删除任务失败')
   }
 }
 
@@ -793,6 +575,16 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.terminal-item.disconnected {
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.terminal-item.disconnected:hover {
+  border-color: var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .terminal-info {
   display: flex;
   align-items: center;
@@ -805,41 +597,6 @@ onMounted(() => {
   gap: 16px;
   font-size: 12px;
   color: #888;
-}
-
-.ai-session-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ai-session-item {
-  padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.ai-session-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.ai-session-meta {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #888;
-  gap: 12px;
-}
-
-.ai-session-actions {
-  margin-top: 8px;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
 .log-list {
@@ -873,8 +630,7 @@ onMounted(() => {
 .log-content {
   flex: 1;
   white-space: pre-wrap;
-  word-break: normal;
-  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .log-time {

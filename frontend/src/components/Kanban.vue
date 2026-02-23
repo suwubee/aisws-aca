@@ -276,17 +276,11 @@ function handleTaskSaved() {
 }
 
 async function handleDeleteTask(task: Task) {
-  const status = String(task?.status || '').trim().toLowerCase()
-  const deletable = status === 'done' || status === 'failed' || status === 'timeout' || status === 'archived'
-  if (!deletable) {
-    message.warning('仅已完成/失败/超时/归档的任务可删除')
-    return
-  }
   try {
     await taskStore.deleteTask(task.id)
     message.success('任务已删除')
-  } catch (error: any) {
-    message.error(error?.response?.data?.error || error?.message || '删除任务失败')
+  } catch (error) {
+    message.error('删除任务失败')
   }
 }
 

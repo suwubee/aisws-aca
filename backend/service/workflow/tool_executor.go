@@ -2,12 +2,14 @@ package workflow
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ai-coding-assistant/model"
+	clisvc "github.com/ai-coding-assistant/service/cli"
+	terminalsvc "github.com/ai-coding-assistant/service/terminal"
 	"github.com/google/uuid"
 )
 
@@ -16,6 +18,122 @@ type ToolExecutor struct {
 	sshManager sshCommandExecutor
 	automation automationService
 	terminal   terminalManager
+}
+
+func isTerminalExecutionMode(sessionCtx map[string]any) bool {
+	return strings.EqualFold(strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode")), "terminal")
+}
+
+func isOneShotCLICommand(command string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	if cmd == "" {
+		return false
+	}
+	compact := " " + cmd + " "
+
+	isClaude := strings.HasPrefix(cmd, "claude ") || cmd == "claude"
+	isCodex := strings.HasPrefix(cmd, "codex ") || cmd == "codex"
+	isGemini := strings.HasPrefix(cmd, "gemini ") || cmd == "gemini"
+
+	if isClaude {
+		return strings.Contains(compact, " -p ") || strings.Contains(compact, " --print ") || strings.Contains(compact, " --prompt ")
+	}
+	if isCodex {
+		return strings.Contains(compact, " exec ") || strings.Contains(compact, " --prompt ")
+	}
+	if isGemini {
+		return strings.Contains(compact, " -p ") || strings.Contains(compact, " --prompt ")
+	}
+	return false
+}
+
+func looksLikeShellCommand(command string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	if cmd == "" {
+		return false
+	}
+	if strings.ContainsAny(cmd, "`<>") || strings.Contains(cmd, "$(") {
+		return true
+	}
+	for _, token := range []string{"&&", "||", ";", " | ", " 2>", " 1>"} {
+		if strings.Contains(cmd, token) {
+			return true
+		}
+	}
+
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	first := fields[0]
+	if strings.HasPrefix(first, "./") || strings.HasPrefix(first, "/") || strings.HasPrefix(first, "~/") {
+		return true
+	}
+
+	switch first {
+	case "cd", "ls", "pwd", "cat", "echo", "grep", "find", "sed", "awk", "head", "tail", "sort", "uniq",
+		"mkdir", "rm", "cp", "mv", "touch", "chmod", "chown", "tar", "unzip", "zip",
+		"git", "go", "python", "python3", "node", "npm", "pnpm", "yarn", "make", "bash", "sh", "zsh",
+		"claude", "codex", "gemini":
+		return true
+	}
+	return false
+}
+
+func containsCJK(text string) bool {
+	for _, r := range text {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSendAsAIPrompt(command string) bool {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return false
+	}
+	if strings.HasPrefix(cmd, "/") || strings.HasPrefix(cmd, "?") {
+		return true
+	}
+	if containsCJK(cmd) {
+		return true
+	}
+	if strings.ContainsAny(cmd, "。！？，、") {
+		return true
+	}
+	if looksLikeShellCommand(cmd) {
+		return false
+	}
+	fields := strings.Fields(cmd)
+	return len(fields) >= 4
+}
+
+func isInteractiveAIAssistantSession(session terminalSession) bool {
+	if session == nil {
+		return false
+	}
+	metaProvider, ok := any(session).(interface {
+		Metadata() *terminalsvc.SessionMetadata
+	})
+	if !ok {
+		return false
+	}
+	meta := metaProvider.Metadata()
+	if meta == nil || meta.AIAssistant == nil || !meta.AIAssistant.Detected {
+		return false
+	}
+	state := strings.ToLower(strings.TrimSpace(meta.AIAssistant.State))
+	if state == "" || state == "unknown" {
+		return false
+	}
+	switch state {
+	case "waiting_input", "working", "waiting_approval":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewToolExecutor creates a new tool executor
@@ -35,8 +153,20 @@ func (e *ToolExecutor) Execute(ctx context.Context, tool string, args map[string
 	case "select_server":
 		return e.selectServer(args, sessionCtx)
 	case "create_task":
+		if isTerminalExecutionMode(sessionCtx) {
+			return &ToolResult{
+				Success: false,
+				Error:   "create_task is disabled in terminal mode; reuse current terminal and call execute_command",
+			}
+		}
 		return e.createTask(args, sessionCtx)
 	case "start_task":
+		if isTerminalExecutionMode(sessionCtx) {
+			return &ToolResult{
+				Success: false,
+				Error:   "start_task is disabled in terminal mode; reuse current terminal and call execute_command",
+			}
+		}
 		return e.startTask(args)
 	case "execute_command":
 		return e.executeCommand(args, sessionCtx)
@@ -86,11 +216,20 @@ func (e *ToolExecutor) selectServer(args map[string]any, sessionCtx map[string]a
 		return &ToolResult{Success: false, Error: fmt.Sprintf("server not found: %s", serverID)}
 	}
 
+	if isTerminalExecutionMode(sessionCtx) {
+		lockedServerID := strings.TrimSpace(getStringFromMap(sessionCtx, "current_server_id"))
+		if lockedServerID != "" && !strings.EqualFold(lockedServerID, serverID) {
+			return &ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("terminal mode locks server to %s, cannot switch to %s", lockedServerID, serverID),
+			}
+		}
+	}
+
 	sessionCtx["current_server_id"] = serverID
 	sessionCtx["current_server_name"] = server.Name
 
-	execMode := strings.ToLower(strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode")))
-	if execMode == "terminal" && e.terminal != nil {
+	if isTerminalExecutionMode(sessionCtx) && e.terminal != nil {
 		_ = e.ensureTerminalForServer(sessionCtx, serverID)
 	}
 	return &ToolResult{
@@ -211,12 +350,6 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 		return &ToolResult{Success: false, Error: "command is required"}
 	}
 
-	restartLike := isRestartLikeCommand(command)
-	taskID := ""
-	if sessionCtx != nil {
-		taskID = strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
-	}
-
 	workDir, _ := args["work_dir"].(string)
 	if strings.TrimSpace(workDir) == "" {
 		workDir = strings.TrimSpace(getStringFromMap(sessionCtx, "work_dir"))
@@ -232,22 +365,356 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 		return &ToolResult{Success: false, Error: "server_id is required (local must be configured in Servers)"}
 	}
 
+	if isTerminalExecutionMode(sessionCtx) {
+		lockedServerID := strings.TrimSpace(getStringFromMap(sessionCtx, "current_server_id"))
+		if lockedServerID != "" && !strings.EqualFold(strings.TrimSpace(serverID), lockedServerID) {
+			return &ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("terminal mode locks server to %s, got %s", lockedServerID, strings.TrimSpace(serverID)),
+			}
+		}
+	}
+
+	truncateForEvent := func(raw string) string {
+		const maxRunes = 4000
+		text := strings.TrimSpace(raw)
+		if text == "" {
+			return ""
+		}
+		runes := []rune(text)
+		if len(runes) <= maxRunes {
+			return text
+		}
+		return string(runes[:maxRunes]) + "\n...(truncated)"
+	}
+
+	startTrackedExecution := func(terminalID string) string {
+		tracker := clisvc.NewExecutionTracker(model.DB)
+		if tracker == nil {
+			return ""
+		}
+		toStringPtr := func(raw string) *string {
+			s := strings.TrimSpace(raw)
+			if s == "" {
+				return nil
+			}
+			return &s
+		}
+
+		var taskIDPtr *string
+		taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
+		if taskID != "" {
+			taskIDCopy := taskID
+			taskIDPtr = &taskIDCopy
+		}
+
+		var terminalIDPtr *string
+		terminalID = strings.TrimSpace(terminalID)
+		if terminalID != "" {
+			terminalIDCopy := terminalID
+			terminalIDPtr = &terminalIDCopy
+		}
+
+		tool := strings.TrimSpace(getStringFromMap(sessionCtx, "cli_type"))
+		if tool == "" {
+			tool = "shell"
+		}
+		mode := strings.TrimSpace(getStringFromMap(sessionCtx, "workflow_phase"))
+		if mode == "" {
+			mode = "command"
+		}
+		source := strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode"))
+		if source == "" {
+			source = "workflow"
+		}
+		workflowRunIDPtr := toStringPtr(getStringFromMap(sessionCtx, "workflow_run_id"))
+		workflowSessionIDPtr := toStringPtr(getStringFromMap(sessionCtx, "workflow_session_id"))
+		workflowStepID := strings.TrimSpace(getStringFromMap(sessionCtx, "workflow_step_id"))
+		workflowIteration := strings.TrimSpace(getStringFromMap(sessionCtx, "workflow_iteration"))
+
+		metadata := map[string]any{
+			"server_id": serverID,
+			"work_dir":  workDir,
+			"command":   command,
+		}
+		if workflowStepID != "" {
+			metadata["workflow_step_id"] = workflowStepID
+		}
+		if workflowIteration != "" {
+			metadata["workflow_iteration"] = workflowIteration
+		}
+		if phase := strings.TrimSpace(mode); phase != "" {
+			metadata["workflow_phase"] = phase
+		}
+
+		record, err := tracker.Start(clisvc.StartExecutionInput{
+			TaskID:            taskIDPtr,
+			TerminalID:        terminalIDPtr,
+			WorkflowRunID:     workflowRunIDPtr,
+			WorkflowSessionID: workflowSessionIDPtr,
+			Tool:              tool,
+			Mode:              mode,
+			Source:            source,
+			Prompt:            command,
+			Metadata:          metadata,
+		})
+		if err != nil || record == nil {
+			return ""
+		}
+
+		_ = tracker.AppendEvent(record.ID, clisvc.EventTypeStarted, map[string]any{
+			"server_id":           serverID,
+			"work_dir":            workDir,
+			"command":             command,
+			"workflow_step_id":    workflowStepID,
+			"workflow_iteration":  workflowIteration,
+			"workflow_session_id": getStringFromMap(sessionCtx, "workflow_session_id"),
+			"workflow_run_id":     getStringFromMap(sessionCtx, "workflow_run_id"),
+			"workflow_phase":      mode,
+		})
+		return record.ID
+	}
+
+	appendTrackedEvent := func(executionID, eventType string, payload map[string]any) {
+		if executionID == "" {
+			return
+		}
+		tracker := clisvc.NewExecutionTracker(model.DB)
+		if tracker == nil {
+			return
+		}
+		_ = tracker.AppendEvent(executionID, eventType, payload)
+	}
+
+	completeTrackedExecution := func(executionID, status string, exitCode *int, errMsg string) {
+		if executionID == "" {
+			return
+		}
+		tracker := clisvc.NewExecutionTracker(model.DB)
+		if tracker == nil {
+			return
+		}
+		_ = tracker.Complete(executionID, status, exitCode, errMsg)
+	}
+
+	resolveReviewCommand := func() string {
+		reviewCmd := strings.TrimSpace(getStringFromMap(args, "review_command"))
+		if reviewCmd != "" {
+			return reviewCmd
+		}
+		reviewCmd = strings.TrimSpace(getStringFromMap(sessionCtx, "review_command"))
+		if reviewCmd != "" {
+			return reviewCmd
+		}
+
+		template := strings.TrimSpace(getStringFromMap(args, "review_command_template"))
+		if template == "" {
+			template = strings.TrimSpace(getStringFromMap(sessionCtx, "review_command_template"))
+		}
+		if template == "" {
+			return ""
+		}
+
+		rendered := strings.ReplaceAll(template, "{{command}}", command)
+		rendered = strings.ReplaceAll(rendered, "{{server_id}}", strings.TrimSpace(serverID))
+		rendered = strings.ReplaceAll(rendered, "{{work_dir}}", strings.TrimSpace(workDir))
+		return strings.TrimSpace(rendered)
+	}
+
+	reviewCommand := resolveReviewCommand()
+	runReview := getBool(args, false, "run_review", "enable_review", "with_review")
+	if !runReview {
+		runReview = getBool(sessionCtx, false, "run_review", "enable_review", "with_review")
+	}
+	if strings.TrimSpace(reviewCommand) != "" {
+		runReview = true
+	}
+
+	reviewWorkDir := strings.TrimSpace(getStringFromMap(args, "review_work_dir"))
+	if reviewWorkDir == "" {
+		reviewWorkDir = strings.TrimSpace(getStringFromMap(sessionCtx, "review_work_dir"))
+	}
+	if reviewWorkDir == "" {
+		reviewWorkDir = workDir
+	}
+
+	reviewTool := strings.TrimSpace(getStringFromMap(args, "review_cli_type"))
+	if reviewTool == "" {
+		reviewTool = strings.TrimSpace(getStringFromMap(sessionCtx, "review_cli_type"))
+	}
+	if reviewTool == "" {
+		reviewTool = strings.TrimSpace(getStringFromMap(sessionCtx, "cli_type"))
+	}
+	if reviewTool == "" {
+		reviewTool = "shell"
+	}
+
+	launchReviewWorker := func(parentExecutionID, primaryStatus, primaryOutput, primaryErr string) string {
+		if !runReview || strings.TrimSpace(reviewCommand) == "" {
+			return ""
+		}
+
+		tracker := clisvc.NewExecutionTracker(model.DB)
+		if tracker == nil {
+			return ""
+		}
+
+		toStringPtr := func(raw string) *string {
+			s := strings.TrimSpace(raw)
+			if s == "" {
+				return nil
+			}
+			return &s
+		}
+
+		taskIDPtr := toStringPtr(getStringFromMap(sessionCtx, "task_id"))
+		terminalIDPtr := toStringPtr(getStringFromMap(sessionCtx, "terminal_id"))
+		workflowRunIDPtr := toStringPtr(getStringFromMap(sessionCtx, "workflow_run_id"))
+		workflowSessionIDPtr := toStringPtr(getStringFromMap(sessionCtx, "workflow_session_id"))
+		parentExecutionIDPtr := toStringPtr(parentExecutionID)
+
+		reviewMetadata := map[string]any{
+			"server_id":        serverID,
+			"work_dir":         reviewWorkDir,
+			"review_command":   reviewCommand,
+			"parent_execution": strings.TrimSpace(parentExecutionID),
+			"primary_status":   strings.TrimSpace(primaryStatus),
+			"primary_output":   truncateForEvent(primaryOutput),
+			"primary_error":    strings.TrimSpace(primaryErr),
+		}
+
+		record, err := tracker.Start(clisvc.StartExecutionInput{
+			TaskID:            taskIDPtr,
+			TerminalID:        terminalIDPtr,
+			WorkflowRunID:     workflowRunIDPtr,
+			WorkflowSessionID: workflowSessionIDPtr,
+			ParentExecutionID: parentExecutionIDPtr,
+			Role:              clisvc.ExecutionRoleReview,
+			Tool:              reviewTool,
+			Mode:              "review",
+			Source:            "workflow-review",
+			Prompt:            reviewCommand,
+			Metadata:          reviewMetadata,
+		})
+		if err != nil || record == nil {
+			return ""
+		}
+
+		reviewExecutionID := record.ID
+		_ = tracker.AppendEvent(reviewExecutionID, clisvc.EventTypeReview, map[string]any{
+			"stage":            "queued",
+			"server_id":        serverID,
+			"work_dir":         reviewWorkDir,
+			"review_command":   reviewCommand,
+			"parent_execution": strings.TrimSpace(parentExecutionID),
+			"primary_status":   strings.TrimSpace(primaryStatus),
+		})
+
+		terminalID := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id"))
+		taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
+		logCtx := map[string]any{}
+		if terminalID != "" {
+			logCtx["terminal_id"] = terminalID
+		}
+		if taskID != "" {
+			logCtx["task_id"] = taskID
+		}
+
+		go func(executionID, reviewCmd, reviewDir, reviewServerID string, localLogCtx map[string]any) {
+			reviewTracker := clisvc.NewExecutionTracker(model.DB)
+			appendReviewEvent := func(eventType string, payload map[string]any) {
+				if reviewTracker == nil {
+					return
+				}
+				_ = reviewTracker.AppendEvent(executionID, eventType, payload)
+			}
+			completeReview := func(status, errMsg string) {
+				if reviewTracker == nil {
+					return
+				}
+				_ = reviewTracker.Complete(executionID, status, nil, errMsg)
+			}
+
+			appendReviewEvent(clisvc.EventTypeReview, map[string]any{
+				"stage":          "started",
+				"server_id":      reviewServerID,
+				"work_dir":       reviewDir,
+				"review_command": reviewCmd,
+			})
+
+			if e.sshManager == nil {
+				errMsg := "ssh manager is not configured for review worker"
+				appendReviewEvent(clisvc.EventTypeError, map[string]any{"error": errMsg})
+				appendReviewEvent(clisvc.EventTypeReview, map[string]any{"stage": "finished", "success": false, "error": errMsg})
+				completeReview(clisvc.StatusError, errMsg)
+				e.emitTerminalAILog(localLogCtx, "warning", fmt.Sprintf("[%s][review] %s", strings.TrimSpace(reviewServerID), errMsg), "", "")
+				return
+			}
+
+			fullReviewCmd := strings.TrimSpace(reviewCmd)
+			if strings.TrimSpace(reviewDir) != "" {
+				fullReviewCmd = fmt.Sprintf("cd %s && %s", strings.TrimSpace(reviewDir), strings.TrimSpace(reviewCmd))
+			}
+
+			out, runErr := e.sshManager.ExecuteCommand(reviewServerID, fullReviewCmd)
+			if runErr != nil {
+				appendReviewEvent(clisvc.EventTypeError, map[string]any{
+					"error":  runErr.Error(),
+					"output": truncateForEvent(out),
+				})
+				appendReviewEvent(clisvc.EventTypeReview, map[string]any{
+					"stage":   "finished",
+					"success": false,
+					"error":   runErr.Error(),
+				})
+				completeReview(clisvc.StatusError, runErr.Error())
+				e.emitTerminalAILog(localLogCtx, "warning", fmt.Sprintf("[%s][review] 审核失败: %v", strings.TrimSpace(reviewServerID), runErr), "command", fullReviewCmd)
+				return
+			}
+
+			trimmedOut := strings.TrimSpace(out)
+			if trimmedOut != "" {
+				appendReviewEvent(clisvc.EventTypeOutput, map[string]any{
+					"output": truncateForEvent(trimmedOut),
+				})
+			}
+			appendReviewEvent(clisvc.EventTypeCompleted, map[string]any{})
+			appendReviewEvent(clisvc.EventTypeReview, map[string]any{
+				"stage":   "finished",
+				"success": true,
+			})
+			completeReview(clisvc.StatusCompleted, "")
+
+			if trimmedOut == "" {
+				e.emitTerminalAILog(localLogCtx, "info", fmt.Sprintf("[%s][review] 审核完成（无输出）", strings.TrimSpace(reviewServerID)), "command", fullReviewCmd)
+			} else {
+				e.emitTerminalAILog(localLogCtx, "info", fmt.Sprintf("[%s][review]\n%s", strings.TrimSpace(reviewServerID), strings.TrimRight(out, "\n")), "command", fullReviewCmd)
+			}
+		}(reviewExecutionID, reviewCommand, reviewWorkDir, serverID, logCtx)
+
+		return reviewExecutionID
+	}
+
 	execMode := strings.ToLower(strings.TrimSpace(getStringFromMap(sessionCtx, "command_execution_mode")))
 	if execMode == "" {
 		execMode = "backend"
 	}
+	if execMode == "terminal" && isOneShotCLICommand(command) {
+		return &ToolResult{
+			Success: false,
+			Error:   "one-shot CLI command is disabled in terminal mode; start/reuse interactive CLI and send prompt text instead",
+		}
+	}
 
 	// 优先使用“终端执行模式”：让 AI 真正在工作台可见的终端里敲命令，便于实时观察/接管。
 	if execMode == "terminal" && e.terminal != nil {
-		// 若任务处于“预期断开/等待重连”，非重启类命令应等待重连完成后再执行，避免 AI 指令乱序/串任务。
-		if taskID != "" && model.DB != nil && !restartLike {
-			if err := waitForTaskReconnect(taskID, 5*time.Minute); err != nil {
-				return &ToolResult{Success: false, Error: err.Error()}
-			}
-		}
-
 		terminalID := e.ensureTerminalForServer(sessionCtx, serverID)
 		if strings.TrimSpace(terminalID) != "" {
+			executionID := startTrackedExecution(terminalID)
+			if executionID != "" {
+				sessionCtx["execution_id"] = executionID
+			}
+
 			displayCmd := strings.TrimSpace(command)
 			if workDir != "" {
 				displayCmd = fmt.Sprintf("cd %s && %s", strings.TrimSpace(workDir), strings.TrimSpace(command))
@@ -256,35 +723,93 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 
 			session, err := e.terminal.GetOrResumeSession(terminalID)
 			if err == nil && session != nil {
-				// 标记“预期断开”：当 AI 执行重启类命令时，允许后续自动重连逻辑接管。
-				if restartLike && taskID != "" && model.DB != nil {
-					now := time.Now()
-					_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-						"expect_disconnect":  true,
-						"ai_status":          "waiting_reconnect",
-						"ai_pause_reason":    "",
-						"reconnect_attempts": 0,
-						"last_reconnect_at":  nil,
-						"updated_at":         now,
-					}).Error
+				if isInteractiveAIAssistantSession(session) {
+					prompt := strings.TrimSpace(command)
+					if shouldSendAsAIPrompt(prompt) {
+						if err := session.Write([]byte(strings.TrimRight(prompt, "\r\n") + "\r")); err != nil {
+							e.emitTerminalAILog(sessionCtx, "error", fmt.Sprintf("[%s] 发送到CLI失败: %v", strings.TrimSpace(serverID), err), "", "")
+							appendTrackedEvent(executionID, clisvc.EventTypeError, map[string]any{
+								"error":   err.Error(),
+								"command": prompt,
+								"mode":    "prompt",
+							})
+							completeTrackedExecution(executionID, clisvc.StatusError, nil, err.Error())
+							return &ToolResult{Success: false, Error: err.Error()}
+						}
+
+						appendTrackedEvent(executionID, clisvc.EventTypeProgress, map[string]any{
+							"stage":   "prompt_sent",
+							"mode":    "prompt",
+							"command": truncateForEvent(prompt),
+						})
+						appendTrackedEvent(executionID, clisvc.EventTypeCompleted, map[string]any{
+							"mode": "prompt",
+						})
+						completeTrackedExecution(executionID, clisvc.StatusCompleted, nil, "")
+						e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] 已将请求发送到当前CLI会话", strings.TrimSpace(serverID)), "prompt", prompt)
+						return &ToolResult{Success: true, Output: "prompt sent to active CLI session"}
+					}
+
+					if e.sshManager == nil {
+						appendTrackedEvent(executionID, clisvc.EventTypeError, map[string]any{
+							"error": "ssh manager is not configured",
+							"mode":  "backend_fallback",
+						})
+						completeTrackedExecution(executionID, clisvc.StatusError, nil, "ssh manager is not configured")
+						return &ToolResult{Success: false, Error: "ssh manager is not configured"}
+					}
+
+					fullCmd := command
+					if workDir != "" {
+						fullCmd = fmt.Sprintf("cd %s && %s", workDir, command)
+					}
+
+					e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] 检测到CLI交互会话，命令改为后台执行以避免污染对话", strings.TrimSpace(serverID)), "", "")
+					output, runErr := e.sshManager.ExecuteCommand(serverID, fullCmd)
+					if runErr != nil {
+						msg := fmt.Sprintf("[%s] 命令执行失败: %v", strings.TrimSpace(serverID), runErr)
+						if strings.TrimSpace(output) != "" {
+							msg = msg + "\n" + strings.TrimRight(output, "\n")
+						}
+						e.emitTerminalAILog(sessionCtx, "error", msg, "", "")
+						appendTrackedEvent(executionID, clisvc.EventTypeError, map[string]any{
+							"error":  runErr.Error(),
+							"output": truncateForEvent(output),
+							"mode":   "backend_fallback",
+						})
+						completeTrackedExecution(executionID, clisvc.StatusError, nil, runErr.Error())
+						reviewExecutionID := launchReviewWorker(executionID, clisvc.StatusError, output, runErr.Error())
+						if reviewExecutionID != "" {
+							sessionCtx["review_execution_id"] = reviewExecutionID
+						}
+						return &ToolResult{Success: false, Error: runErr.Error(), Output: output}
+					}
+
+					out := strings.TrimRight(output, "\n")
+					if strings.TrimSpace(out) != "" {
+						appendTrackedEvent(executionID, clisvc.EventTypeOutput, map[string]any{
+							"output": truncateForEvent(out),
+							"mode":   "backend_fallback",
+						})
+					}
+					if strings.TrimSpace(out) == "" {
+						e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] （无输出）", strings.TrimSpace(serverID)), "", "")
+					} else {
+						e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s]\n%s", strings.TrimSpace(serverID), out), "", "")
+					}
+					appendTrackedEvent(executionID, clisvc.EventTypeCompleted, map[string]any{
+						"mode": "backend_fallback",
+					})
+					completeTrackedExecution(executionID, clisvc.StatusCompleted, nil, "")
+					reviewExecutionID := launchReviewWorker(executionID, clisvc.StatusCompleted, output, "")
+					if reviewExecutionID != "" {
+						sessionCtx["review_execution_id"] = reviewExecutionID
+					}
+					return &ToolResult{Success: true, Output: output}
 				}
 
 				output, exitCode, runErr := session.RunCommand(command, workDir, 0)
 				if runErr != nil {
-					if restartLike && taskID != "" && isExpectedDisconnectError(runErr) {
-						e.emitTerminalAILog(sessionCtx, "warning", fmt.Sprintf("[%s] 终端已断开（预期重启），等待自动重连…", strings.TrimSpace(serverID)), "", "")
-						return &ToolResult{Success: true, Output: strings.TrimSpace(output)}
-					}
-					// 重启类命令未导致断开：清理“预期断开”标记，避免后续命令无谓等待。
-					if restartLike && taskID != "" && model.DB != nil {
-						now := time.Now()
-						_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-							"expect_disconnect": false,
-							"ai_status":         "running",
-							"ai_pause_reason":   "",
-							"updated_at":        now,
-						}).Error
-					}
 					msg := fmt.Sprintf("[%s] 命令执行失败: %v", strings.TrimSpace(serverID), runErr)
 					if strings.TrimSpace(output) != "" {
 						msg = msg + "\n" + strings.TrimRight(output, "\n")
@@ -292,25 +817,45 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 						msg = msg + fmt.Sprintf(" (exit=%d)", exitCode)
 					}
 					e.emitTerminalAILog(sessionCtx, "error", msg, "", "")
+					appendTrackedEvent(executionID, clisvc.EventTypeError, map[string]any{
+						"error":    runErr.Error(),
+						"exitCode": exitCode,
+						"output":   truncateForEvent(output),
+					})
+					var codePtr *int
+					if exitCode >= 0 {
+						c := exitCode
+						codePtr = &c
+					}
+					completeTrackedExecution(executionID, clisvc.StatusError, codePtr, runErr.Error())
+					reviewExecutionID := launchReviewWorker(executionID, clisvc.StatusError, output, runErr.Error())
+					if reviewExecutionID != "" {
+						sessionCtx["review_execution_id"] = reviewExecutionID
+					}
 					return &ToolResult{Success: false, Error: runErr.Error(), Output: output}
 				}
 
-				// 重启类命令未导致断开：清理“预期断开”标记，避免后续命令无谓等待。
-				if restartLike && taskID != "" && model.DB != nil {
-					now := time.Now()
-					_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-						"expect_disconnect": false,
-						"ai_status":         "running",
-						"ai_pause_reason":   "",
-						"updated_at":        now,
-					}).Error
-				}
-
 				out := strings.TrimRight(output, "\n")
+				if strings.TrimSpace(out) != "" {
+					appendTrackedEvent(executionID, clisvc.EventTypeOutput, map[string]any{
+						"output": truncateForEvent(out),
+					})
+				}
 				if strings.TrimSpace(out) == "" {
 					e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] （无输出）", strings.TrimSpace(serverID)), "", "")
 				} else {
 					e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s]\n%s", strings.TrimSpace(serverID), out), "", "")
+				}
+				var codePtr *int
+				if exitCode >= 0 {
+					c := exitCode
+					codePtr = &c
+				}
+				appendTrackedEvent(executionID, clisvc.EventTypeCompleted, map[string]any{"exitCode": exitCode})
+				completeTrackedExecution(executionID, clisvc.StatusCompleted, codePtr, "")
+				reviewExecutionID := launchReviewWorker(executionID, clisvc.StatusCompleted, output, "")
+				if reviewExecutionID != "" {
+					sessionCtx["review_execution_id"] = reviewExecutionID
 				}
 
 				return &ToolResult{Success: true, Output: output}
@@ -335,6 +880,11 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 	}
 	e.emitTerminalAILog(sessionCtx, "action", fmt.Sprintf("[%s] $ %s", strings.TrimSpace(serverID), displayCmd), "command", fullCmd)
 
+	executionID := startTrackedExecution(strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id")))
+	if executionID != "" {
+		sessionCtx["execution_id"] = executionID
+	}
+
 	// Execute on server or locally
 	output, err := e.sshManager.ExecuteCommand(serverID, fullCmd)
 	if err != nil {
@@ -343,94 +893,35 @@ func (e *ToolExecutor) executeCommand(args map[string]any, sessionCtx map[string
 			msg = msg + "\n" + strings.TrimRight(output, "\n")
 		}
 		e.emitTerminalAILog(sessionCtx, "error", msg, "", "")
+		appendTrackedEvent(executionID, clisvc.EventTypeError, map[string]any{
+			"error":  err.Error(),
+			"output": truncateForEvent(output),
+		})
+		completeTrackedExecution(executionID, clisvc.StatusError, nil, err.Error())
+		reviewExecutionID := launchReviewWorker(executionID, clisvc.StatusError, output, err.Error())
+		if reviewExecutionID != "" {
+			sessionCtx["review_execution_id"] = reviewExecutionID
+		}
 		return &ToolResult{Success: false, Error: err.Error(), Output: output}
 	}
 	out := strings.TrimRight(output, "\n")
+	if strings.TrimSpace(out) != "" {
+		appendTrackedEvent(executionID, clisvc.EventTypeOutput, map[string]any{
+			"output": truncateForEvent(out),
+		})
+	}
 	if strings.TrimSpace(out) == "" {
 		e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s] （无输出）", strings.TrimSpace(serverID)), "", "")
 	} else {
 		e.emitTerminalAILog(sessionCtx, "info", fmt.Sprintf("[%s]\n%s", strings.TrimSpace(serverID), out), "", "")
 	}
-
-	// 重启类命令未导致断开：清理“预期断开”标记，避免后续命令无谓等待。
-	if restartLike && taskID != "" && model.DB != nil {
-		now := time.Now()
-		_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-			"expect_disconnect": false,
-			"ai_status":         "running",
-			"ai_pause_reason":   "",
-			"updated_at":        now,
-		}).Error
+	appendTrackedEvent(executionID, clisvc.EventTypeCompleted, map[string]any{})
+	completeTrackedExecution(executionID, clisvc.StatusCompleted, nil, "")
+	reviewExecutionID := launchReviewWorker(executionID, clisvc.StatusCompleted, output, "")
+	if reviewExecutionID != "" {
+		sessionCtx["review_execution_id"] = reviewExecutionID
 	}
-
 	return &ToolResult{Success: true, Output: output}
-}
-
-func isRestartLikeCommand(command string) bool {
-	cmd := strings.ToLower(strings.TrimSpace(command))
-	if cmd == "" {
-		return false
-	}
-
-	// common patterns; keep broad (false positives are acceptable, false negatives are costly)
-	if strings.Contains(cmd, " reboot") || cmd == "reboot" || strings.HasPrefix(cmd, "reboot ") {
-		return true
-	}
-	if strings.Contains(cmd, "shutdown") {
-		// shutdown -r / --reboot / now
-		if strings.Contains(cmd, "-r") || strings.Contains(cmd, "--reboot") {
-			return true
-		}
-	}
-	if strings.Contains(cmd, "init 6") {
-		return true
-	}
-	if strings.Contains(cmd, "systemctl reboot") || strings.Contains(cmd, "systemctl poweroff") {
-		return true
-	}
-	if strings.Contains(cmd, "systemctl restart") {
-		return true
-	}
-	return false
-}
-
-func waitForTaskReconnect(taskID string, timeout time.Duration) error {
-	if model.DB == nil {
-		return nil
-	}
-	id := strings.TrimSpace(taskID)
-	if id == "" {
-		return nil
-	}
-	if timeout <= 0 {
-		timeout = 5 * time.Minute
-	}
-
-	deadline := time.Now().Add(timeout)
-	for {
-		var task model.Task
-		if err := model.DB.Select("expect_disconnect", "ai_status", "ai_pause_reason").First(&task, "id = ?", id).Error; err != nil {
-			return err
-		}
-		if !task.ExpectDisconnect {
-			if strings.EqualFold(strings.TrimSpace(task.AIStatus), "paused") && strings.EqualFold(strings.TrimSpace(task.AIPauseReason), "reconnect_timeout") {
-				return errors.New("task reconnect timed out")
-			}
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for task reconnect (%s)", timeout)
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
-
-func isExpectedDisconnectError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(msg, "terminal session closed") || strings.Contains(msg, "terminal subscription closed")
 }
 
 func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[string]any) *ToolResult {
@@ -487,6 +978,25 @@ func (e *ToolExecutor) batchExecuteCommand(args map[string]any, sessionCtx map[s
 		}
 		seen[sid] = struct{}{}
 		unique = append(unique, sid)
+	}
+
+	if isTerminalExecutionMode(sessionCtx) {
+		lockedServerID := strings.TrimSpace(getStringFromMap(sessionCtx, "current_server_id"))
+		if len(unique) == 0 && lockedServerID != "" {
+			unique = append(unique, lockedServerID)
+		}
+		if len(unique) > 1 {
+			return &ToolResult{
+				Success: false,
+				Error:   "batch_execute_command is disabled in terminal mode; use execute_command on the current terminal",
+			}
+		}
+		if len(unique) == 1 && lockedServerID != "" && !strings.EqualFold(unique[0], lockedServerID) {
+			return &ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("terminal mode locks server to %s, got %s", lockedServerID, unique[0]),
+			}
+		}
 	}
 
 	// Build full command with work_dir
@@ -687,95 +1197,43 @@ func (e *ToolExecutor) ensureTerminalForServer(sessionCtx map[string]any, server
 		return ""
 	}
 
-	taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
-
 	terminalByServer := getStringMapFromContext(sessionCtx, "terminal_ids_by_server")
 	if terminalByServer == nil {
 		terminalByServer = map[string]string{}
 	}
 
-	// 优先使用任务的 ActiveTerminalID（避免重启后上下文仍指向旧终端导致重复创建）
-	if taskID != "" && model.DB != nil {
-		var task model.Task
-		if err := model.DB.Select("active_terminal_id").First(&task, "id = ?", taskID).Error; err == nil {
-			if task.ActiveTerminalID != nil {
-				active := strings.TrimSpace(*task.ActiveTerminalID)
-				if active != "" {
-					var t model.TerminalSession
-					if err := model.DB.Select("id", "server_id", "task_id").First(&t, "id = ?", active).Error; err == nil {
-						if t.ServerID != nil && strings.TrimSpace(*t.ServerID) == sid {
-							if t.TaskID == nil || strings.TrimSpace(*t.TaskID) == "" || strings.TrimSpace(*t.TaskID) == taskID {
-								if sess, err := e.terminal.GetOrResumeSession(active); err == nil && sess != nil {
-									terminalByServer[sid] = active
-									sessionCtx["terminal_ids_by_server"] = terminalByServer
-									sessionCtx["terminal_id"] = active
-									return active
-								}
-							}
-						}
-					}
-				}
+	// terminal 模式下强制复用当前终端，避免“AI 介入后新开终端”导致上下文断裂。
+	if isTerminalExecutionMode(sessionCtx) {
+		if current := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id")); current != "" {
+			if sess, err := e.terminal.GetOrResumeSession(current); err == nil && sess != nil {
+				terminalByServer[sid] = current
+				sessionCtx["terminal_ids_by_server"] = terminalByServer
+				sessionCtx["terminal_id"] = current
+				return current
 			}
+			return ""
 		}
 	}
 
 	if existing := strings.TrimSpace(terminalByServer[sid]); existing != "" {
-		// 任务隔离：禁止复用其他任务的终端
-		if taskID != "" && model.DB != nil {
-			var t model.TerminalSession
-			if err := model.DB.Select("task_id").First(&t, "id = ?", existing).Error; err == nil {
-				if t.TaskID != nil {
-					bound := strings.TrimSpace(*t.TaskID)
-					if bound != "" && bound != taskID {
-						delete(terminalByServer, sid)
-						sessionCtx["terminal_ids_by_server"] = terminalByServer
-						existing = ""
-					}
-				}
-			}
-		}
-		if existing != "" {
-			if sess, err := e.terminal.GetOrResumeSession(existing); err == nil && sess != nil {
-				sessionCtx["terminal_id"] = existing
-				if taskID != "" && model.DB != nil {
-					_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-						"active_terminal_id": existing,
-						"updated_at":         time.Now(),
-					}).Error
-				}
-				return existing
-			}
+		if sess, err := e.terminal.GetOrResumeSession(existing); err == nil && sess != nil {
+			sessionCtx["terminal_id"] = existing
+			return existing
 		}
 		delete(terminalByServer, sid)
 	}
 
 	// 如果上下文已带 terminal_id（例如 StartTaskAgent 创建并由前端打开的默认终端），
 	// 且该终端绑定的 server_id 与当前选择的服务器一致，则优先复用，避免创建第二个终端导致“AI 在后台跑，工作台终端静止”。
-	current := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id"))
-	if current != "" && model.DB != nil {
+	if current := strings.TrimSpace(getStringFromMap(sessionCtx, "terminal_id")); current != "" && model.DB != nil {
 		var t model.TerminalSession
-		if err := model.DB.Select("id", "server_id", "task_id").First(&t, "id = ?", current).Error; err == nil {
+		if err := model.DB.Select("id", "server_id").First(&t, "id = ?", current).Error; err == nil {
 			if t.ServerID != nil && strings.TrimSpace(*t.ServerID) == sid {
-				if taskID != "" && t.TaskID != nil {
-					bound := strings.TrimSpace(*t.TaskID)
-					if bound != "" && bound != taskID {
-						// 不同任务必须新建终端：跳过复用
-						current = ""
-					}
-				}
-				if current != "" {
-					if sess, err := e.terminal.GetOrResumeSession(current); err == nil && sess != nil {
-						terminalByServer[sid] = current
-						sessionCtx["terminal_ids_by_server"] = terminalByServer
-						sessionCtx["terminal_id"] = current
-						if taskID != "" {
-							_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-								"active_terminal_id": current,
-								"updated_at":         time.Now(),
-							}).Error
-						}
-						return current
-					}
+				if sess, err := e.terminal.GetOrResumeSession(current); err == nil && sess != nil {
+					terminalByServer[sid] = current
+					sessionCtx["terminal_ids_by_server"] = terminalByServer
+					sessionCtx["terminal_id"] = current
+					return current
 				}
 			}
 		}
@@ -787,15 +1245,10 @@ func (e *ToolExecutor) ensureTerminalForServer(sessionCtx map[string]any, server
 	}
 
 	terminalID := session.ID()
+	taskID := strings.TrimSpace(getStringFromMap(sessionCtx, "task_id"))
 	if taskID != "" {
 		taskIDCopy := taskID
 		_ = e.terminal.LinkTask(terminalID, &taskIDCopy)
-		if model.DB != nil {
-			_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-				"active_terminal_id": terminalID,
-				"updated_at":         time.Now(),
-			}).Error
-		}
 	}
 
 	title := "AI托管"

@@ -45,60 +45,37 @@ func (e *AIWorkflowEngine) StartTaskAgent(ctx context.Context, task *model.Task)
 	// 注：命令执行仍由工具执行器负责；该终端主要用于对齐用户体验与“可观测/可干预”的运维习惯。
 	terminalID := ""
 	primaryTerminalServerID := ""
-	if e.toolExecutor != nil && e.toolExecutor.terminal != nil {
-		// 优先复用任务已绑定的活跃终端（例如：从工作台终端直接开启 AI 托管时）。
-		if task.ActiveTerminalID != nil {
-			existing := strings.TrimSpace(*task.ActiveTerminalID)
-			if existing != "" {
-				if term, err := e.toolExecutor.terminal.GetOrResumeSession(existing); err == nil && term != nil {
-					terminalID = term.ID()
-					if len(targetServerIDs) > 0 {
-						primaryTerminalServerID = strings.TrimSpace(targetServerIDs[0])
-					} else if task.ServerID != nil {
-						primaryTerminalServerID = strings.TrimSpace(*task.ServerID)
+	if e.toolExecutor != nil && e.toolExecutor.terminal != nil && len(targetServerIDs) > 0 {
+		primaryServerID := strings.TrimSpace(targetServerIDs[0])
+		if primaryServerID != "" {
+			if term, err := e.toolExecutor.terminal.CreateSSHSession(primaryServerID); err == nil && term != nil {
+				terminalID = term.ID()
+				primaryTerminalServerID = primaryServerID
+				tid := task.ID
+				_ = e.toolExecutor.terminal.LinkTask(terminalID, &tid)
+
+				serverLabel := ""
+				if len(targetServers) > 0 {
+					if name, ok := targetServers[0]["name"].(string); ok {
+						serverLabel = strings.TrimSpace(name)
 					}
-					tid := task.ID
-					_ = e.toolExecutor.terminal.LinkTask(terminalID, &tid)
-				}
-			}
-		}
-
-		// 若没有可复用的终端，则为首台目标服务器创建一个终端
-		if terminalID == "" && len(targetServerIDs) > 0 {
-			primaryServerID := strings.TrimSpace(targetServerIDs[0])
-			if primaryServerID != "" {
-				if term, err := e.toolExecutor.terminal.CreateSSHSession(primaryServerID); err == nil && term != nil {
-					terminalID = term.ID()
-					primaryTerminalServerID = primaryServerID
-					tid := task.ID
-					_ = e.toolExecutor.terminal.LinkTask(terminalID, &tid)
-				}
-			}
-		}
-
-		// 统一设置标题
-		if terminalID != "" {
-			serverLabel := ""
-			if len(targetServers) > 0 {
-				if name, ok := targetServers[0]["name"].(string); ok {
-					serverLabel = strings.TrimSpace(name)
-				}
-				if serverLabel == "" {
-					if id, ok := targetServers[0]["id"].(string); ok {
-						serverLabel = strings.TrimSpace(id)
+					if serverLabel == "" {
+						if id, ok := targetServers[0]["id"].(string); ok {
+							serverLabel = strings.TrimSpace(id)
+						}
 					}
 				}
+				title := strings.TrimSpace(task.Title)
+				if title == "" {
+					title = "AI 托管任务"
+				}
+				if serverLabel != "" {
+					title = fmt.Sprintf("AI托管: %s / %s", serverLabel, title)
+				} else {
+					title = "AI托管: " + title
+				}
+				_ = e.toolExecutor.terminal.RenameSession(terminalID, title)
 			}
-			title := strings.TrimSpace(task.Title)
-			if title == "" {
-				title = "AI 托管任务"
-			}
-			if serverLabel != "" {
-				title = fmt.Sprintf("AI托管: %s / %s", serverLabel, title)
-			} else {
-				title = "AI托管: " + title
-			}
-			_ = e.toolExecutor.terminal.RenameSession(terminalID, title)
 		}
 	}
 
@@ -160,17 +137,11 @@ func (e *AIWorkflowEngine) StartTaskAgent(ctx context.Context, task *model.Task)
 	}
 
 	now := time.Now()
-	updates := map[string]any{
+	model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
 		"status":           "in_progress",
 		"agent_session_id": session.ID,
-		"ai_status":        "running",
-		"ai_pause_reason":  "",
 		"updated_at":       now,
-	}
-	if strings.TrimSpace(terminalID) != "" {
-		updates["active_terminal_id"] = strings.TrimSpace(terminalID)
-	}
-	model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(updates)
+	})
 
 	go e.monitorTaskAgent(task.ID, session.ID)
 

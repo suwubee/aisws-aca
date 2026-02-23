@@ -22,7 +22,7 @@
           登录
         </n-button>
       </n-form>
-      <template #footer v-if="isDemoMode">
+      <template #footer>
         <n-space vertical align="center">
           <n-button text type="info" @click="fillDemo">
             点击填充演示账号 (demo / demo123)
@@ -34,18 +34,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
-import axios from 'axios'
 
 const router = useRouter()
 const message = useMessage()
 const authStore = useAuthStore()
 
 const loading = ref(false)
-const isDemoMode = ref(false)
 const form = reactive({
   username: '',
   password: ''
@@ -55,15 +53,6 @@ const rules = {
   username: { required: true, message: '请输入用户名' },
   password: { required: true, message: '请输入密码' }
 }
-
-onMounted(async () => {
-  try {
-    const res = await axios.get('/api/health')
-    isDemoMode.value = res.data?.demo_mode === true
-  } catch {
-    isDemoMode.value = false
-  }
-})
 
 function fillDemo() {
   form.username = 'demo'

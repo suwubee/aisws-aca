@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,15 +30,8 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type  string // sqlite, postgres
-	DSN   string
-	LogDB LogDBConfig // 日志数据库配置
-}
-
-type LogDBConfig struct {
-	Enabled bool   // 是否启用独立日志数据库
-	Type    string // postgres
-	DSN     string
+	Driver string
+	DSN    string
 }
 
 type AuthConfig struct {
@@ -65,67 +61,59 @@ type CORSConfig struct {
 }
 
 func Load() *Config {
-	databaseType := normalizeDatabaseType(getEnv("DATABASE_TYPE", "sqlite"), "sqlite")
-	databaseDSN := resolveDatabaseDSNForType(databaseType, getEnv("DATABASE_DSN", ""))
-
-	logDBEnabled := getEnvBool("LOG_DB_ENABLED", false)
-	logDBType := normalizeDatabaseType(getEnv("LOG_DB_TYPE", "postgres"), "postgres")
-	if logDBType != "postgres" {
-		logDBType = "postgres"
-	}
-	logDBDSN := strings.TrimSpace(getEnv("LOG_DB_DSN", ""))
+	fileEnv := loadDataEnv()
 
 	return &Config{
 		App: AppConfig{
-			DemoMode: getEnvBool("DEMO_MODE", false),
+			DemoMode: getEnvBool(fileEnv, "DEMO_MODE", false),
 		},
 		Server: ServerConfig{
-			Host: getEnv("SERVER_HOST", "0.0.0.0"),
-			Port: getEnv("SERVER_PORT", "34007"),
+			Host: getEnv(fileEnv, "SERVER_HOST", "0.0.0.0"),
+			Port: getEnv(fileEnv, "SERVER_PORT", "34007"),
 		},
 		Database: DatabaseConfig{
-			Type: databaseType,
-			DSN:  databaseDSN,
-			LogDB: LogDBConfig{
-				Enabled: logDBEnabled,
-				Type:    logDBType,
-				DSN:     logDBDSN,
-			},
+			Driver: "sqlite",
+			DSN:    resolveDatabaseDSN(getEnv(fileEnv, "DATABASE_DSN", "")),
 		},
 		Auth: AuthConfig{
-			JWTSecret:     getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
+			JWTSecret:     getEnv(fileEnv, "JWT_SECRET", "your-secret-key-change-in-production"),
 			JWTExpiration: 24 * time.Hour,
-			Username:      getEnv("AUTH_USERNAME", "admin"),
-			Password:      getEnv("AUTH_PASSWORD", "admin123"),
+			Username:      getEnv(fileEnv, "AUTH_USERNAME", "admin"),
+			Password:      getEnv(fileEnv, "AUTH_PASSWORD", "admin123"),
 		},
 		Terminal: TerminalConfig{
-			DefaultShell:    getEnv("TERMINAL_SHELL", "/bin/bash"),
-			DefaultLoginDir: getEnv("TERMINAL_DEFAULT_LOGIN_DIR", "~/"),
+			DefaultShell:    getEnv(fileEnv, "TERMINAL_SHELL", "/bin/bash"),
+			DefaultLoginDir: getEnv(fileEnv, "TERMINAL_DEFAULT_LOGIN_DIR", "~/"),
 			ScrollbackBytes: 256 * 1024, // 256KB
 			IdleTimeout:     10 * time.Minute,
 			MaxSessions:     100,
 		},
 		Log: LogConfig{
-			Level: getEnv("LOG_LEVEL", "info"),
-			File:  getEnv("LOG_FILE", ""),
+			Level: getEnv(fileEnv, "LOG_LEVEL", "info"),
+			File:  getEnv(fileEnv, "LOG_FILE", ""),
 		},
 		CORS: CORSConfig{
-			AllowOrigins: getEnv("CORS_ALLOW_ORIGINS", "*"),
-			AllowMethods: getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS"),
-			AllowHeaders: getEnv("CORS_ALLOW_HEADERS", "Origin,Content-Type,Accept,Authorization"),
+			AllowOrigins: getEnv(fileEnv, "CORS_ALLOW_ORIGINS", "*"),
+			AllowMethods: getEnv(fileEnv, "CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS"),
+			AllowHeaders: getEnv(fileEnv, "CORS_ALLOW_HEADERS", "Origin,Content-Type,Accept,Authorization"),
 		},
 	}
 }
 
-func getEnv(key, defaultValue string) string {
+func getEnv(fileEnv map[string]string, key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	if fileEnv != nil {
+		if value := strings.TrimSpace(fileEnv[key]); value != "" {
+			return value
+		}
 	}
 	return defaultValue
 }
 
-func getEnvBool(key string, defaultValue bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
+func getEnvBool(fileEnv map[string]string, key string, defaultValue bool) bool {
+	value := strings.TrimSpace(getEnv(fileEnv, key, ""))
 	if value == "" {
 		return defaultValue
 	}
@@ -154,68 +142,104 @@ func resolveDatabaseDSN(raw string) string {
 		return dsn
 	}
 
-	baseDir := resolveProjectBackendDir()
+	baseDir := resolveRuntimeDir()
 	if baseDir == "" {
 		return filepath.Clean(dsn)
 	}
 	return filepath.Clean(filepath.Join(baseDir, dsn))
 }
 
-func resolveDatabaseDSNForType(databaseType, raw string) string {
-	if databaseType == "postgres" {
-		return strings.TrimSpace(raw)
-	}
-	return resolveDatabaseDSN(raw)
-}
-
-func normalizeDatabaseType(raw, defaultType string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "sqlite", "sqlite3":
-		return "sqlite"
-	case "postgres", "postgresql":
-		return "postgres"
-	default:
-		return defaultType
-	}
-}
-
-func resolveProjectBackendDir() string {
+func resolveRuntimeDir() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
-
-	if root, ok := findProjectRoot(cwd); ok {
-		backendDir := filepath.Join(root, "backend")
-		if info, err := os.Stat(backendDir); err == nil && info.IsDir() {
-			return backendDir
-		}
-	}
-
 	return cwd
 }
 
-func findProjectRoot(startDir string) (string, bool) {
-	dir := startDir
-	for {
-		backendDir := filepath.Join(dir, "backend")
-		if info, err := os.Stat(backendDir); err == nil && info.IsDir() {
-			if fileExists(filepath.Join(backendDir, "go.mod")) || fileExists(filepath.Join(backendDir, "main.go")) {
-				return dir, true
-			}
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
+func loadDataEnv() map[string]string {
+	envPath := dataEnvPath()
+	if envPath == "" {
+		return parseDotEnv(defaultDataEnvContent)
 	}
 
-	return "", false
+	dataDir := filepath.Dir(envPath)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return parseDotEnv(defaultDataEnvContent)
+	}
+
+	if _, err := os.Stat(envPath); errors.Is(err, os.ErrNotExist) {
+		_ = os.WriteFile(envPath, []byte(defaultDataEnvContent), 0o600)
+	}
+
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		return parseDotEnv(defaultDataEnvContent)
+	}
+
+	values := parseDotEnv(string(content))
+	defaults := parseDotEnv(defaultDataEnvContent)
+	for key, value := range defaults {
+		if strings.TrimSpace(values[key]) == "" {
+			values[key] = value
+		}
+	}
+	return values
 }
 
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+func dataEnvPath() string {
+	runtimeDir := resolveRuntimeDir()
+	if runtimeDir == "" {
+		return ""
+	}
+	return filepath.Join(runtimeDir, "data", ".env")
 }
+
+func parseDotEnv(content string) map[string]string {
+	values := map[string]string{}
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			continue
+		}
+		value := strings.TrimSpace(parts[1])
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					value = unquoted
+				} else {
+					value = value[1 : len(value)-1]
+				}
+			}
+		}
+		values[key] = value
+	}
+	return values
+}
+
+const defaultDataEnvContent = `# ACA runtime config (auto-created)
+SERVER_HOST=0.0.0.0
+SERVER_PORT=34007
+DATABASE_DSN=./data/aca.db
+AUTH_USERNAME=admin
+AUTH_PASSWORD=admin123
+JWT_SECRET=your-secret-key-change-in-production
+DEMO_MODE=false
+TERMINAL_SHELL=/bin/bash
+TERMINAL_DEFAULT_LOGIN_DIR=~/
+LOG_LEVEL=info
+LOG_FILE=
+CORS_ALLOW_ORIGINS=*
+CORS_ALLOW_METHODS=GET,POST,PUT,DELETE,OPTIONS
+CORS_ALLOW_HEADERS=Origin,Content-Type,Accept,Authorization
+`

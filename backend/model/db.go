@@ -2,19 +2,68 @@ package model
 
 import (
 	"time"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
+var DB *gorm.DB
+
 func InitDB(dsn string) error {
-	db, err := InitDatabase(DBConfig{
-		Type: "sqlite",
-		DSN:  dsn,
+	var err error
+	DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {
 		return err
 	}
 
-	DB = db
-	LogDB = db
+	// 自动迁移
+	if err := DB.AutoMigrate(
+		&User{},
+		&LoginRecord{},
+		&Task{},
+		&Project{},
+		&ProjectGroup{},
+		&CLIProfile{},
+		&Workflow{},
+		&WorkflowTemplate{},
+		&WorkflowNode{},
+		&WorkflowRun{},
+		&AIWorkflowSession{},
+		&AIWorkflowEvent{},
+		&PromptTemplate{},
+		&PromptTemplatePreset{},
+		&KeyBinding{},
+		&ScheduledJob{},
+		&ScheduledJobRun{},
+		&Comment{},
+		&AppSetting{},
+		&Secret{},
+		&SSHServer{},
+		&ServerGroup{},
+		&TerminalSession{},
+		&AISession{},
+		&ApprovalRecord{},
+		&Log{},
+		&CLIExecution{},
+		&CLIExecutionEvent{},
+		&AIProviderConfig{},
+		&AgentConfig{},
+		&RuleSet{},
+		&Message{},
+	); err != nil {
+		return err
+	}
+
+	if err := RunMigrations(DB); err != nil {
+		return err
+	}
+
+	if err := ensureBuiltinWorkflowTemplates(DB); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -61,56 +110,41 @@ type Task struct {
 	AutoCreateDir   bool        `gorm:"default:true" json:"auto_create_dir"` // 是否自动创建目录
 
 	// AI托管配置
-	AIManaged       bool   `gorm:"default:false" json:"ai_managed"`   // 是否AI全程托管
-	AIPrompt        string `gorm:"column:ai_prompt" json:"ai_prompt"` // AI托管提示词
-	AIEndCondition  string `json:"ai_end_condition"`                  // AI结束条件
-	AIErrorHandling string `json:"ai_error_handling"`                 // AI错误处理策略
-
-	// AI任务绑定与终端管理
-	ActiveTerminalID  *string    `gorm:"index" json:"active_terminal_id"`               // 当前活跃终端ID
-	AIStatus          string     `gorm:"default:stopped" json:"ai_status"`              // AI执行状态: running, paused, waiting_reconnect, stopped
-	AIPauseReason     string     `gorm:"column:ai_pause_reason" json:"ai_pause_reason"` // AI暂停原因: terminal_disconnected, terminal_closed, user_paused, error
-	ExpectDisconnect  bool       `gorm:"default:false" json:"expect_disconnect"`        // 预期断开（AI执行了重启命令）
-	ReconnectAttempts int        `gorm:"default:0" json:"reconnect_attempts"`           // 重连尝试次数
-	LastReconnectAt   *time.Time `json:"last_reconnect_at"`                             // 最后重连时间
+	AIManaged       bool   `gorm:"default:false" json:"ai_managed"` // 是否AI全程托管
+	AIPrompt        string `json:"ai_prompt"`                       // AI托管提示词
+	AIEndCondition  string `json:"ai_end_condition"`                // AI结束条件
+	AIErrorHandling string `json:"ai_error_handling"`               // AI错误处理策略
 }
 
 // TerminalSession 终端会话模型
 type TerminalSession struct {
-	ID          string     `gorm:"primaryKey" json:"id"`
-	UserID      string     `gorm:"index" json:"user_id"`
-	Title       string     `json:"title"`
-	TaskID      *string    `gorm:"index" json:"task_id"`
-	ServerID    *string    `gorm:"index" json:"server_id"`
-	Shell       string     `gorm:"default:bash" json:"shell"`
-	Status      string     `gorm:"default:running;index" json:"status"` // running, exited, detached
-	Hidden      bool       `gorm:"default:false" json:"hidden"`         // 是否在工作台隐藏
-	PID         int        `json:"pid"`
-	TmuxSession string     `json:"tmux_session"`                    // tmux 会话名称
-	RuleMode    string     `gorm:"default:system" json:"rule_mode"` // none, system, task, custom
-	RuleSetID   *string    `gorm:"index" json:"rule_set_id"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ClosedAt    *time.Time `json:"closed_at"`
-	Task        *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
-
-	// 连接状态管理
-	ConnectionStatus     string     `gorm:"default:disconnected" json:"connection_status"` // connected, disconnected
-	AutoReconnect        bool       `gorm:"default:true" json:"auto_reconnect"`            // 是否启用自动重连
-	LastDisconnectAt     *time.Time `json:"last_disconnect_at"`                            // 最后断开时间
-	CloseReason          string     `json:"close_reason"`                                  // user_close, restart, error, timeout
-	ReplacedByTerminalID *string    `gorm:"index" json:"replaced_by_terminal_id"`          // 被哪个终端替换（重启链）
-	LastWorkDir          string     `json:"last_work_dir"`                                 // 最后工作目录
+	ID              string     `gorm:"primaryKey" json:"id"`
+	UserID          string     `gorm:"index" json:"user_id"`
+	Title           string     `json:"title"`
+	TaskID          *string    `gorm:"index" json:"task_id"`
+	ServerID        *string    `gorm:"index" json:"server_id"`
+	ContinuedFromID *string    `gorm:"index" json:"continued_from_id,omitempty"` // 终端延续来源
+	Shell           string     `gorm:"default:bash" json:"shell"`
+	Status          string     `gorm:"default:running;index" json:"status"` // running, exited, detached
+	Hidden          bool       `gorm:"default:false" json:"hidden"`         // 是否在工作台隐藏
+	PID             int        `json:"pid"`
+	TmuxSession     string     `json:"tmux_session"`                    // tmux 会话名称
+	RuleMode        string     `gorm:"default:system" json:"rule_mode"` // none, system, task, custom
+	RuleSetID       *string    `gorm:"index" json:"rule_set_id"`
+	CreatedAt       time.Time  `json:"created_at"`
+	ClosedAt        *time.Time `json:"closed_at"`
+	Task            *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
 }
 
 // AISession AI会话模型
 type AISession struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
 	TerminalID  string    `gorm:"not null;index" json:"terminal_id"`
-	TaskID      string    `gorm:"not null;index" json:"task_id"` // 必填，严格绑定任务
-	AIType      string    `gorm:"not null" json:"ai_type"`       // claude-code, codex, gemini
-	State       string    `gorm:"default:unknown" json:"state"`  // unknown, waiting_input, working, waiting_approval, waiting_terminal, paused
-	SessionID   string    `json:"session_id"`                    // AI CLI 工具的会话ID（用于 --resume）
-	SessionFile string    `json:"session_file"`                  // 会话文件路径
+	TaskID      *string   `gorm:"index" json:"task_id"`
+	AIType      string    `gorm:"not null" json:"ai_type"`      // claude-code, codex, gemini
+	State       string    `gorm:"default:unknown" json:"state"` // unknown, waiting_input, working, waiting_approval
+	SessionID   string    `json:"session_id"`                   // AI CLI 工具的会话ID（用于 --resume）
+	SessionFile string    `json:"session_file"`                 // 会话文件路径
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -140,15 +174,45 @@ type Log struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// CLIExecution CLI 执行记录（用于 plan/execute/review 迁移期统一追踪）
+type CLIExecution struct {
+	ID                string     `gorm:"primaryKey" json:"id"`
+	TaskID            *string    `gorm:"index" json:"task_id"`
+	TerminalID        *string    `gorm:"index" json:"terminal_id"`
+	WorkflowRunID     *string    `gorm:"index" json:"workflow_run_id"`
+	WorkflowSessionID *string    `gorm:"index" json:"workflow_session_id"`
+	ParentExecutionID *string    `gorm:"index" json:"parent_execution_id,omitempty"`
+	Role              string     `gorm:"index" json:"role"`               // primary, review, replay, audit
+	Tool              string     `gorm:"index" json:"tool"`               // claude, codex, gemini, shell
+	Mode              string     `json:"mode"`                            // plan, execute, review, command
+	Source            string     `gorm:"index" json:"source"`             // workflow, task, manual, api
+	PromptPreview     string     `gorm:"type:text" json:"prompt_preview"` // 截断预览
+	Status            string     `gorm:"index" json:"status"`             // running, completed, error, timeout, cancelled
+	ExitCode          *int       `json:"exit_code,omitempty"`
+	ErrorMessage      string     `gorm:"type:text" json:"error_message"`
+	Metadata          string     `gorm:"type:text" json:"metadata"` // JSON
+	StartedAt         time.Time  `gorm:"index" json:"started_at"`
+	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+// CLIExecutionEvent CLI 执行事件流水（发起/监控/记录）
+type CLIExecutionEvent struct {
+	Seq         uint64    `gorm:"primaryKey;autoIncrement" json:"seq"`
+	ExecutionID string    `gorm:"index" json:"execution_id"`
+	EventType   string    `gorm:"index" json:"event_type"`  // started, output, progress, completed, error, review
+	Payload     string    `gorm:"type:text" json:"payload"` // JSON
+	CreatedAt   time.Time `gorm:"index" json:"created_at"`
+}
+
 // AIProviderConfig AI提供商配置 (OpenAI兼容格式)
 type AIProviderConfig struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
-	UserID      string    `gorm:"index" json:"user_id"` // 所属用户
-	Name        string    `gorm:"not null" json:"name"`          // 配置名称，如 "default", "gpt4", "deepseek"
-	Provider    string    `gorm:"not null" json:"provider"`      // openai, anthropic, deepseek, ollama
-	BaseURL     string    `json:"base_url"`                      // API基础URL
-	APIKey      string    `json:"-"`                             // API密钥，不返回给前端
-	Model       string    `gorm:"not null" json:"model"`         // 模型名称
+	Name        string    `gorm:"uniqueIndex;not null" json:"name"` // 配置名称，如 "default", "gpt4", "deepseek"
+	Provider    string    `gorm:"not null" json:"provider"`         // openai, anthropic, deepseek, ollama
+	BaseURL     string    `json:"base_url"`                         // API基础URL
+	APIKey      string    `json:"-"`                                // API密钥，不返回给前端
+	Model       string    `gorm:"not null" json:"model"`            // 模型名称
 	Temperature float64   `gorm:"default:0.7" json:"temperature"`
 	MaxTokens   int       `gorm:"default:2048" json:"max_tokens"`
 	IsDefault   bool      `gorm:"default:false" json:"is_default"` // 是否为默认配置
@@ -159,10 +223,9 @@ type AIProviderConfig struct {
 
 // RuleSet 规则集模型 - 可被系统、任务、终端复用
 type RuleSet struct {
-	ID     string `gorm:"primaryKey" json:"id"`
-	UserID string `gorm:"index" json:"user_id"` // 所属用户
-	Name   string `gorm:"not null" json:"name"`          // 规则集名称
-	Type   string `gorm:"not null;index" json:"type"`    // system, task, terminal
+	ID   string `gorm:"primaryKey" json:"id"`
+	Name string `gorm:"not null" json:"name"`       // 规则集名称
+	Type string `gorm:"not null;index" json:"type"` // system, task, terminal
 
 	// 审批模式: manual(手动), auto_yes(全自动yes), smart(AI辅助)
 	ApprovalMode string `gorm:"default:manual" json:"approval_mode"`
@@ -224,4 +287,19 @@ type AIWorkflowSession struct {
 	Summary     string     `json:"summary"`
 	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at"`
+}
+
+// AIWorkflowEvent AI 托管会话事件（开始/迭代/工具调用/状态变化）
+type AIWorkflowEvent struct {
+	ID         uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	SessionID  string    `gorm:"index" json:"session_id"`
+	WorkflowID string    `gorm:"index" json:"workflow_id"`
+	TaskID     *string   `gorm:"index" json:"task_id,omitempty"`
+	TerminalID *string   `gorm:"index" json:"terminal_id,omitempty"`
+	Iteration  int       `gorm:"index" json:"iteration"`
+	Phase      string    `gorm:"index" json:"phase"`       // lifecycle, plan, execute, review, command
+	EventType  string    `gorm:"index" json:"event_type"`  // session_started, step_started, tool_call, tool_result, paused, completed, failed...
+	Summary    string    `gorm:"type:text" json:"summary"` // 简要描述
+	Payload    string    `gorm:"type:text" json:"payload"` // JSON
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
 }

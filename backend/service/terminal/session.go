@@ -1,7 +1,6 @@
 package terminal
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -15,11 +14,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ai-coding-assistant/model"
 	"github.com/ai-coding-assistant/service/approval"
-	clisession "github.com/ai-coding-assistant/service/clisession"
 	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/service/keybinding"
 	"github.com/ai-coding-assistant/utils"
@@ -104,17 +103,6 @@ type AIAssistant struct {
 	Detected       bool      `json:"detected"`
 	Version        string    `json:"version,omitempty"`
 	ApprovalPrompt string    `json:"approval_prompt,omitempty"` // 当前的审批提示
-	// AI CLI 会话（用于 --resume）
-	AISessionID string `json:"ai_session_id,omitempty"` // ACA 内部 AISession 主键
-	SessionID   string `json:"session_id,omitempty"`    // 外部 CLI 的 session id（claude UUID / codex UUID）
-	SessionFile string `json:"session_file,omitempty"`  // 外部 CLI 的会话文件路径/文件名（如 codex rollout jsonl）
-	// CLI 状态确认（用于“CLI可选/不强制”的场景：允许人工确认 + AI/启发式预判）
-	NeedsConfirm   bool    `json:"needs_confirm,omitempty"`   // 是否需要用户确认 CLI 状态
-	ConfirmKind    string  `json:"confirm_kind,omitempty"`    // enter_cli / exit_cli
-	ConfirmMessage string  `json:"confirm_message,omitempty"` // 用于弹框展示的证据/原因片段
-	Source         string  `json:"source,omitempty"`          // anchor / heuristic / manual / ai
-	Confidence     float64 `json:"confidence,omitempty"`      // 0-1，预判置信度
-	Manual         bool    `json:"manual,omitempty"`          // 是否处于人工确认/覆盖状态
 }
 
 // Session 终端会话
@@ -132,40 +120,37 @@ type Session struct {
 	subscribers map[string]chan StreamEvent
 	subMutex    sync.RWMutex
 	scrollback  *ScrollbackBuffer
-	// recoveredFromTmux indicates this Session was attached to an existing tmux session.
-	// In that case, in-memory scrollback only contains output since the attach time; the full
-	// history should be sourced from tmux (capture-pane) or persisted logs when reconnecting.
-	recoveredFromTmux bool
-	metadata          *SessionMetadata
-	metaMutex         sync.RWMutex
-	aiAssistant       *AIAssistant
-	createdAt         time.Time
-	closedAt          *time.Time
-	done              chan struct{}
-	doneOnce          sync.Once // 确保 done channel 只关闭一次
+	metadata    *SessionMetadata
+	metaMutex   sync.RWMutex
+	aiAssistant *AIAssistant
+	// AI CLI 会话追踪（用于 resume）
+	aiSessionID     string
+	aiSessionType   string
+	aiSessionState  string
+	aiSessionCLIID  string
+	aiSessionFile   string
+	aiSessionTaskID string
+	aiSessionOutput string
+	createdAt       time.Time
+	closedAt        *time.Time
+	done            chan struct{}
+	doneOnce        sync.Once // 确保 done channel 只关闭一次
 	// 日志相关
 	logBuffer    []LogEntry
 	logMutex     sync.Mutex
 	logFlushChan chan struct{}
 	// 输入/输出日志聚合（避免按字符记录）
-	ioBufMutex             sync.Mutex
-	inputLineBuf           []rune
-	inputEscState          int    // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
-	outputLineBuf          []rune // 当前输出行（处理 \r/\b/ANSI 清行等）
-	outputCursor           int
-	outputRemainder        []byte // 残留的半个 UTF-8/ANSI 序列
-	outputSavedCursor      int
-	outputCursorSaveActive bool // between save/restore (ESC7/ESC8 or CSI s/u)
-	outputSuppressWrites   bool // suppress output writes for off-screen UI regions (e.g., status bar)
-	outputLineBufSize      int
+	ioBufMutex        sync.Mutex
+	inputLineBuf      []rune
+	inputEscState     int    // 0=none, 1=ESC, 2=CSI(ESC[...), 3=SS3(ESCO...)
+	outputLineBuf     []rune // 当前输出行（处理 \r/\b/ANSI 清行等）
+	outputCursor      int
+	outputRemainder   []byte // 残留的半个 UTF-8/ANSI 序列
+	outputSavedCursor int
+	outputLineBufSize int
 	// 检测和审批相关
 	detector               *detector.Detector
 	approvalEngine         *approval.Engine
-	cliTrackingEnabled     bool
-	expectedAIAgentType    detector.AIAgentType
-	cliManualPresent       *bool
-	cliManualUntil         time.Time
-	cliSessionManager      *clisession.SessionManager
 	lastOutput             string // 用于检测状态变化
 	lastOutputMu           sync.Mutex
 	approvalEvalMu         sync.Mutex
@@ -181,8 +166,25 @@ type Session struct {
 	recentLogsMu     sync.Mutex
 	recentLogs       map[string]time.Time // 最近记录的日志内容 -> 时间
 	recentLogsWindow time.Duration        // 去重时间窗口
+	// 最近输入命令（用于过滤终端回显，避免 input/output 重复）
+	recentInputsMu     sync.Mutex
+	recentInputs       map[string]time.Time
+	recentInputsWindow time.Duration
+	// AI CLI 动态渲染噪声窗口（用于过滤思考动画碎片）
+	aiNoiseMu    sync.Mutex
+	aiNoiseUntil time.Time
+	aiNoiseToken string
 
 	commandRunMu sync.Mutex
+
+	// 原生 AI CLI 日志同步（Claude session jsonl）
+	nativeSyncOnce  sync.Once
+	nativeLogMu     sync.Mutex
+	nativeLogPath   string
+	nativeLogOffset int64
+	nativeLogTail   string
+	nativeSeen      map[string]time.Time
+	nativeResolveAt time.Time
 }
 
 type sessionBackend interface {
@@ -287,24 +289,27 @@ func (b *ScrollbackBuffer) Read() []byte {
 // NewSession 创建新会话
 func NewSession(id, shell string, scrollbackSize int) *Session {
 	return &Session{
-		id:                id,
-		shell:             shell,
-		status:            "running",
-		subscribers:       make(map[string]chan StreamEvent),
-		scrollback:        NewScrollbackBuffer(scrollbackSize),
-		createdAt:         time.Now(),
-		done:              make(chan struct{}),
-		logBuffer:         make([]LogEntry, 0, 100),
-		logFlushChan:      make(chan struct{}, 1),
-		inputLineBuf:      make([]rune, 0, 256),
-		outputLineBuf:     make([]rune, 0, 256),
-		outputLineBufSize: 8192,
-		detector:          detector.NewDetector(),
-		approvalEngine:    approval.NewEngine(),
-		dataBatchBuf:      make([]byte, 0, 8192),
-		dataBatchMaxWait:  16 * time.Millisecond, // 约60fps
-		recentLogs:        make(map[string]time.Time),
-		recentLogsWindow:  10 * time.Second, // 10秒内相同前缀内容不重复记录
+		id:                 id,
+		shell:              shell,
+		status:             "running",
+		subscribers:        make(map[string]chan StreamEvent),
+		scrollback:         NewScrollbackBuffer(scrollbackSize),
+		createdAt:          time.Now(),
+		done:               make(chan struct{}),
+		logBuffer:          make([]LogEntry, 0, 100),
+		logFlushChan:       make(chan struct{}, 1),
+		inputLineBuf:       make([]rune, 0, 256),
+		outputLineBuf:      make([]rune, 0, 256),
+		outputLineBufSize:  8192,
+		detector:           detector.NewDetector(),
+		approvalEngine:     approval.NewEngine(),
+		dataBatchBuf:       make([]byte, 0, 8192),
+		dataBatchMaxWait:   16 * time.Millisecond, // 约60fps
+		recentLogs:         make(map[string]time.Time),
+		recentLogsWindow:   10 * time.Second, // 10秒内相同前缀内容不重复记录
+		recentInputs:       make(map[string]time.Time),
+		recentInputsWindow: 20 * time.Second,
+		nativeSeen:         make(map[string]time.Time),
 		metadata: &SessionMetadata{
 			Title:  "Terminal",
 			Status: "running",
@@ -314,11 +319,6 @@ func NewSession(id, shell string, scrollbackSize int) *Session {
 
 func (s *Session) SetStartDir(dir string) {
 	s.startDir = strings.TrimSpace(dir)
-}
-
-// GetWorkDir 获取当前工作目录
-func (s *Session) GetWorkDir() string {
-	return s.startDir
 }
 
 // Start 启动会话
@@ -334,7 +334,6 @@ func (s *Session) RecoverFromTmux() error {
 // StartWithTmux 使用 tmux 启动会话
 func (s *Session) StartWithTmux(attach bool) error {
 	var cmd *exec.Cmd
-	resuming := attach
 
 	if attach {
 		// 重新连接到已有的 tmux 会话
@@ -345,7 +344,6 @@ func (s *Session) StartWithTmux(attach bool) error {
 		checkCmd := execCommand("tmux", "has-session", "-t", s.id)
 		if checkCmd.Run() == nil {
 			// 会话已存在，直接 attach
-			resuming = true
 			cmd = execCommand("tmux", "attach-session", "-t", s.id)
 		} else {
 			// 创建新会话
@@ -376,7 +374,6 @@ func (s *Session) StartWithTmux(attach bool) error {
 	s.cmd = cmd
 	s.metadata.PID = cmd.Process.Pid
 	s.metadata.TmuxSession = s.id
-	s.recoveredFromTmux = resuming
 
 	// 加载自动化配置
 	s.loadAutomationConfig()
@@ -389,6 +386,7 @@ func (s *Session) StartWithTmux(attach bool) error {
 
 	// 启动日志刷新goroutine
 	go s.flushLogs()
+	s.startNativeAILogSync()
 
 	return nil
 }
@@ -423,6 +421,7 @@ func (s *Session) startDirectShell() error {
 	go s.readPTY()
 	go s.wait()
 	go s.flushLogs()
+	s.startNativeAILogSync()
 
 	return nil
 }
@@ -468,6 +467,7 @@ func (s *Session) startPipeShell(cmd *exec.Cmd) error {
 	go s.readPTY()
 	go s.wait()
 	go s.flushLogs()
+	s.startNativeAILogSync()
 
 	return nil
 }
@@ -568,232 +568,36 @@ func (s *Session) flushDataBatchLocked() {
 	// 发送批量数据
 	s.broadcast(StreamEvent{
 		Type: StreamEventData,
-		// NOTE: do not filter internal markers here.
-		// RunCommand relies on markers to capture output deterministically.
-		// Filtering for UI clients is handled in the websocket layer.
 		Data: base64.StdEncoding.EncodeToString(s.dataBatchBuf),
 	})
 
 	s.dataBatchBuf = s.dataBatchBuf[:0]
 }
 
-func lastNonEmptyLineLooksLikeShellPrompt(output string) bool {
-	cleaned := strings.TrimSpace(stripANSI(output))
-	if cleaned == "" {
-		return false
-	}
-	lines := strings.Split(cleaned, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		// Only treat as shell prompt when the last non-empty line itself looks like a prompt.
-		// This is intentionally conservative to avoid misclassifying "$" in logs/snippets as an exit signal.
-		return isPromptLine(line) || shellPromptRegex.MatchString(line)
-	}
-	return false
-}
-
 // detectAndHandle 检测AI状态并处理审批
 func (s *Session) detectAndHandle(data []byte) {
 	output := string(data)
 
-	now := time.Now()
-
-	s.metaMutex.Lock()
-	// Expire manual override lazily.
-	if s.cliManualPresent != nil && !s.cliManualUntil.IsZero() && now.After(s.cliManualUntil) {
-		s.cliManualPresent = nil
-		s.cliManualUntil = time.Time{}
-		if s.aiAssistant != nil {
-			s.aiAssistant.Manual = false
-			if s.aiAssistant.Source == "manual" {
-				s.aiAssistant.Source = ""
-				s.aiAssistant.Confidence = 0
-			}
-		}
-	}
-	cliTrackingEnabled := s.cliTrackingEnabled
-	expectedType := s.expectedAIAgentType
-	currentAssistant := s.aiAssistant
-	manualPresent := s.cliManualPresent
-	manualUntil := s.cliManualUntil
-	s.metaMutex.Unlock()
-
-	manualActive := manualPresent != nil && !manualUntil.IsZero() && now.Before(manualUntil)
-
-	// CLI 检测/确认：CLI 可选（不强制），允许通过“输出锚点预判 + 用户确认”闭环。
-	if cliTrackingEnabled {
-		// 1) 人工确认覆盖：只要在有效期内，就按用户选择固定 detected（避免误判导致阻塞）。
-		if manualActive {
+	// 检测AI代理
+	if s.aiAssistant == nil || !s.aiAssistant.Detected {
+		if agent := s.detector.DetectAgent(output); agent != nil {
 			s.metaMutex.Lock()
-			if s.aiAssistant == nil {
-				s.aiAssistant = &AIAssistant{
-					Type:           string(detector.AIAgentUnknown),
-					DisplayName:    "AI CLI",
-					State:          string(detector.StateUnknown),
-					StateUpdatedAt: now,
-					Detected:       false,
-				}
+			s.aiAssistant = &AIAssistant{
+				Type:           string(agent.Type),
+				DisplayName:    agent.DisplayName,
+				State:          string(agent.State),
+				StateUpdatedAt: agent.StateUpdatedAt,
+				Detected:       agent.Detected,
+				Version:        agent.Version,
 			}
-			s.aiAssistant.Manual = true
-			s.aiAssistant.Source = "manual"
-			s.aiAssistant.Confidence = 1
-			if manualPresent != nil {
-				s.aiAssistant.Detected = *manualPresent
-			}
-			s.aiAssistant.NeedsConfirm = false
-			s.aiAssistant.ConfirmKind = ""
-			s.aiAssistant.ConfirmMessage = ""
 			s.metadata.AIAssistant = s.aiAssistant
 			s.metaMutex.Unlock()
-		} else if strings.TrimSpace(string(expectedType)) != "" && expectedType != detector.AIAgentUnknown {
-			// 2) 任务明确选择了 CLI 类型：使用类型限定的输出锚点确认进入（detected=true）。
-			if currentAssistant == nil || !currentAssistant.Detected {
-				if agent := s.detector.DetectAgentWithType(output, expectedType); agent != nil {
-					s.metaMutex.Lock()
-					if s.aiAssistant == nil {
-						s.aiAssistant = &AIAssistant{
-							Type:           string(agent.Type),
-							DisplayName:    agent.DisplayName,
-							State:          string(agent.State),
-							StateUpdatedAt: agent.StateUpdatedAt,
-							Detected:       true,
-							Version:        agent.Version,
-							Source:         "anchor",
-							Confidence:     1,
-							Manual:         false,
-						}
-					} else {
-						s.aiAssistant.Type = string(agent.Type)
-						s.aiAssistant.DisplayName = agent.DisplayName
-						s.aiAssistant.Detected = true
-						s.aiAssistant.Version = agent.Version
-						s.aiAssistant.StateUpdatedAt = now
-						s.aiAssistant.Source = "anchor"
-						s.aiAssistant.Confidence = 1
-						s.aiAssistant.NeedsConfirm = false
-						s.aiAssistant.ConfirmKind = ""
-						s.aiAssistant.ConfirmMessage = ""
-						s.aiAssistant.Manual = false
-					}
-					s.metadata.AIAssistant = s.aiAssistant
-					s.metaMutex.Unlock()
 
-					utils.Info("AI CLI entered (detected from output)",
-						zap.String("type", string(agent.Type)),
-						zap.String("terminal", s.id))
+			utils.Info("AI agent detected",
+				zap.String("type", string(agent.Type)),
+				zap.String("terminal", s.id))
 
-					s.broadcastMetadata()
-				}
-			}
-		} else {
-			// 3) CLI 未强制选择：命中输出锚点时先作为候选（needs_confirm=true），由用户确认“是/否/不确定”。
-			if currentAssistant == nil {
-				currentAssistant = &AIAssistant{
-					Type:           string(detector.AIAgentUnknown),
-					DisplayName:    "AI CLI",
-					State:          string(detector.StateUnknown),
-					StateUpdatedAt: now,
-					Detected:       false,
-				}
-			}
-			if !currentAssistant.Detected && !currentAssistant.NeedsConfirm {
-				if agent := s.detector.DetectAgent(output); agent != nil {
-					s.metaMutex.Lock()
-					if s.aiAssistant == nil {
-						s.aiAssistant = &AIAssistant{
-							Type:           string(agent.Type),
-							DisplayName:    agent.DisplayName,
-							State:          string(agent.State),
-							StateUpdatedAt: agent.StateUpdatedAt,
-							Detected:       false,
-							Version:        agent.Version,
-							Source:         "anchor",
-							Confidence:     0.7,
-							NeedsConfirm:   true,
-							ConfirmKind:    "enter_cli",
-							ConfirmMessage: "检测到可能已进入 AI CLI，请确认是否进入交互界面（是/否/不确定）",
-						}
-					} else {
-						s.aiAssistant.Type = string(agent.Type)
-						s.aiAssistant.DisplayName = agent.DisplayName
-						s.aiAssistant.Detected = false
-						s.aiAssistant.Version = agent.Version
-						s.aiAssistant.StateUpdatedAt = now
-						s.aiAssistant.Source = "anchor"
-						s.aiAssistant.Confidence = 0.7
-						s.aiAssistant.NeedsConfirm = true
-						s.aiAssistant.ConfirmKind = "enter_cli"
-						s.aiAssistant.ConfirmMessage = "检测到可能已进入 AI CLI，请确认是否进入交互界面（是/否/不确定）"
-						s.aiAssistant.Manual = false
-					}
-					s.metadata.AIAssistant = s.aiAssistant
-					s.metaMutex.Unlock()
-
-					utils.Info("AI CLI candidate detected (needs confirmation)",
-						zap.String("type", string(agent.Type)),
-						zap.String("terminal", s.id))
-
-					s.broadcastMetadata()
-				}
-			}
-		}
-	}
-
-	// ===== CLI 会话跟踪（AISession） =====
-	// 仅在任务绑定且检测到进入/疑似进入 AI CLI 时创建会话记录，并持续从输出提取 session_id/session_file。
-	// 目的：为“一键 resume”与审批审计提供稳定的会话对象。
-	if cliTrackingEnabled {
-		taskID := ""
-		assistantType := ""
-		assistantDetected := false
-		assistantNeedsConfirm := false
-		assistantSource := ""
-		s.metaMutex.RLock()
-		if s.taskID != nil {
-			taskID = strings.TrimSpace(*s.taskID)
-		}
-		sessionMgr := s.cliSessionManager
-		if s.aiAssistant != nil {
-			assistantType = strings.TrimSpace(s.aiAssistant.Type)
-			assistantDetected = s.aiAssistant.Detected
-			assistantNeedsConfirm = s.aiAssistant.NeedsConfirm
-			assistantSource = s.aiAssistant.Source
-		}
-		s.metaMutex.RUnlock()
-
-		// detected=true 或 needs_confirm(由输出锚点触发) 都视为足够强的信号
-		shouldTrack := taskID != "" && (assistantDetected || (assistantNeedsConfirm && assistantSource == "anchor"))
-
-		if shouldTrack && sessionMgr == nil {
-			if mgr, err := clisession.NewSessionManager(s.id, s.taskID, assistantType); err == nil {
-				s.metaMutex.Lock()
-				// double check: avoid racing with refreshTaskAutomationTracking
-				if s.cliTrackingEnabled && s.cliSessionManager == nil {
-					s.cliSessionManager = mgr
-				}
-				sessionMgr = s.cliSessionManager
-				s.metaMutex.Unlock()
-			} else {
-				utils.Debug("Failed to init CLI session manager", zap.Error(err), zap.String("terminal", s.id))
-			}
-		}
-
-		if sessionMgr != nil {
-			if snap, err := sessionMgr.UpdateFromOutput(output); err == nil {
-				s.metaMutex.Lock()
-				if s.aiAssistant != nil {
-					s.aiAssistant.AISessionID = snap.AISessionID
-					s.aiAssistant.SessionID = snap.SessionID
-					s.aiAssistant.SessionFile = snap.SessionFile
-					s.metadata.AIAssistant = s.aiAssistant
-				}
-				s.metaMutex.Unlock()
-			} else {
-				utils.Debug("Failed to update CLI session from output", zap.Error(err), zap.String("terminal", s.id))
-			}
+			s.broadcastMetadata()
 		}
 	}
 
@@ -811,41 +615,232 @@ func (s *Session) detectAndHandle(data []byte) {
 	}
 
 	// 更新AI助手状态（如果存在）
+	metadataChanged := false
 	s.metaMutex.Lock()
 	if s.aiAssistant != nil {
 		oldState := s.aiAssistant.State
 		s.aiAssistant.State = string(state)
-		s.aiAssistant.StateUpdatedAt = now
+		s.aiAssistant.StateUpdatedAt = time.Now()
 		if approvalPrompt != "" {
 			s.aiAssistant.ApprovalPrompt = approvalPrompt
 		}
 		s.metadata.AIAssistant = s.aiAssistant
 
-		// CLI 退出（疑似）：从可交互/工作态回到 shell prompt。
-		// 为了安全默认先将 detected=false（避免把 prompt 当作 shell 命令执行），并交由用户确认闭环。
-		if cliTrackingEnabled && s.aiAssistant.Detected &&
-			oldState != string(detector.StateIdle) &&
-			state == detector.StateIdle &&
-			lastNonEmptyLineLooksLikeShellPrompt(output) &&
-			!(manualActive && manualPresent != nil && *manualPresent) {
-			s.aiAssistant.Detected = false
-			s.aiAssistant.ApprovalPrompt = ""
-			s.aiAssistant.NeedsConfirm = true
-			s.aiAssistant.ConfirmKind = "exit_cli"
-			s.aiAssistant.ConfirmMessage = "检测到可能已退出 AI CLI（出现 shell 提示符），请确认当前是否仍在 AI CLI（是/否/不确定）"
-			s.aiAssistant.Source = "heuristic"
-			s.aiAssistant.Confidence = 0.5
-			s.aiAssistant.Manual = false
-		}
-
 		// 状态变化时广播
 		if oldState != string(state) {
-			s.metaMutex.Unlock()
-			s.broadcastMetadata()
-			return
+			metadataChanged = true
 		}
 	}
 	s.metaMutex.Unlock()
+
+	if metadataChanged {
+		s.broadcastMetadata()
+	}
+
+	// 持久化 AI CLI 会话信息（session_id/session_file/state），供 CLI resume 使用。
+	s.syncAISession(output, state)
+}
+
+func (s *Session) syncAISession(output string, detectedState detector.AIAgentState) {
+	if s == nil || model.DB == nil {
+		return
+	}
+
+	trimmedOutput := strings.TrimSpace(stripANSI(output))
+	if trimmedOutput != "" {
+		s.aiSessionOutput = appendTrimmedTail(s.aiSessionOutput, trimmedOutput, 16384)
+	}
+
+	s.metaMutex.RLock()
+	taskID := cloneStringPtr(s.taskID)
+	assistantType := ""
+	if s.aiAssistant != nil {
+		assistantType = strings.TrimSpace(s.aiAssistant.Type)
+	}
+	s.metaMutex.RUnlock()
+
+	aiType := normalizeAISessionType(s.aiSessionType)
+	if aiType == "" {
+		aiType = normalizeAISessionType(assistantType)
+	}
+	if aiType == "" {
+		aiType = inferAISessionTypeFromOutput(s.aiSessionOutput)
+	}
+
+	sessionID, sessionFile := extractAISessionIdentity(aiType, s.aiSessionOutput)
+	if aiType == "" {
+		// 在 unknown 场景下，extract 会优先用 codex 特征，其次 claude 特征。
+		if sessionFile != "" {
+			aiType = string(detector.AIAgentCodex)
+		} else if sessionID != "" && strings.Contains(strings.ToLower(s.aiSessionOutput), "claude") {
+			aiType = string(detector.AIAgentClaudeCode)
+		}
+	}
+
+	state := strings.TrimSpace(string(detectedState))
+	if state == "" {
+		state = string(detector.StateUnknown)
+	}
+
+	if s.aiSessionID == "" && aiType == "" && sessionID == "" && sessionFile == "" {
+		return
+	}
+
+	now := time.Now()
+	if s.aiSessionID == "" {
+		record := &model.AISession{
+			ID:          uuid.New().String(),
+			TerminalID:  s.id,
+			TaskID:      taskID,
+			AIType:      defaultString(aiType, string(detector.AIAgentUnknown)),
+			State:       defaultString(state, string(detector.StateUnknown)),
+			SessionID:   sessionID,
+			SessionFile: sessionFile,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := model.DB.Create(record).Error; err != nil {
+			return
+		}
+		s.aiSessionID = record.ID
+		s.aiSessionType = record.AIType
+		s.aiSessionState = record.State
+		s.aiSessionCLIID = record.SessionID
+		s.aiSessionFile = record.SessionFile
+		s.aiSessionTaskID = derefStringPtr(taskID)
+		return
+	}
+
+	updates := map[string]any{
+		"updated_at": now,
+	}
+
+	if aiType != "" && aiType != s.aiSessionType {
+		updates["ai_type"] = aiType
+		s.aiSessionType = aiType
+	}
+	if state != "" && state != s.aiSessionState {
+		updates["state"] = state
+		s.aiSessionState = state
+	}
+	if sessionID != "" && sessionID != s.aiSessionCLIID {
+		updates["session_id"] = sessionID
+		s.aiSessionCLIID = sessionID
+	}
+	if sessionFile != "" && sessionFile != s.aiSessionFile {
+		updates["session_file"] = sessionFile
+		s.aiSessionFile = sessionFile
+	}
+	taskIDValue := derefStringPtr(taskID)
+	if taskIDValue != "" && taskIDValue != s.aiSessionTaskID {
+		updates["task_id"] = taskID
+		s.aiSessionTaskID = taskIDValue
+	}
+
+	if len(updates) == 1 { // only updated_at
+		return
+	}
+	_ = model.DB.Model(&model.AISession{}).Where("id = ?", s.aiSessionID).Updates(updates).Error
+}
+
+func normalizeAISessionType(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "claude", "claude-code", "claude_code":
+		return string(detector.AIAgentClaudeCode)
+	case "codex", "openai-codex":
+		return string(detector.AIAgentCodex)
+	case "gemini":
+		return string(detector.AIAgentGemini)
+	case "", "unknown":
+		return ""
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
+func inferAISessionTypeFromOutput(output string) string {
+	text := strings.ToLower(strings.TrimSpace(output))
+	if text == "" {
+		return ""
+	}
+	if codexSessionFileRegex.MatchString(text) || strings.Contains(text, "openai codex") || strings.Contains(text, "codex") {
+		return string(detector.AIAgentCodex)
+	}
+	if strings.Contains(text, "claude") {
+		return string(detector.AIAgentClaudeCode)
+	}
+	if strings.Contains(text, "gemini") {
+		return string(detector.AIAgentGemini)
+	}
+	return ""
+}
+
+func extractAISessionIdentity(aiType, output string) (sessionID, sessionFile string) {
+	text := strings.TrimSpace(output)
+	if text == "" {
+		return "", ""
+	}
+
+	if match := codexSessionFileRegex.FindStringSubmatch(text); len(match) == 3 {
+		sessionFile = strings.TrimSpace(match[1])
+		sessionID = strings.TrimSpace(match[2])
+		if normalizeAISessionType(aiType) == string(detector.AIAgentCodex) {
+			return sessionID, sessionFile
+		}
+	}
+
+	if normalizeAISessionType(aiType) == string(detector.AIAgentClaudeCode) || strings.Contains(strings.ToLower(text), "claude") {
+		if id := cliSessionUUIDRegex.FindString(text); id != "" {
+			return strings.TrimSpace(id), sessionFile
+		}
+	}
+
+	return sessionID, sessionFile
+}
+
+func appendTrimmedTail(prev, extra string, maxLen int) string {
+	text := strings.TrimSpace(extra)
+	if text == "" {
+		return prev
+	}
+	if strings.TrimSpace(prev) == "" {
+		if len(text) > maxLen {
+			return text[len(text)-maxLen:]
+		}
+		return text
+	}
+	combined := prev + "\n" + text
+	if maxLen > 0 && len(combined) > maxLen {
+		return combined[len(combined)-maxLen:]
+	}
+	return combined
+}
+
+func cloneStringPtr(src *string) *string {
+	if src == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*src)
+	if value == "" {
+		return nil
+	}
+	copied := value
+	return &copied
+}
+
+func derefStringPtr(src *string) string {
+	if src == nil {
+		return ""
+	}
+	return strings.TrimSpace(*src)
+}
+
+func defaultString(value, fallback string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return strings.TrimSpace(fallback)
+	}
+	return text
 }
 
 // handleApproval 处理审批流程
@@ -956,9 +951,8 @@ func (s *Session) handleApproval(output string) {
 	// 记录审批操作
 	var aiSessionID *string
 	s.metaMutex.RLock()
-	if s.aiAssistant != nil && strings.TrimSpace(s.aiAssistant.AISessionID) != "" {
-		id := strings.TrimSpace(s.aiAssistant.AISessionID)
-		aiSessionID = &id
+	if s.aiAssistant != nil {
+		// 这里可以关联AI会话ID
 	}
 	s.metaMutex.RUnlock()
 
@@ -1308,6 +1302,18 @@ func (s *Session) Write(data []byte) error {
 	return err
 }
 
+// RecordInputForLog records input text into terminal input logs without writing to PTY.
+// Useful for command injections sent via tmux send-keys outside of Session.Write.
+func (s *Session) RecordInputForLog(data string) {
+	if s == nil {
+		return
+	}
+	if strings.TrimSpace(data) == "" {
+		return
+	}
+	s.addInputLog([]byte(data))
+}
+
 // Resize 调整PTY大小
 func (s *Session) Resize(cols, rows uint16) error {
 	if s.backend != nil {
@@ -1408,13 +1414,6 @@ func (s *Session) Status() string       { return s.status }
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 func (s *Session) ClosedAt() *time.Time { return s.closedAt }
 func (s *Session) Scrollback() []byte   { return s.scrollback.Read() }
-func (s *Session) ScrollbackLimitBytes() int {
-	if s == nil || s.scrollback == nil {
-		return 0
-	}
-	return s.scrollback.maxSize
-}
-func (s *Session) RecoveredFromTmux() bool { return s != nil && s.recoveredFromTmux }
 func (s *Session) Metadata() *SessionMetadata {
 	s.metaMutex.RLock()
 	defer s.metaMutex.RUnlock()
@@ -1715,242 +1714,38 @@ func (s *Session) SetTitle(title string) {
 
 func (s *Session) SetTaskID(taskID *string) {
 	s.metaMutex.Lock()
-	// NOTE: fiber/fasthttp may return strings backed by an internal buffer (zero-copy).
-	// Do not retain those string headers/pointers beyond the request lifecycle.
-	// Always copy the value we store in the session to avoid later corruption.
-	if taskID == nil || strings.TrimSpace(*taskID) == "" {
-		s.taskID = nil
-		s.metadata.TaskID = nil
-		s.metaMutex.Unlock()
-		s.refreshTaskCLISelection()
-		return
-	}
-
-	copied := strings.Clone(strings.TrimSpace(*taskID))
-	s.taskID = &copied
-	s.metadata.TaskID = s.taskID
+	s.taskID = taskID
+	s.metadata.TaskID = taskID
 	s.metaMutex.Unlock()
-
-	s.refreshTaskCLISelection()
 }
 
 func (s *Session) SetServerInfo(serverID *string, name, host string) {
 	s.metaMutex.Lock()
-	// Same reason as SetTaskID: copy values to avoid retaining unsafe string headers.
-	if serverID == nil || strings.TrimSpace(*serverID) == "" {
-		s.serverID = nil
-		s.metadata.ServerID = nil
-	} else {
-		copied := strings.Clone(strings.TrimSpace(*serverID))
-		s.serverID = &copied
-		s.metadata.ServerID = s.serverID
-	}
-	s.metadata.ServerName = strings.Clone(strings.TrimSpace(name))
-	s.metadata.ServerHost = strings.Clone(strings.TrimSpace(host))
+	s.serverID = serverID
+	s.metadata.ServerID = serverID
+	s.metadata.ServerName = strings.TrimSpace(name)
+	s.metadata.ServerHost = strings.TrimSpace(host)
 	s.metaMutex.Unlock()
-}
-
-func (s *Session) refreshTaskCLISelection() {
-	if s == nil {
-		return
-	}
-
-	taskID := ""
-	s.metaMutex.RLock()
-	if s.taskID != nil {
-		taskID = strings.TrimSpace(*s.taskID)
-	}
-	s.metaMutex.RUnlock()
-
-	enabled := false
-	expectedType := detector.AIAgentUnknown
-	displayName := ""
-	taskMode := ""
-
-	if taskID != "" && model.DB != nil {
-		var task model.Task
-		if err := model.DB.Select("automation_mode", "ai_managed", "cli_type").First(&task, "id = ?", taskID).Error; err == nil {
-			taskMode = strings.ToLower(strings.TrimSpace(task.AutomationMode))
-			enabled = task.AIManaged || taskMode == "cli"
-
-			// CLI 可选：只有 automation_mode=cli 时才“强绑定” cli_type；否则允许 unknown，由输出锚点/人工确认决定。
-			if taskMode == "cli" {
-				cliType := strings.ToLower(strings.TrimSpace(task.CLIType))
-				switch cliType {
-				case "claude":
-					expectedType = detector.AIAgentClaudeCode
-					displayName = "Claude Code"
-				case "codex":
-					expectedType = detector.AIAgentCodex
-					displayName = "OpenAI Codex"
-				case "gemini":
-					expectedType = detector.AIAgentGemini
-					displayName = "Gemini CLI"
-				default:
-					expectedType = detector.AIAgentUnknown
-					displayName = ""
-				}
-			} else {
-				expectedType = detector.AIAgentUnknown
-				displayName = "AI CLI"
-			}
-		}
-	}
-
-	if !enabled || (taskMode == "cli" && expectedType == detector.AIAgentUnknown) {
-		s.metaMutex.Lock()
-		s.cliTrackingEnabled = false
-		s.expectedAIAgentType = detector.AIAgentUnknown
-		s.aiAssistant = nil
-		s.metadata.AIAssistant = nil
-		s.cliManualPresent = nil
-		s.cliManualUntil = time.Time{}
-		s.cliSessionManager = nil
-		s.metaMutex.Unlock()
-		s.broadcastMetadata()
-		return
-	}
-
-	s.metaMutex.Lock()
-	s.cliTrackingEnabled = true
-	s.expectedAIAgentType = expectedType
-
-	if s.aiAssistant == nil || strings.TrimSpace(s.aiAssistant.Type) != string(expectedType) {
-		// 任务关键字段变化（automation_mode/cli_type）时，清理旧的会话跟踪器，避免把旧会话误关联到新 CLI。
-		s.cliSessionManager = nil
-		s.aiAssistant = &AIAssistant{
-			Type:           string(expectedType),
-			DisplayName:    displayName,
-			State:          string(detector.StateUnknown),
-			StateUpdatedAt: time.Now(),
-			Detected:       false,
-			Version:        "",
-			ApprovalPrompt: "",
-			NeedsConfirm:   false,
-			ConfirmKind:    "",
-			ConfirmMessage: "",
-			Source:         "",
-			Confidence:     0,
-			Manual:         false,
-		}
-	} else if s.aiAssistant != nil && s.aiAssistant.DisplayName != displayName {
-		s.aiAssistant.DisplayName = displayName
-	}
-
-	s.metadata.AIAssistant = s.aiAssistant
-	s.metaMutex.Unlock()
-
-	s.broadcastMetadata()
-}
-
-func normalizeAIAssistantType(value string) (detector.AIAgentType, string) {
-	v := strings.ToLower(strings.TrimSpace(value))
-	switch v {
-	case "claude", "claude-code", "claude_code":
-		return detector.AIAgentClaudeCode, "Claude Code"
-	case "codex", "openai-codex":
-		return detector.AIAgentCodex, "OpenAI Codex"
-	case "gemini":
-		return detector.AIAgentGemini, "Gemini CLI"
-	default:
-		return detector.AIAgentUnknown, ""
-	}
-}
-
-// ConfirmCLIState allows user/AI to manually confirm whether the terminal is currently inside an AI CLI.
-//
-// decision: yes/no/unknown (also accepts y/n/true/false/unsure).
-// assistantType: optional hint (claude/codex/gemini).
-func (s *Session) ConfirmCLIState(decision string, assistantType string, ttl time.Duration) error {
-	if s == nil {
-		return errors.New("session is nil")
-	}
-
-	d := strings.ToLower(strings.TrimSpace(decision))
-	var present *bool
-	switch d {
-	case "yes", "y", "true", "in", "inside":
-		v := true
-		present = &v
-	case "no", "n", "false", "out", "outside":
-		v := false
-		present = &v
-	case "unknown", "unsure", "maybe", "idk", "":
-		present = nil
-	default:
-		return fmt.Errorf("invalid decision: %s", decision)
-	}
-
-	if ttl <= 0 {
-		ttl = 2 * time.Minute
-	}
-	until := time.Now().Add(ttl)
-
-	agentType, agentDisplay := normalizeAIAssistantType(assistantType)
-
-	s.metaMutex.Lock()
-	s.cliManualPresent = present
-	if present == nil {
-		s.cliManualUntil = time.Time{}
-	} else {
-		s.cliManualUntil = until
-	}
-
-	if s.aiAssistant == nil {
-		s.aiAssistant = &AIAssistant{
-			Type:           string(detector.AIAgentUnknown),
-			DisplayName:    "AI CLI",
-			State:          string(detector.StateUnknown),
-			StateUpdatedAt: time.Now(),
-			Detected:       false,
-		}
-	}
-
-	// Apply type hint if provided and known.
-	if agentType != detector.AIAgentUnknown && strings.TrimSpace(string(agentType)) != "" {
-		s.aiAssistant.Type = string(agentType)
-		if agentDisplay != "" {
-			s.aiAssistant.DisplayName = agentDisplay
-		}
-	}
-
-	s.aiAssistant.Manual = present != nil
-	s.aiAssistant.Source = "manual"
-	s.aiAssistant.Confidence = 1
-	s.aiAssistant.NeedsConfirm = false
-	s.aiAssistant.ConfirmKind = ""
-	s.aiAssistant.ConfirmMessage = ""
-
-	if present != nil {
-		s.aiAssistant.Detected = *present
-	} else {
-		// unknown => do not force detected=true; keep current value (but safe default is false).
-		s.aiAssistant.Detected = false
-		s.aiAssistant.Manual = false
-		s.aiAssistant.Source = ""
-		s.aiAssistant.Confidence = 0
-	}
-
-	s.metadata.AIAssistant = s.aiAssistant
-	s.metaMutex.Unlock()
-
-	s.broadcastMetadata()
-	return nil
 }
 
 // ToDBModel 转换为数据库模型
 func (s *Session) ToDBModel() *model.TerminalSession {
+	tmuxSession := ""
+	if s.metadata != nil {
+		tmuxSession = strings.TrimSpace(s.metadata.TmuxSession)
+	}
 	return &model.TerminalSession{
-		ID:        s.id,
-		Title:     s.title,
-		TaskID:    s.taskID,
-		ServerID:  s.serverID,
-		Shell:     s.shell,
-		Status:    s.status,
-		PID:       s.metadata.PID,
-		Hidden:    false,
-		CreatedAt: s.createdAt,
-		ClosedAt:  s.closedAt,
+		ID:          s.id,
+		Title:       s.title,
+		TaskID:      s.taskID,
+		ServerID:    s.serverID,
+		Shell:       s.shell,
+		Status:      s.status,
+		PID:         s.metadata.PID,
+		TmuxSession: tmuxSession,
+		Hidden:      false,
+		CreatedAt:   s.createdAt,
+		ClosedAt:    s.closedAt,
 	}
 }
 
@@ -2021,35 +1816,193 @@ func (s *Session) flushInputLineLocked() {
 	if line == "" {
 		return
 	}
-	// 过滤内部命令标记（ACA_CMD_BEGIN/END、ACA_CODE、ACA_EOF等）
-	if isInternalMarkerLine(line) {
+	if isRunCommandInternalLine(line) {
 		return
 	}
-
+	s.detectAIAgentFromInput(line)
+	s.rememberRecentInput(line)
+	s.addLog("input_raw", line+"\n")
 	s.addLog("input", line+"\n")
 }
 
-// addOutputLog 将PTY输出按行聚合，过滤提示符/回显/内部标记后写入日志缓冲
+func (s *Session) detectAIAgentFromInput(line string) {
+	if s == nil || s.detector == nil {
+		return
+	}
+	cmd := strings.TrimSpace(line)
+	if cmd == "" {
+		return
+	}
+
+	agent := s.detector.DetectAgentFromCommand(cmd)
+	if agent == nil {
+		return
+	}
+
+	changed := false
+	s.metaMutex.Lock()
+	if s.aiAssistant == nil || normalizeAISessionType(s.aiAssistant.Type) != normalizeAISessionType(string(agent.Type)) || !s.aiAssistant.Detected {
+		s.aiAssistant = &AIAssistant{
+			Type:           string(agent.Type),
+			DisplayName:    agent.DisplayName,
+			State:          string(agent.State),
+			StateUpdatedAt: time.Now(),
+			Detected:       true,
+			Version:        agent.Version,
+		}
+		s.metadata.AIAssistant = s.aiAssistant
+		changed = true
+	} else if s.aiAssistant.State == "" {
+		s.aiAssistant.State = string(agent.State)
+		s.aiAssistant.StateUpdatedAt = time.Now()
+		s.metadata.AIAssistant = s.aiAssistant
+		changed = true
+	}
+	if normalizeAISessionType(s.aiSessionType) == "" {
+		s.aiSessionType = string(agent.Type)
+	}
+	s.metaMutex.Unlock()
+
+	if changed {
+		s.broadcastMetadata()
+	}
+}
+
+// addOutputLog 将PTY输出按行聚合，过滤提示符/回显后写入日志缓冲
 func (s *Session) addOutputLog(data []byte) {
 	s.ioBufMutex.Lock()
 	lines := s.consumeOutputLinesLocked(data)
 	s.ioBufMutex.Unlock()
 
 	for _, line := range lines {
+		originalLine := strings.TrimRight(line, " \t")
+		if s.shouldDropOutputLine(originalLine) {
+			continue
+		}
+		if strings.TrimSpace(originalLine) != "" {
+			if !s.isRecentInputEcho(originalLine) {
+				s.addLog("output_raw", originalLine+"\n")
+			}
+		}
+
 		// 保留前导空白（可能有缩进），仅去掉右侧空白
 		line = strings.TrimRight(line, " \t")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		if s.shouldDropOutputLine(line) {
+			continue
+		}
 		if isShellPromptOrCommandLine(line) {
 			continue
 		}
-		// 过滤内部命令标记行（ACA_CMD_BEGIN/END、ACA_CODE、ACA_EOF等）
-		if isInternalMarkerLine(line) {
+		if s.isRecentInputEcho(line) {
 			continue
 		}
 		s.addLog("output", line+"\n")
 	}
+}
+
+func (s *Session) shouldDropOutputLine(line string) bool {
+	normalized := strings.TrimSpace(stripANSI(line))
+	if normalized == "" {
+		return true
+	}
+	if isRunCommandInternalLine(normalized) {
+		return true
+	}
+	if isEphemeralOutputLine(normalized) {
+		return true
+	}
+	if isAIPromptLine(normalized) {
+		return s.isAIAgentSessionLikely() || s.currentAINoiseToken() != ""
+	}
+	if !s.isAIAgentSessionLikely() {
+		return false
+	}
+	if isAIThinkingStatusLine(normalized) {
+		s.markAINoise(normalizeAINoiseToken(normalized))
+		return true
+	}
+	if s.isAINoiseFragmentLine(normalized) {
+		return true
+	}
+	return false
+}
+
+func isRunCommandInternalLine(line string) bool {
+	normalized := strings.TrimSpace(stripANSI(line))
+	if normalized == "" {
+		return false
+	}
+
+	if strings.Contains(normalized, "__ACA_CMD_BEGIN_") || strings.Contains(normalized, "__ACA_CMD_END_") {
+		return true
+	}
+	if strings.Contains(normalized, "ACA_CODE=$?; echo '__ACA_CMD_END_") {
+		return true
+	}
+	if strings.Contains(normalized, "echo '__ACA_CMD_BEGIN_") {
+		return true
+	}
+	if strings.Contains(normalized, "bash <<'ACA_EOF_") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "ACA_EOF_") {
+		return true
+	}
+	return false
+}
+
+func (s *Session) isAIAgentSessionLikely() bool {
+	if s == nil {
+		return false
+	}
+	if normalizeAISessionType(s.aiSessionType) != "" {
+		return true
+	}
+	s.metaMutex.RLock()
+	defer s.metaMutex.RUnlock()
+	return s.aiAssistant != nil && s.aiAssistant.Detected
+}
+
+func (s *Session) markAINoise(token string) {
+	if s == nil {
+		return
+	}
+	now := time.Now()
+	s.aiNoiseMu.Lock()
+	s.aiNoiseUntil = now.Add(2500 * time.Millisecond)
+	if text := strings.TrimSpace(token); text != "" {
+		s.aiNoiseToken = text
+	}
+	s.aiNoiseMu.Unlock()
+}
+
+func (s *Session) currentAINoiseToken() string {
+	if s == nil {
+		return ""
+	}
+	now := time.Now()
+	s.aiNoiseMu.Lock()
+	defer s.aiNoiseMu.Unlock()
+	if !s.aiNoiseUntil.IsZero() && now.After(s.aiNoiseUntil) {
+		s.aiNoiseUntil = time.Time{}
+		s.aiNoiseToken = ""
+		return ""
+	}
+	return strings.TrimSpace(s.aiNoiseToken)
+}
+
+func (s *Session) isAINoiseFragmentLine(line string) bool {
+	if s == nil {
+		return false
+	}
+	if !isLikelyAINoiseFragment(line, s.currentAINoiseToken()) {
+		return false
+	}
+	s.markAINoise(normalizeAINoiseToken(line))
+	return true
 }
 
 func (s *Session) consumeOutputLinesLocked(data []byte) []string {
@@ -2077,9 +2030,7 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			seq := buf[i : i+seqLen]
 			switch seqType {
 			case "CSI":
-				s.applyCSISequenceLocked(seq)
-			case "ESC":
-				s.applyESCSequenceLocked(seq)
+				s.applyCSISequenceLocked(seq, &lines)
 			}
 			i += seqLen
 			continue
@@ -2087,32 +2038,25 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 
 		switch b {
 		case '\n':
-			if s.outputSuppressWrites {
-				i++
-				continue
-			}
 			s.flushOutputLineLocked(&lines)
 			i++
 			continue
 		case '\r':
-			if s.outputSuppressWrites {
-				i++
-				continue
-			}
 			// 回车：回到行首
 			// 检查下一个字符是否是 \n（\r\n 是正常换行）
 			if i+1 < len(buf) && buf[i+1] != '\n' {
-				// 不是 \r\n，说明是进度条等动态输出，清空当前行避免叠加
-				s.outputLineBuf = s.outputLineBuf[:0]
+				// 对于动态TUI（例如AI CLI），若回车后跟随控制序列或非ASCII字符，
+				// 先保留当前行，避免被后续覆盖/清屏导致日志丢失。
+				next := buf[i+1]
+				if next == 0x1b || next < 32 || next >= 0x80 {
+					s.flushOutputLineIfMeaningfulLocked(&lines)
+					s.outputLineBuf = s.outputLineBuf[:0]
+				}
 			}
 			s.outputCursor = 0
 			i++
 			continue
 		case '\b', 0x7f:
-			if s.outputSuppressWrites {
-				i++
-				continue
-			}
 			// 退格：仅移动光标（是否擦除由后续输出决定）
 			if s.outputCursor > 0 {
 				s.outputCursor--
@@ -2120,10 +2064,6 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			i++
 			continue
 		case '\t':
-			if s.outputSuppressWrites {
-				i++
-				continue
-			}
 			s.writeOutputRuneLocked('\t')
 			i++
 			continue
@@ -2146,10 +2086,6 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 			i++
 			continue
 		}
-		if s.outputSuppressWrites {
-			i += size
-			continue
-		}
 		s.writeOutputRuneLocked(r)
 		i += size
 	}
@@ -2158,17 +2094,24 @@ func (s *Session) consumeOutputLinesLocked(data []byte) []string {
 }
 
 func (s *Session) flushOutputLineLocked(lines *[]string) {
+	s.flushOutputLineIfMeaningfulLocked(lines)
+}
+
+func (s *Session) flushOutputLineIfMeaningfulLocked(lines *[]string) {
 	if len(s.outputLineBuf) == 0 {
 		s.outputCursor = 0
 		return
 	}
 
-	line := string(s.outputLineBuf)
+	line := strings.TrimRight(string(s.outputLineBuf), " \t")
 	// 重置行缓冲
 	s.outputLineBuf = s.outputLineBuf[:0]
 	s.outputCursor = 0
 
 	if strings.TrimSpace(line) == "" {
+		return
+	}
+	if isEphemeralOutputLine(line) {
 		return
 	}
 
@@ -2200,7 +2143,7 @@ func (s *Session) writeOutputRuneLocked(r rune) {
 	s.outputCursor++
 }
 
-func (s *Session) applyCSISequenceLocked(seq []byte) {
+func (s *Session) applyCSISequenceLocked(seq []byte, lines *[]string) {
 	// seq 形如: ESC [ ... final
 	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' {
 		return
@@ -2219,29 +2162,6 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 			return defaultVal
 		}
 		return params[0]
-	}
-
-	// When we are in an off-screen UI write section (e.g. status bar rendered via save+cursorTo+restore),
-	// ignore all mutations to the current line buffer until cursor restore arrives.
-	if s.outputSuppressWrites {
-		switch final {
-		case 'u': // Restore cursor
-			s.outputCursor = s.outputSavedCursor
-			s.outputCursorSaveActive = false
-			s.outputSuppressWrites = false
-		}
-		return
-	}
-
-	// Heuristic: if a program uses save/restore and then issues clear-line / clear-screen,
-	// it's very likely updating a transient UI region (status bar / spinner). Our log line
-	// buffer is single-line only, so applying these clears would corrupt the current line.
-	if s.outputCursorSaveActive {
-		switch final {
-		case 'K', 'J':
-			s.outputSuppressWrites = true
-			return
-		}
 	}
 
 	switch final {
@@ -2263,12 +2183,26 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 				s.outputLineBuf[i] = ' '
 			}
 		case 2: // clear entire line
+			s.flushOutputLineIfMeaningfulLocked(lines)
 			s.outputLineBuf = s.outputLineBuf[:0]
 			s.outputCursor = 0
 		}
 	case 'J': // ED - Erase in Display（日志里按清行处理）
+		s.flushOutputLineIfMeaningfulLocked(lines)
 		s.outputLineBuf = s.outputLineBuf[:0]
 		s.outputCursor = 0
+	case 'H', 'f', 'A', 'B', 'E', 'F':
+		// 光标移动在单行日志聚合里视为逻辑边界，先刷出当前行，避免内容被覆盖丢失。
+		s.flushOutputLineIfMeaningfulLocked(lines)
+		if final == 'H' || final == 'f' {
+			col := 1
+			if len(params) >= 2 && params[1] > 0 {
+				col = params[1]
+			}
+			s.outputCursor = col - 1
+		} else if final == 'E' || final == 'F' {
+			s.outputCursor = 0
+		}
 	case 'D': // Cursor Left
 		n := get1(1)
 		s.outputCursor -= n
@@ -2284,38 +2218,10 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 			n = 1
 		}
 		s.outputCursor = n - 1
-	case 'A', 'B', 'E', 'F': // Cursor up/down/next/prev line
-		// We don't model row changes for log lines. When a TUI uses save+move+restore
-		// to paint a status bar, treat vertical cursor moves as an off-screen update.
-		if s.outputCursorSaveActive {
-			s.outputSuppressWrites = true
-		}
-	case 'H', 'f': // CUP/HVP - Cursor Position
-		// ESC[row;colH : default 1;1
-		row := 1
-		col := 1
-		if len(params) >= 1 && params[0] != 0 {
-			row = params[0]
-		}
-		if len(params) >= 2 && params[1] != 0 {
-			col = params[1]
-		}
-		if s.outputCursorSaveActive && row > 1 {
-			// Treat cursor move to another row during a save/restore block as a transient UI update
-			// (common in AI CLIs). Suppress writes & buffer mutations until restore.
-			s.outputSuppressWrites = true
-		}
-		if col < 1 {
-			col = 1
-		}
-		s.outputCursor = col - 1
 	case 's': // Save cursor
 		s.outputSavedCursor = s.outputCursor
-		s.outputCursorSaveActive = true
 	case 'u': // Restore cursor
 		s.outputCursor = s.outputSavedCursor
-		s.outputCursorSaveActive = false
-		s.outputSuppressWrites = false
 	case 'm':
 		// SGR - ignore
 	default:
@@ -2328,25 +2234,6 @@ func (s *Session) applyCSISequenceLocked(seq []byte) {
 	}
 	if s.outputLineBufSize > 0 && s.outputCursor > s.outputLineBufSize {
 		s.outputCursor = s.outputLineBufSize
-	}
-}
-
-func (s *Session) applyESCSequenceLocked(seq []byte) {
-	// Common 2-byte ESC sequences used by TUI libraries (e.g. ansi-escapes in Node):
-	// - ESC 7 : DECSC (Save cursor)
-	// - ESC 8 : DECRC (Restore cursor)
-	if len(seq) != 2 || seq[0] != 0x1b {
-		return
-	}
-
-	switch seq[1] {
-	case '7':
-		s.outputSavedCursor = s.outputCursor
-		s.outputCursorSaveActive = true
-	case '8':
-		s.outputCursor = s.outputSavedCursor
-		s.outputCursorSaveActive = false
-		s.outputSuppressWrites = false
 	}
 }
 
@@ -2424,36 +2311,37 @@ func (s *Session) addLog(logType, content string) {
 		return
 	}
 
-	// 日志去重：在时间窗口内相同或相似内容不重复记录
 	now := time.Now()
-	trimmedContent := strings.TrimSpace(cleanContent)
 
-	// 生成去重key：取前50个字符（rune）作为前缀匹配，避免UTF-8截断
-	dedupeKey := logType + ":"
-	runes := []rune(trimmedContent)
-	if len(runes) > 50 {
-		dedupeKey += string(runes[:50])
-	} else {
-		dedupeKey += trimmedContent
-	}
-
-	s.recentLogsMu.Lock()
-	if lastTime, exists := s.recentLogs[dedupeKey]; exists {
-		if now.Sub(lastTime) < s.recentLogsWindow {
-			s.recentLogsMu.Unlock()
-			return // 重复内容，跳过
+	// 日志去重默认仅针对 output/system；input 与 *_raw 需要完整保留，避免丢失 AI CLI 输入输出链路。
+	dedupeEnabled := logType == "output" || logType == "system"
+	if dedupeEnabled {
+		trimmedContent := strings.TrimSpace(cleanContent)
+		dedupeKey := logType + ":"
+		runes := []rune(trimmedContent)
+		if len(runes) > 50 {
+			dedupeKey += string(runes[:50])
+		} else {
+			dedupeKey += trimmedContent
 		}
-	}
-	s.recentLogs[dedupeKey] = now
-	// 清理过期条目（避免内存泄漏）
-	if len(s.recentLogs) > 100 {
-		for k, t := range s.recentLogs {
-			if now.Sub(t) > s.recentLogsWindow {
-				delete(s.recentLogs, k)
+
+		s.recentLogsMu.Lock()
+		if lastTime, exists := s.recentLogs[dedupeKey]; exists {
+			if now.Sub(lastTime) < s.recentLogsWindow {
+				s.recentLogsMu.Unlock()
+				return
 			}
 		}
+		s.recentLogs[dedupeKey] = now
+		if len(s.recentLogs) > 100 {
+			for k, t := range s.recentLogs {
+				if now.Sub(t) > s.recentLogsWindow {
+					delete(s.recentLogs, k)
+				}
+			}
+		}
+		s.recentLogsMu.Unlock()
 	}
-	s.recentLogsMu.Unlock()
 
 	s.logMutex.Lock()
 	s.logBuffer = append(s.logBuffer, LogEntry{
@@ -2472,8 +2360,78 @@ func (s *Session) addLog(logType, content string) {
 	}
 }
 
+func normalizeInputEchoLine(raw string) string {
+	text := strings.TrimSpace(stripANSI(raw))
+	if text == "" {
+		return ""
+	}
+	if isPromptLine(text) {
+		return ""
+	}
+	if match := shellPromptWithCommandCaptureRegex.FindStringSubmatch(text); len(match) == 2 {
+		text = strings.TrimSpace(match[1])
+	}
+	if match := simplePromptWithCommandCaptureRegex.FindStringSubmatch(text); len(match) == 2 {
+		text = strings.TrimSpace(match[1])
+	}
+	if match := aiPromptWithCommandCaptureRegex.FindStringSubmatch(text); len(match) == 2 {
+		text = strings.TrimSpace(match[1])
+	}
+	return text
+}
+
+func (s *Session) rememberRecentInput(line string) {
+	if s == nil {
+		return
+	}
+	normalized := normalizeInputEchoLine(line)
+	if normalized == "" {
+		return
+	}
+
+	now := time.Now()
+	s.recentInputsMu.Lock()
+	s.recentInputs[normalized] = now
+	if len(s.recentInputs) > 300 {
+		for key, ts := range s.recentInputs {
+			if now.Sub(ts) > s.recentInputsWindow {
+				delete(s.recentInputs, key)
+			}
+		}
+	}
+	s.recentInputsMu.Unlock()
+}
+
+func (s *Session) isRecentInputEcho(line string) bool {
+	if s == nil {
+		return false
+	}
+	normalized := normalizeInputEchoLine(line)
+	if normalized == "" {
+		return false
+	}
+
+	now := time.Now()
+	s.recentInputsMu.Lock()
+	defer s.recentInputsMu.Unlock()
+
+	ts, exists := s.recentInputs[normalized]
+	if !exists {
+		return false
+	}
+	if now.Sub(ts) > s.recentInputsWindow {
+		delete(s.recentInputs, normalized)
+		return false
+	}
+	return true
+}
+
 // ANSI转义码正则表达式
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_].*?\x1b\\|\x1b\[[\?]?[0-9;]*[hlm]`)
+
+// AI CLI 会话提取正则
+var cliSessionUUIDRegex = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+var codexSessionFileRegex = regexp.MustCompile(`(?i)(rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl)`)
 
 // Shell提示符正则表达式
 var shellPromptRegex = regexp.MustCompile(`^[\s\r\n]*([a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[~\/][^\$#]*[\$#]\s*)+[\s\r\n]*$`)
@@ -2481,6 +2439,26 @@ var shellPromptRegex = regexp.MustCompile(`^[\s\r\n]*([a-zA-Z0-9_-]+@[a-zA-Z0-9.
 // 提示符+命令行（回显）过滤：例如 "root@host:~/path# ls -la"
 var shellPromptWithCommandRegex = regexp.MustCompile(`^(?:\([^)]+\)\s*)?[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[^$#%]*[$#%]\s+.+$`)
 var simplePromptWithCommandRegex = regexp.MustCompile(`^[$#%>]\s+.+$`)
+var shellPromptWithCommandCaptureRegex = regexp.MustCompile(`^(?:\([^)]+\)\s*)?[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+:[^$#%]*[$#%]\s+(.+)$`)
+var simplePromptWithCommandCaptureRegex = regexp.MustCompile(`^[$#%>]\s+(.+)$`)
+var aiPromptWithCommandCaptureRegex = regexp.MustCompile(`^❯\s+(.+)$`)
+var aiPromptRegex = regexp.MustCompile(`^❯(?:\s+.*)?$`)
+var ephemeralOutputLineRegex = regexp.MustCompile(`^(?:\*|✶|●|•|◦|◉|◌|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|[|/\-\\])$`)
+var aiSpinnerPrefixRegex = regexp.MustCompile(`^[·✢✻✽✶*]+\s*`)
+var aiShortWordSequenceRegex = regexp.MustCompile(`^(?:[a-z]{1,3}\s+){1,}[a-z]{1,3}(?:\.\.\.|…)?$`)
+
+var aiThinkingNoiseKeywords = map[string]struct{}{
+	"imagining":     {},
+	"transfiguring": {},
+	"thinking":      {},
+	"analyzing":     {},
+	"processing":    {},
+	"reasoning":     {},
+	"planning":      {},
+	"drafting":      {},
+	"loading":       {},
+	"working":       {},
+}
 
 // isShellPromptOnly 检查内容是否只是shell提示符
 func isShellPromptOnly(content string) bool {
@@ -2540,6 +2518,9 @@ func isShellPromptOrCommandLine(line string) bool {
 	if trimmed == "" {
 		return true
 	}
+	if isAIPromptLine(trimmed) {
+		return true
+	}
 	if isPromptLine(trimmed) {
 		return true
 	}
@@ -2552,35 +2533,112 @@ func isShellPromptOrCommandLine(line string) bool {
 	return false
 }
 
-// isInternalMarkerLine 检查单行是否包含内部命令标记
-func isInternalMarkerLine(line string) bool {
-	// 直接包含标记
-	if strings.Contains(line, "__ACA_CMD_BEGIN_") ||
-		strings.Contains(line, "__ACA_CMD_END_") ||
-		strings.Contains(line, "ACA_CODE=$?") ||
-		strings.Contains(line, "ACA_EOF_") ||
-		strings.Contains(line, "ACA_TASK_EXIT_CODE:") ||
-		strings.Contains(line, "ACA_TASK_DONE") ||
-		strings.Contains(line, "ACA_TASK_PAUSE") {
-		return true
+func isEphemeralOutputLine(line string) bool {
+	normalized := strings.TrimSpace(stripANSI(line))
+	if normalized == "" {
+		return false
 	}
-	// echo 命令中包含标记
-	if strings.Contains(line, "echo '") {
-		if strings.Contains(line, "__ACA_CMD_") ||
-			strings.Contains(line, "ACA_CODE") ||
-			strings.Contains(line, "ACA_EOF_") ||
-			strings.Contains(line, "ACA_TASK_") {
+	return ephemeralOutputLineRegex.MatchString(normalized)
+}
+
+func isAIPromptLine(line string) bool {
+	normalized := strings.TrimSpace(stripANSI(line))
+	if normalized == "" {
+		return false
+	}
+	return aiPromptRegex.MatchString(normalized)
+}
+
+func isAIThinkingStatusLine(line string) bool {
+	normalized := strings.TrimSpace(stripANSI(line))
+	if normalized == "" {
+		return false
+	}
+	if isAIPromptLine(normalized) {
+		return false
+	}
+	token := normalizeAINoiseToken(normalized)
+	if token == "" {
+		return false
+	}
+	for keyword := range aiThinkingNoiseKeywords {
+		if strings.Contains(token, keyword) {
 			return true
 		}
 	}
-	// bash heredoc 命令
-	if strings.Contains(line, "bash <<'ACA_") {
+	return false
+}
+
+func normalizeAINoiseToken(line string) string {
+	text := strings.TrimSpace(stripANSI(line))
+	if text == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		switch {
+		case unicode.IsLetter(r):
+			b.WriteRune(unicode.ToLower(r))
+		case unicode.IsNumber(r):
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isLikelyAINoiseFragment(line, tokenHint string) bool {
+	normalized := strings.TrimSpace(stripANSI(line))
+	if normalized == "" {
+		return false
+	}
+	if strings.HasPrefix(normalized, "● ") {
+		return false
+	}
+
+	core := strings.TrimSpace(aiSpinnerPrefixRegex.ReplaceAllString(normalized, ""))
+	if core == "" {
 		return true
 	}
-	// unset ACA_CODE
-	if strings.Contains(line, "unset ACA_CODE") {
+
+	lowerCore := strings.ToLower(core)
+	compactToken := normalizeAINoiseToken(lowerCore)
+	compactHint := normalizeAINoiseToken(tokenHint)
+	if compactHint != "" && compactToken != "" {
+		if strings.Contains(compactHint, compactToken) || strings.Contains(compactToken, compactHint) {
+			return true
+		}
+	}
+
+	if strings.Contains(lowerCore, "...") || strings.Contains(core, "…") {
+		if len([]rune(core)) <= 40 {
+			return true
+		}
+	}
+
+	if aiShortWordSequenceRegex.MatchString(lowerCore) {
 		return true
 	}
+
+	words := strings.Fields(lowerCore)
+	if len(words) >= 2 {
+		shortWords := 0
+		for _, word := range words {
+			w := normalizeAINoiseToken(word)
+			if len([]rune(w)) <= 3 {
+				shortWords++
+			}
+		}
+		if shortWords == len(words) {
+			return true
+		}
+	}
+
+	if len(words) == 1 && len([]rune(normalizeAINoiseToken(words[0]))) <= 3 {
+		return true
+	}
+
 	return false
 }
 
@@ -2603,7 +2661,7 @@ func stripANSI(s string) string {
 
 // flushLogs 定期刷新日志到数据库
 func (s *Session) flushLogs() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -2660,81 +2718,4 @@ func (s *Session) doFlushLogs() {
 			utils.Warn("Failed to save terminal logs", zap.Error(err))
 		}
 	}
-}
-
-// FilterInternalMarkers 过滤内部命令标记
-// FilterInternalMarkers removes internal command markers from a terminal byte stream.
-// It is intended for UI rendering only; internal consumers (e.g. RunCommand) may rely on
-// these markers to delimit captured output.
-func FilterInternalMarkers(data []byte) []byte {
-	if len(data) == 0 {
-		return data
-	}
-
-	// 快速检查是否包含标记
-	if !bytes.Contains(data, []byte("__ACA_CMD_")) &&
-		!bytes.Contains(data, []byte("ACA_CODE")) &&
-		!bytes.Contains(data, []byte("ACA_EOF_")) &&
-		!bytes.Contains(data, []byte("ACA_TASK_")) {
-		return data
-	}
-
-	// 使用正则替换方式过滤标记（更可靠，能处理跨行情况）
-	result := data
-
-	// 过滤 echo '__ACA_CMD_BEGIN_xxx__' 命令
-	result = bytes.ReplaceAll(result, []byte("echo '"), []byte("\x00ECHO_"))
-	for {
-		beginIdx := bytes.Index(result, []byte("\x00ECHO___ACA_"))
-		if beginIdx == -1 {
-			break
-		}
-		endIdx := bytes.Index(result[beginIdx:], []byte("'"))
-		if endIdx == -1 {
-			break
-		}
-		// 删除整个 echo 命令
-		endIdx = beginIdx + endIdx + 1
-		// 检查是否有 && 或 ; 后续
-		if endIdx < len(result) && (result[endIdx] == '&' || result[endIdx] == ';' || result[endIdx] == ' ') {
-			// 继续查找行尾
-			lineEnd := bytes.IndexByte(result[endIdx:], '\n')
-			if lineEnd != -1 {
-				endIdx = endIdx + lineEnd + 1
-			} else {
-				endIdx = len(result)
-			}
-		}
-		result = append(result[:beginIdx], result[endIdx:]...)
-	}
-	// 恢复普通 echo
-	result = bytes.ReplaceAll(result, []byte("\x00ECHO_"), []byte("echo '"))
-
-	// 按行过滤
-	lines := bytes.Split(result, []byte("\n"))
-	filtered := make([][]byte, 0, len(lines))
-
-	for _, line := range lines {
-		// 跳过包含内部标记的行
-		if bytes.Contains(line, []byte("__ACA_CMD_BEGIN_")) ||
-			bytes.Contains(line, []byte("__ACA_CMD_END_")) ||
-			bytes.Contains(line, []byte("ACA_CODE=$?")) ||
-			bytes.Contains(line, []byte("ACA_CODE=")) ||
-			bytes.Contains(line, []byte("unset ACA_CODE")) ||
-			bytes.Contains(line, []byte("ACA_EOF_")) ||
-			bytes.Contains(line, []byte("ACA_TASK_EXIT_CODE")) ||
-			bytes.Contains(line, []byte("ACA_TASK_DONE")) ||
-			bytes.Contains(line, []byte("ACA_TASK_PAUSE")) ||
-			bytes.Contains(line, []byte("bash <<'ACA_")) {
-			continue
-		}
-		// 跳过以 echo '__ACA 开头的行
-		trimmed := bytes.TrimSpace(line)
-		if bytes.HasPrefix(trimmed, []byte("echo '")) && bytes.Contains(trimmed, []byte("__ACA_")) {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-
-	return bytes.Join(filtered, []byte("\n"))
 }

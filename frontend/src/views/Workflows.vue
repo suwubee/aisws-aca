@@ -12,7 +12,6 @@
       </n-tabs>
 
       <AIWorkflowChat v-if="activeTab === 'ai'" />
-
       <n-card v-else size="small">
         <div class="toolbar">
           <n-space justify="space-between" align="center" wrap>
@@ -346,7 +345,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   NButton,
   NCard,
@@ -377,10 +377,18 @@ import { useGlobalContextStore } from '@/stores/context'
 import { useIsMobile } from '@/utils/useIsMobile'
 
 const message = useMessage()
+const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const isDemoMode = computed(() => authStore.isDemoMode)
 
-const activeTab = ref('ai')
+function normalizeTab(raw: unknown) {
+  const tab = String(raw || '').trim().toLowerCase()
+  if (tab === 'ai' || tab === 'list') return tab
+  return 'ai'
+}
+
+const activeTab = ref(normalizeTab(route.query.tab))
 const { isMobile } = useIsMobile()
 const contextStore = useGlobalContextStore()
 const loading = ref(false)
@@ -883,8 +891,51 @@ async function remove(workflow: Workflow) {
 }
 
 onMounted(() => {
+  if (String(route.query.tab || '').trim().toLowerCase() === 'history') {
+    void router.replace({
+      path: '/ai-intelligence',
+      query: {
+        ...route.query,
+        tab: 'history'
+      }
+    })
+    return
+  }
   fetchAll()
   fetchProjects()
+})
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (String(tab || '').trim().toLowerCase() === 'history') {
+      void router.replace({
+        path: '/ai-intelligence',
+        query: {
+          ...route.query,
+          tab: 'history'
+        }
+      })
+      return
+    }
+    const next = normalizeTab(tab)
+    if (activeTab.value !== next) {
+      activeTab.value = next
+    }
+  }
+)
+
+watch(activeTab, (tab) => {
+  const normalized = normalizeTab(tab)
+  if (normalizeTab(route.query.tab) === normalized) {
+    return
+  }
+  void router.replace({
+    query: {
+      ...route.query,
+      tab: normalized
+    }
+  })
 })
 </script>
 

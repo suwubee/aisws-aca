@@ -68,24 +68,17 @@ func PerformSetup(ctx context.Context, pre *Preflight, cfg SetupConfig, logf log
 	}
 	log("info", fmt.Sprintf("Wrote %s", pre.EnvPath))
 
-	dbDSN, err := resolveDatabaseDSN(pre, cfg.DatabaseType, cfg.DatabaseDSN)
+	dbPath, err := resolveDatabasePath(pre, cfg.DatabaseDSN)
 	if err != nil {
 		return "", "", err
 	}
-	if cfg.DatabaseType == "" || cfg.DatabaseType == "sqlite" {
-		if dbDSN != "" &&
-			dbDSN != ":memory:" &&
-			!strings.HasPrefix(dbDSN, "file:") &&
-			!strings.Contains(dbDSN, "://") {
-			if err := os.MkdirAll(filepath.Dir(dbDSN), 0755); err != nil {
-				return "", "", err
-			}
-		}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return "", "", err
 	}
 
 	phase("init_db")
-	log("info", fmt.Sprintf("Initializing %s database…", cfg.DatabaseType))
-	if err := seedDatabase(cfg.DatabaseType, dbDSN, cfg, log); err != nil {
+	log("info", "Initializing SQLite database…")
+	if err := seedDatabase(dbPath, cfg, log); err != nil {
 		return "", "", err
 	}
 	log("success", "Database initialized.")
@@ -268,24 +261,9 @@ func validateAndNormalize(cfg *SetupConfig, pre *Preflight, log logFunc) error {
 		}
 	}
 
-	cfg.DatabaseType = strings.TrimSpace(strings.ToLower(cfg.DatabaseType))
-	if cfg.DatabaseType == "" {
-		cfg.DatabaseType = "sqlite"
-	}
-	if cfg.DatabaseType == "postgresql" {
-		cfg.DatabaseType = "postgres"
-	}
-	if cfg.DatabaseType != "sqlite" && cfg.DatabaseType != "postgres" {
-		return fmt.Errorf("invalid database_type: %s", cfg.DatabaseType)
-	}
-
 	cfg.DatabaseDSN = strings.TrimSpace(cfg.DatabaseDSN)
 	if cfg.DatabaseDSN == "" {
-		if cfg.DatabaseType == "sqlite" {
-			cfg.DatabaseDSN = "./data/aca.db"
-		} else {
-			return errors.New("database_dsn is required for postgres")
-		}
+		cfg.DatabaseDSN = "./data/aca.db"
 	}
 
 	cfg.AdminUsername = strings.TrimSpace(cfg.AdminUsername)
@@ -342,7 +320,6 @@ func buildEnvMap(cfg SetupConfig, pre *Preflight) map[string]string {
 	env["SERVER_HOST"] = cfg.ServerHost
 	env["SERVER_PORT"] = fmt.Sprint(cfg.ServerPort)
 	env["DEMO_MODE"] = fmt.Sprint(cfg.DemoMode)
-	env["DATABASE_TYPE"] = cfg.DatabaseType
 	env["DATABASE_DSN"] = cfg.DatabaseDSN
 
 	env["AUTH_USERNAME"] = cfg.AdminUsername
@@ -371,16 +348,11 @@ func buildEnvMap(cfg SetupConfig, pre *Preflight) map[string]string {
 	return env
 }
 
-func resolveDatabaseDSN(pre *Preflight, databaseType string, dsn string) (string, error) {
+func resolveDatabasePath(pre *Preflight, dsn string) (string, error) {
 	raw := strings.TrimSpace(dsn)
 	if raw == "" {
 		return "", errors.New("database dsn is empty")
 	}
-
-	if databaseType == "postgres" || databaseType == "postgresql" {
-		return raw, nil
-	}
-
 	if raw == ":memory:" || strings.HasPrefix(raw, "file:") || strings.Contains(raw, "://") {
 		// Let sqlite driver handle it.
 		return raw, nil
@@ -396,16 +368,10 @@ func resolveDatabaseDSN(pre *Preflight, databaseType string, dsn string) (string
 	return filepath.Clean(filepath.Join(backendDir, raw)), nil
 }
 
-func seedDatabase(databaseType string, dsn string, cfg SetupConfig, log logFunc) error {
-	db, err := model.InitDatabase(model.DBConfig{
-		Type: databaseType,
-		DSN:  dsn,
-	})
-	if err != nil {
+func seedDatabase(dbPath string, cfg SetupConfig, log logFunc) error {
+	if err := model.InitDB(dbPath); err != nil {
 		return err
 	}
-	model.DB = db
-	model.LogDB = db
 	defer func() {
 		if model.DB != nil {
 			if sqlDB, err := model.DB.DB(); err == nil && sqlDB != nil {

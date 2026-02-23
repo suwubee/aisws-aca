@@ -113,17 +113,10 @@
                       <n-popconfirm
                         positive-text="删除"
                         negative-text="取消"
-                        @positive-click="() => { if (isDeletableStatus(task.status)) void deleteTask(task.id) }"
+                        @positive-click="() => { void deleteTask(task.id) }"
                       >
                         <template #trigger>
-                          <n-button
-                            size="small"
-                            type="error"
-                            :disabled="isDemoMode || !isDeletableStatus(task.status)"
-                            :title="isDeletableStatus(task.status) ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除'"
-                          >
-                            删除
-                          </n-button>
+                          <n-button size="small" type="error" :disabled="isDemoMode">删除</n-button>
                         </template>
                         确定删除任务「{{ task.title }}」吗？
                       </n-popconfirm>
@@ -146,6 +139,10 @@
           :scroll-x="900"
           striped
         />
+      </n-tab-pane>
+
+      <n-tab-pane name="history" tab="流程与进度">
+        <WorkflowHistoryList />
       </n-tab-pane>
 
       <n-tab-pane name="projects" tab="项目">
@@ -183,8 +180,10 @@ import { useProjectStore } from '@/stores/project'
 import { useGlobalContextStore } from '@/stores/context'
 import { useTerminalStore } from '@/stores/terminal'
 import { useIsMobile } from '@/utils/useIsMobile'
+import { ensureWorkbenchTerminal } from '@/utils/workbenchTerminal'
 import ProjectPortfolioManager from '@/components/ProjectPortfolioManager.vue'
 import TaskForm from '@/components/TaskForm.vue'
+import WorkflowHistoryList from '@/components/WorkflowHistoryList.vue'
 import type { DataTableColumns } from 'naive-ui'
 
 const router = useRouter()
@@ -198,7 +197,7 @@ const terminalStore = useTerminalStore()
 const isDemoMode = computed(() => authStore.isDemoMode)
 
 const loading = ref(false)
-const activeTab = ref<'tasks' | 'projects' | 'groups'>('tasks')
+const activeTab = ref<'tasks' | 'history' | 'projects' | 'groups'>('tasks')
 const showCreateTask = ref(false)
 const statusFilter = ref<string | null>(null)
 const projectGroupFilter = ref<string | null>(contextStore.projectGroupId)
@@ -264,11 +263,6 @@ function isStartable(task: any) {
     String(task?.initial_prompt || '').trim() ||
     task?.ai_managed
   )
-}
-
-function isDeletableStatus(status: string) {
-  const s = String(status || '').trim().toLowerCase()
-  return s === 'done' || s === 'failed' || s === 'timeout' || s === 'archived'
 }
 
 const projectGroupOptions = computed(() => ([
@@ -374,16 +368,10 @@ const columns: DataTableColumns<any> = [
       }
 
       // 删除按钮
-      const deletable = isDeletableStatus(row.status)
       buttons.push(h(NButton, {
         size: 'small',
         type: 'error',
-        disabled: !deletable,
-        title: deletable ? '删除任务' : '仅已完成/失败/超时/归档的任务可删除',
-        onClick: () => {
-          if (!deletable) return
-          void deleteTask(row.id)
-        }
+        onClick: () => deleteTask(row.id)
       }, { default: () => '删除' }))
 
       return h(NSpace, { size: 'small' }, { default: () => buttons })
@@ -491,6 +479,12 @@ async function handleCreateTask() {
   }
   try {
     const shouldReturn = newTask.return_to_workbench
+    const taskDraft = {
+      title: newTask.title,
+      automation_mode: newTask.automation_mode,
+      server_id: newTask.server_id,
+      target_server_ids: [...newTask.target_server_ids]
+    }
     const created = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
@@ -537,6 +531,25 @@ async function handleCreateTask() {
         }
       } catch {
         message.warning('任务创建成功，但自动启动失败')
+      }
+    }
+
+    if (shouldReturn && !startedTerminalId) {
+      try {
+        const fallbackTerminalId = await ensureWorkbenchTerminal({
+          taskId: created.id,
+          title: taskDraft.title,
+          automationMode: taskDraft.automation_mode,
+          serverId: taskDraft.server_id,
+          targetServerIds: taskDraft.target_server_ids,
+          createTerminal: terminalStore.createTerminal
+        })
+        if (fallbackTerminalId) {
+          startedTerminalId = fallbackTerminalId
+          message.success('已创建工作台终端')
+        }
+      } catch {
+        message.warning('任务已创建，但工作台终端创建失败')
       }
     }
 
@@ -592,7 +605,7 @@ async function deleteTask(taskId: string) {
     await taskStore.deleteTask(taskId)
     message.success('任务已删除')
   } catch (e: any) {
-    message.error(e?.response?.data?.error || e.message || '删除失败')
+    message.error(e.message || '删除失败')
   }
 }
 

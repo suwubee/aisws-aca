@@ -72,42 +72,14 @@ confirm() {
 }
 
 load_env() {
-  if [[ ! -f "$ENV_FILE" ]]; then
+  if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
     return 0
   fi
-
-  # Minimal dotenv parser:
-  # - Preserves spaces in values (e.g. PostgreSQL DSN "host=... user=...").
-  # - Ignores blank lines and comments.
-  # - Supports optional leading "export ".
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    # trim leading/trailing whitespace
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [[ -z "${line}" ]] && continue
-    [[ "${line:0:1}" == "#" ]] && continue
-    [[ "${line}" == "export "* ]] && line="${line#export }"
-    [[ "${line}" != *"="* ]] && continue
-
-    local key value
-    key="${line%%=*}"
-    value="${line#*=}"
-
-    key="${key#"${key%%[![:space:]]*}"}"
-    key="${key%"${key##*[![:space:]]}"}"
-    [[ -z "${key}" ]] && continue
-
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-
-    if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
-      value="${value:1:-1}"
-    elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
-      value="${value:1:-1}"
-    fi
-
-    export "${key}=${value}"
-  done < "$ENV_FILE"
+  return 0
 }
 
 init_env() {
@@ -518,3 +490,4 @@ case "${COMMAND}" in
   demo) run_demo ;;
   *) usage ; exit 1 ;;
 esac
+

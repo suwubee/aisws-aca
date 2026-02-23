@@ -9,22 +9,6 @@
   >
     <n-spin :show="loading">
       <n-form label-placement="left" label-width="120">
-        <n-form-item label="终端体验">
-          <n-space align="center" wrap>
-            <n-input-number
-              v-model:value="autoScrollSeconds"
-              :min="0"
-              :max="3600"
-              :step="1"
-              style="width: 200px"
-              placeholder="0=关闭"
-            />
-            <n-text depth="3">每隔 N 秒自动下拉到底部</n-text>
-          </n-space>
-        </n-form-item>
-
-        <n-divider />
-
         <n-form-item label="规则模式">
           <n-radio-group v-model:value="ruleMode">
             <n-space vertical>
@@ -142,10 +126,9 @@
 import { ref, reactive, watch, computed } from 'vue'
 import {
   NModal, NForm, NFormItem, NRadioGroup, NRadio, NSpace, NText, NButton,
-  NDivider, NSelect, NInput, NDynamicTags, NCheckbox, NSpin, NAlert, NInputNumber, useMessage
+  NDivider, NSelect, NInput, NDynamicTags, NCheckbox, NSpin, NAlert, useMessage
 } from 'naive-ui'
 import { automationApi, type RuleSet } from '@/api'
-import { useTerminalUiStore } from '@/stores/terminalUi'
 
 interface AIProvider {
   id: string
@@ -168,8 +151,6 @@ const message = useMessage()
 const loading = ref(false)
 const saving = ref(false)
 const providers = ref<AIProvider[]>([])
-const terminalUiStore = useTerminalUiStore()
-const autoScrollSeconds = ref(0)
 
 const ruleMode = ref('none')
 const hasTask = ref(false)
@@ -221,7 +202,6 @@ async function fetchConfig() {
 
   loading.value = true
   try {
-    autoScrollSeconds.value = terminalUiStore.getAutoScrollSeconds(props.terminalId)
     const { data } = await automationApi.getTerminalRuleMode(props.terminalId)
 
     ruleMode.value = data.rule_mode || 'none'
@@ -318,7 +298,6 @@ async function saveConfig() {
       })
     }
 
-    terminalUiStore.setAutoScrollSeconds(props.terminalId, autoScrollSeconds.value)
     message.success('配置已保存')
     emit('saved')
     emit('close')

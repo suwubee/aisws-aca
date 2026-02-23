@@ -51,6 +51,7 @@ import { useTerminalStore } from '@/stores/terminal'
 import { useProjectStore } from '@/stores/project'
 import { useGlobalContextStore } from '@/stores/context'
 import { useIsMobile } from '@/utils/useIsMobile'
+import { ensureWorkbenchTerminal } from '@/utils/workbenchTerminal'
 import Kanban from '@/components/Kanban.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
@@ -156,6 +157,12 @@ async function handleCreateTask() {
   }
   try {
     const shouldReturn = newTask.return_to_workbench
+    const taskDraft = {
+      title: newTask.title,
+      automation_mode: newTask.automation_mode,
+      server_id: newTask.server_id,
+      target_server_ids: [...newTask.target_server_ids]
+    }
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
@@ -179,6 +186,7 @@ async function handleCreateTask() {
     message.success('任务创建成功')
     showCreateTask.value = false
 
+    let startedTerminalId = ''
     const canAutoStart = newTask.auto_start && (() => {
       if (newTask.automation_mode === 'none') return false
       if (newTask.automation_mode === 'script') return Boolean(newTask.script?.trim())
@@ -190,6 +198,7 @@ async function handleCreateTask() {
       try {
         const result = await taskStore.startTask(task.id)
         if (result.terminal_id) {
+          startedTerminalId = String(result.terminal_id || '').trim()
           await terminalStore.fetchTerminals()
           terminalStore.setActiveTerminal(result.terminal_id)
         }
@@ -203,6 +212,25 @@ async function handleCreateTask() {
       }
     }
 
+    if (shouldReturn && !startedTerminalId) {
+      try {
+        const fallbackTerminalId = await ensureWorkbenchTerminal({
+          taskId: task.id,
+          title: taskDraft.title,
+          automationMode: taskDraft.automation_mode,
+          serverId: taskDraft.server_id,
+          targetServerIds: taskDraft.target_server_ids,
+          createTerminal: terminalStore.createTerminal
+        })
+        if (fallbackTerminalId) {
+          startedTerminalId = fallbackTerminalId
+          message.success('已创建工作台终端')
+        }
+      } catch {
+        message.warning('任务已创建，但工作台终端创建失败')
+      }
+    }
+
     Object.assign(newTask, {
       title: '', description: '', remark: '', priority: 1, server_id: null, project_id: null,
       automation_mode: 'none', target_server_ids: [], script: '',
@@ -212,7 +240,11 @@ async function handleCreateTask() {
     })
 
     if (shouldReturn) {
-      router.push('/')
+      if (startedTerminalId) {
+        router.push({ path: '/', query: { terminal: startedTerminalId } })
+      } else {
+        router.push('/')
+      }
     }
   } catch (e: any) {
     message.error(e.message || '创建失败')

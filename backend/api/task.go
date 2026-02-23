@@ -2,14 +2,11 @@ package api
 
 import (
 	"errors"
+	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/model"
-	"github.com/ai-coding-assistant/service/clisession"
-	sshservice "github.com/ai-coding-assistant/service/ssh"
 	"github.com/ai-coding-assistant/service/task"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/service/workflow"
@@ -21,35 +18,12 @@ import (
 type TaskController struct {
 	automationService *task.AutomationService
 	aiWorkflowEngine  *workflow.AIWorkflowEngine
-	terminalManager   *terminal.Manager
-
-	sshMu      sync.Mutex
-	sshManager clisession.SSHExecutor
 }
 
 func NewTaskController(tm *terminal.Manager) *TaskController {
 	return &TaskController{
 		automationService: task.NewAutomationService(tm),
-		terminalManager:   tm,
 	}
-}
-
-func (ctrl *TaskController) getSSHManager() (clisession.SSHExecutor, error) {
-	ctrl.sshMu.Lock()
-	defer ctrl.sshMu.Unlock()
-
-	if ctrl.sshManager != nil {
-		return ctrl.sshManager, nil
-	}
-
-	cfg := config.Load()
-	masterKey := strings.TrimSpace(cfg.Auth.JWTSecret)
-	if masterKey == "" {
-		return nil, errors.New("missing ssh master key")
-	}
-
-	ctrl.sshManager = sshservice.NewSSHManager(masterKey)
-	return ctrl.sshManager, nil
 }
 
 func (ctrl *TaskController) SetAIWorkflowEngine(engine *workflow.AIWorkflowEngine) {
@@ -104,7 +78,6 @@ type UpdateTaskRequest struct {
 	AIPrompt        *string `json:"ai_prompt"`
 	AIEndCondition  *string `json:"ai_end_condition"`
 	AIErrorHandling *string `json:"ai_error_handling"`
-	AIStatus        *string `json:"ai_status"`
 }
 
 type MoveTaskRequest struct {
@@ -132,6 +105,58 @@ type TaskListItem struct {
 	model.Task
 	Server  *TaskServerInfo  `json:"server,omitempty"`
 	Project *TaskProjectInfo `json:"project,omitempty"`
+}
+
+type TaskHistoryWorkflowSession struct {
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	WorkflowID  string     `json:"workflow_id"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+type TaskHistoryItem struct {
+	Task            TaskListItem                `json:"task"`
+	WorkflowSession *TaskHistoryWorkflowSession `json:"workflow_session,omitempty"`
+	LatestExecution *model.CLIExecution         `json:"latest_execution,omitempty"`
+}
+
+type TaskHistoryStatsOverview struct {
+	Total    int64            `json:"total"`
+	ByStatus map[string]int64 `json:"by_status"`
+	ByMode   map[string]int64 `json:"by_mode"`
+}
+
+type TaskHistoryStatsGroup struct {
+	GroupID   string           `json:"group_id"`
+	GroupName string           `json:"group_name"`
+	Total     int64            `json:"total"`
+	ByStatus  map[string]int64 `json:"by_status"`
+	ByMode    map[string]int64 `json:"by_mode"`
+}
+
+type TaskHistoryStatsProject struct {
+	ProjectID   string           `json:"project_id"`
+	ProjectName string           `json:"project_name"`
+	GroupID     string           `json:"group_id"`
+	GroupName   string           `json:"group_name"`
+	Total       int64            `json:"total"`
+	ByStatus    map[string]int64 `json:"by_status"`
+	ByMode      map[string]int64 `json:"by_mode"`
+}
+
+type TaskHistoryStats struct {
+	Overview  TaskHistoryStatsOverview  `json:"overview"`
+	ByGroup   []TaskHistoryStatsGroup   `json:"by_group"`
+	ByProject []TaskHistoryStatsProject `json:"by_project"`
+}
+
+type taskHistoryFilter struct {
+	ProjectID      string
+	GroupID        string
+	Keyword        string
+	Status         string
+	AutomationMode string
 }
 
 var allowedTaskStatuses = map[string]struct{}{
@@ -163,7 +188,7 @@ var allowedAutomationModes = map[string]struct{}{
 func normalizeAutomationMode(value string) (string, bool) {
 	s := strings.ToLower(strings.TrimSpace(value))
 	if s == "" {
-		return "none", true // 默认为"仅记录"模式
+		return "cli", true
 	}
 	_, ok := allowedAutomationModes[s]
 	return s, ok
@@ -182,6 +207,30 @@ func normalizeCLIType(value string) (string, bool) {
 	}
 	_, ok := allowedCLITypes[s]
 	return s, ok
+}
+
+func findLatestExecutionID(taskID, workflowSessionID string) string {
+	if model.DB == nil {
+		return ""
+	}
+	tid := strings.TrimSpace(taskID)
+	sid := strings.TrimSpace(workflowSessionID)
+	if tid == "" && sid == "" {
+		return ""
+	}
+
+	query := model.DB.Model(&model.CLIExecution{})
+	if sid != "" {
+		query = query.Where("workflow_session_id = ?", sid)
+	} else {
+		query = query.Where("task_id = ?", tid)
+	}
+
+	var item model.CLIExecution
+	if err := query.Order("updated_at desc").First(&item).Error; err != nil {
+		return ""
+	}
+	return strings.TrimSpace(item.ID)
 }
 
 func taskStatusGroup(status string) string {
@@ -216,17 +265,12 @@ func (ctrl *TaskController) CreateTask(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
 	}
 
-	// AI托管任务默认状态为进行中
-	if req.AIManaged && status == "todo" {
-		status = "in_progress"
-	}
-
 	automationMode, ok := normalizeAutomationMode(req.AutomationMode)
 	if !ok {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid automation_mode"})
 	}
 
-	cliType := ""
+	cliType := "claude"
 	if automationMode == "cli" {
 		if normalized, ok := normalizeCLIType(req.CLIType); ok {
 			cliType = normalized
@@ -551,8 +595,21 @@ func (ctrl *TaskController) GetTaskDetail(c *fiber.Ctx) error {
 	// 获取关联的日志（最近100条）
 	var logs []model.Log
 	if len(terminalIDs) > 0 {
-		model.DB.Where("terminal_id IN ?", terminalIDs).
-			Order("created_at desc").Limit(100).Find(&logs)
+		nativeTypes := []string{"ai_input_native", "ai_output_native"}
+		var nativeCount int64
+		model.DB.Model(&model.Log{}).
+			Where("terminal_id IN ?", terminalIDs).
+			Where("log_type IN ?", nativeTypes).
+			Count(&nativeCount)
+		if nativeCount > 0 {
+			model.DB.Where("terminal_id IN ?", terminalIDs).
+				Where("log_type IN ?", []string{"ai_input_native", "ai_output_native", "system"}).
+				Order("created_at desc").Limit(100).Find(&logs)
+		} else {
+			model.DB.Where("terminal_id IN ?", terminalIDs).
+				Where("log_type NOT IN ?", []string{"input_raw", "output_raw"}).
+				Order("created_at desc").Limit(100).Find(&logs)
+		}
 	}
 
 	// 获取关联的审批记录
@@ -781,13 +838,6 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	if req.AIErrorHandling != nil {
 		updates["ai_error_handling"] = *req.AIErrorHandling
 	}
-	if req.AIStatus != nil {
-		updates["ai_status"] = *req.AIStatus
-	}
-
-	// 检查是否中途启用AI托管，需要启动监控
-	aiManagedChanged := req.AIManaged != nil && *req.AIManaged && !task.AIManaged
-	wasRunning := task.Status == "in_progress"
 
 	if len(updates) > 0 {
 		updates["updated_at"] = time.Now()
@@ -795,72 +845,19 @@ func (ctrl *TaskController) UpdateTask(c *fiber.Ctx) error {
 	}
 
 	model.DB.First(&task, "id = ?", id)
-
-	// 若任务关键字段变化（启用AI托管/切换automation_mode/切换cli_type），刷新已绑定终端的内存态元数据。
-	// 目的：在“任务进行中/从终端面板开启AI托管”的场景下，终端侧可以基于任务选择的CLI类型，用输出锚点判断进入/退出CLI模式。
-	shouldRefreshTerminal := aiManagedChanged || req.AutomationMode != nil || req.CLIType != nil
-	if shouldRefreshTerminal && ctrl.terminalManager != nil {
-		terminalID := ""
-		if task.ActiveTerminalID != nil {
-			terminalID = strings.TrimSpace(*task.ActiveTerminalID)
-		}
-		if terminalID != "" {
-			taskIDCopy := task.ID
-			_ = ctrl.terminalManager.LinkTask(terminalID, &taskIDCopy)
-		}
-	}
-
-	// 如果中途启用AI托管，且任务正在进行中，启动监控
-	if aiManagedChanged && wasRunning {
-		terminalID := ""
-		if task.ActiveTerminalID != nil {
-			terminalID = strings.TrimSpace(*task.ActiveTerminalID)
-		}
-		if terminalID != "" && ctrl.automationService != nil {
-			ctrl.automationService.StartMonitoring(task.ID, terminalID)
-		}
-	}
-
 	return c.JSON(fiber.Map{"item": task})
 }
 
 // DeleteTask 删除任务
 func (ctrl *TaskController) DeleteTask(c *fiber.Ctx) error {
-	id := strings.TrimSpace(c.Params("id"))
-	if id == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
+	id := c.Params("id")
 
-	var taskModel model.Task
-	if err := model.DB.Select("id", "status").First(&taskModel, "id = ?", id).Error; err != nil {
+	result := model.DB.Delete(&model.Task{}, "id = ?", id)
+	if result.RowsAffected == 0 {
 		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
 	}
 
-	status := strings.ToLower(strings.TrimSpace(taskModel.Status))
-	deletable := status == "done" || status == "failed" || status == "timeout" || status == "archived"
-	if !deletable {
-		return c.Status(409).JSON(fiber.Map{
-			"error": "Task can only be deleted when status is done/failed/timeout/archived",
-		})
-	}
-
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		// PostgreSQL 下终端会话存在外键约束：删除任务前先解绑终端，避免误报 404
-		if err := tx.Exec(`UPDATE terminal_sessions SET task_id = NULL WHERE task_id = ?`, id).Error; err != nil {
-			return err
-		}
-		// 删除评论（仅绑定 task_id，删除后无意义且无法置空）
-		_ = tx.Delete(&model.Comment{}, "task_id = ?", id).Error
-		// 最后删除任务
-		if err := tx.Delete(&model.Task{}, "id = ?", id).Error; err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-	}
-
-	return c.JSON(fiber.Map{"message": "Task deleted", "task_id": id})
+	return c.JSON(fiber.Map{"message": "Task deleted"})
 }
 
 // MoveTask 移动任务（拖拽）
@@ -942,6 +939,497 @@ func (ctrl *TaskController) GetTasksByStatus(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": grouped})
 }
 
+func loadWorkflowSessionsByID(sessionIDs []string) (map[string]*TaskHistoryWorkflowSession, error) {
+	result := map[string]*TaskHistoryWorkflowSession{}
+	if len(sessionIDs) == 0 {
+		return result, nil
+	}
+
+	var rows []model.AIWorkflowSession
+	if err := model.DB.
+		Select("id", "status", "workflow_id", "started_at", "completed_at").
+		Where("id IN ?", sessionIDs).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
+		id := strings.TrimSpace(row.ID)
+		if id == "" {
+			continue
+		}
+		result[id] = &TaskHistoryWorkflowSession{
+			ID:          id,
+			Status:      row.Status,
+			WorkflowID:  row.WorkflowID,
+			StartedAt:   row.StartedAt,
+			CompletedAt: row.CompletedAt,
+		}
+	}
+	return result, nil
+}
+
+func loadLatestExecutionByTaskID(taskIDs []string) (map[string]*model.CLIExecution, error) {
+	result := map[string]*model.CLIExecution{}
+	if len(taskIDs) == 0 {
+		return result, nil
+	}
+
+	subQuery := model.DB.Model(&model.CLIExecution{}).
+		Select("task_id, MAX(updated_at) AS max_updated_at").
+		Where("task_id IN ?", taskIDs).
+		Group("task_id")
+
+	var rows []model.CLIExecution
+	if err := model.DB.Model(&model.CLIExecution{}).
+		Joins("JOIN (?) latest ON latest.task_id = cli_executions.task_id AND latest.max_updated_at = cli_executions.updated_at", subQuery).
+		Order("cli_executions.updated_at DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	for i := range rows {
+		if rows[i].TaskID == nil {
+			continue
+		}
+		taskID := strings.TrimSpace(*rows[i].TaskID)
+		if taskID == "" {
+			continue
+		}
+		if _, exists := result[taskID]; exists {
+			continue
+		}
+		item := rows[i]
+		result[taskID] = &item
+	}
+
+	return result, nil
+}
+
+func applyTaskHistoryFilter(query *gorm.DB, filter taskHistoryFilter, projectsJoined bool) *gorm.DB {
+	if filter.ProjectID != "" {
+		query = query.Where("tasks.project_id = ?", filter.ProjectID)
+	}
+	if filter.GroupID != "" {
+		if !projectsJoined {
+			query = query.Joins("JOIN projects ON projects.id = tasks.project_id")
+		}
+		query = query.Where("projects.group_id = ?", filter.GroupID)
+	}
+	if filter.Status != "" {
+		query = query.Where("tasks.status = ?", filter.Status)
+	}
+	if filter.AutomationMode != "" {
+		query = query.Where("tasks.automation_mode = ?", filter.AutomationMode)
+	}
+	if filter.Keyword != "" {
+		like := "%" + filter.Keyword + "%"
+		query = query.Where(
+			"(tasks.id LIKE ? OR tasks.title LIKE ? OR tasks.description LIKE ? OR tasks.remark LIKE ?)",
+			like, like, like, like,
+		)
+	}
+	return query
+}
+
+func buildTaskHistoryStats(filter taskHistoryFilter) (*TaskHistoryStats, error) {
+	stats := &TaskHistoryStats{
+		Overview: TaskHistoryStatsOverview{
+			ByStatus: map[string]int64{},
+			ByMode:   map[string]int64{},
+		},
+		ByGroup:   []TaskHistoryStatsGroup{},
+		ByProject: []TaskHistoryStatsProject{},
+	}
+
+	baseQuery := applyTaskHistoryFilter(model.DB.Model(&model.Task{}), filter, false)
+	if err := baseQuery.Count(&stats.Overview.Total).Error; err != nil {
+		return nil, err
+	}
+
+	var statusRows []struct {
+		Status string `gorm:"column:status"`
+		Count  int64  `gorm:"column:count"`
+	}
+	if err := applyTaskHistoryFilter(model.DB.Model(&model.Task{}), filter, false).
+		Select("tasks.status AS status, COUNT(*) AS count").
+		Group("tasks.status").
+		Scan(&statusRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range statusRows {
+		key := strings.TrimSpace(row.Status)
+		if key == "" {
+			key = "unknown"
+		}
+		stats.Overview.ByStatus[key] = row.Count
+	}
+
+	var modeRows []struct {
+		Mode  string `gorm:"column:mode"`
+		Count int64  `gorm:"column:count"`
+	}
+	if err := applyTaskHistoryFilter(model.DB.Model(&model.Task{}), filter, false).
+		Select("tasks.automation_mode AS mode, COUNT(*) AS count").
+		Group("tasks.automation_mode").
+		Scan(&modeRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range modeRows {
+		mode := strings.TrimSpace(row.Mode)
+		if mode == "" {
+			mode = "cli"
+		}
+		stats.Overview.ByMode[mode] = row.Count
+	}
+
+	groupByKey := map[string]*TaskHistoryStatsGroup{}
+	groupKey := func(groupID, groupName string) string { return groupID + "\x00" + groupName }
+
+	var groupStatusRows []struct {
+		GroupID   string `gorm:"column:group_id"`
+		GroupName string `gorm:"column:group_name"`
+		Status    string `gorm:"column:status"`
+		Count     int64  `gorm:"column:count"`
+	}
+	groupStatusQuery := model.DB.Model(&model.Task{}).
+		Joins("LEFT JOIN projects ON projects.id = tasks.project_id").
+		Joins("LEFT JOIN project_groups ON project_groups.id = projects.group_id")
+	groupStatusQuery = applyTaskHistoryFilter(groupStatusQuery, filter, true)
+	if err := groupStatusQuery.
+		Select(
+			"COALESCE(projects.group_id, '') AS group_id, " +
+				"COALESCE(project_groups.name, '未分组') AS group_name, " +
+				"tasks.status AS status, COUNT(*) AS count",
+		).
+		Group("projects.group_id, project_groups.name, tasks.status").
+		Scan(&groupStatusRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range groupStatusRows {
+		gid := strings.TrimSpace(row.GroupID)
+		gname := strings.TrimSpace(row.GroupName)
+		if gname == "" {
+			gname = "未分组"
+		}
+		key := groupKey(gid, gname)
+		entry, ok := groupByKey[key]
+		if !ok {
+			entry = &TaskHistoryStatsGroup{
+				GroupID:   gid,
+				GroupName: gname,
+				ByStatus:  map[string]int64{},
+				ByMode:    map[string]int64{},
+			}
+			groupByKey[key] = entry
+		}
+		status := strings.TrimSpace(row.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		entry.ByStatus[status] += row.Count
+		entry.Total += row.Count
+	}
+
+	var groupModeRows []struct {
+		GroupID   string `gorm:"column:group_id"`
+		GroupName string `gorm:"column:group_name"`
+		Mode      string `gorm:"column:mode"`
+		Count     int64  `gorm:"column:count"`
+	}
+	groupModeQuery := model.DB.Model(&model.Task{}).
+		Joins("LEFT JOIN projects ON projects.id = tasks.project_id").
+		Joins("LEFT JOIN project_groups ON project_groups.id = projects.group_id")
+	groupModeQuery = applyTaskHistoryFilter(groupModeQuery, filter, true)
+	if err := groupModeQuery.
+		Select(
+			"COALESCE(projects.group_id, '') AS group_id, " +
+				"COALESCE(project_groups.name, '未分组') AS group_name, " +
+				"tasks.automation_mode AS mode, COUNT(*) AS count",
+		).
+		Group("projects.group_id, project_groups.name, tasks.automation_mode").
+		Scan(&groupModeRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range groupModeRows {
+		gid := strings.TrimSpace(row.GroupID)
+		gname := strings.TrimSpace(row.GroupName)
+		if gname == "" {
+			gname = "未分组"
+		}
+		key := groupKey(gid, gname)
+		entry, ok := groupByKey[key]
+		if !ok {
+			entry = &TaskHistoryStatsGroup{
+				GroupID:   gid,
+				GroupName: gname,
+				ByStatus:  map[string]int64{},
+				ByMode:    map[string]int64{},
+			}
+			groupByKey[key] = entry
+		}
+		mode := strings.TrimSpace(row.Mode)
+		if mode == "" {
+			mode = "cli"
+		}
+		entry.ByMode[mode] += row.Count
+	}
+
+	for _, entry := range groupByKey {
+		stats.ByGroup = append(stats.ByGroup, *entry)
+	}
+	sort.Slice(stats.ByGroup, func(i, j int) bool {
+		if stats.ByGroup[i].Total == stats.ByGroup[j].Total {
+			return stats.ByGroup[i].GroupName < stats.ByGroup[j].GroupName
+		}
+		return stats.ByGroup[i].Total > stats.ByGroup[j].Total
+	})
+
+	projectByKey := map[string]*TaskHistoryStatsProject{}
+	projectKey := func(projectID, projectName, groupID, groupName string) string {
+		return projectID + "\x00" + projectName + "\x00" + groupID + "\x00" + groupName
+	}
+
+	var projectStatusRows []struct {
+		ProjectID   string `gorm:"column:project_id"`
+		ProjectName string `gorm:"column:project_name"`
+		GroupID     string `gorm:"column:group_id"`
+		GroupName   string `gorm:"column:group_name"`
+		Status      string `gorm:"column:status"`
+		Count       int64  `gorm:"column:count"`
+	}
+	projectStatusQuery := model.DB.Model(&model.Task{}).
+		Joins("LEFT JOIN projects ON projects.id = tasks.project_id").
+		Joins("LEFT JOIN project_groups ON project_groups.id = projects.group_id")
+	projectStatusQuery = applyTaskHistoryFilter(projectStatusQuery, filter, true)
+	if err := projectStatusQuery.
+		Select(
+			"COALESCE(tasks.project_id, '') AS project_id, " +
+				"COALESCE(projects.name, '未绑定项目') AS project_name, " +
+				"COALESCE(projects.group_id, '') AS group_id, " +
+				"COALESCE(project_groups.name, '未分组') AS group_name, " +
+				"tasks.status AS status, COUNT(*) AS count",
+		).
+		Group("tasks.project_id, projects.name, projects.group_id, project_groups.name, tasks.status").
+		Scan(&projectStatusRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range projectStatusRows {
+		pid := strings.TrimSpace(row.ProjectID)
+		pname := strings.TrimSpace(row.ProjectName)
+		gid := strings.TrimSpace(row.GroupID)
+		gname := strings.TrimSpace(row.GroupName)
+		if pname == "" {
+			pname = "未绑定项目"
+		}
+		if gname == "" {
+			gname = "未分组"
+		}
+		key := projectKey(pid, pname, gid, gname)
+		entry, ok := projectByKey[key]
+		if !ok {
+			entry = &TaskHistoryStatsProject{
+				ProjectID:   pid,
+				ProjectName: pname,
+				GroupID:     gid,
+				GroupName:   gname,
+				ByStatus:    map[string]int64{},
+				ByMode:      map[string]int64{},
+			}
+			projectByKey[key] = entry
+		}
+		status := strings.TrimSpace(row.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		entry.ByStatus[status] += row.Count
+		entry.Total += row.Count
+	}
+
+	var projectModeRows []struct {
+		ProjectID   string `gorm:"column:project_id"`
+		ProjectName string `gorm:"column:project_name"`
+		GroupID     string `gorm:"column:group_id"`
+		GroupName   string `gorm:"column:group_name"`
+		Mode        string `gorm:"column:mode"`
+		Count       int64  `gorm:"column:count"`
+	}
+	projectModeQuery := model.DB.Model(&model.Task{}).
+		Joins("LEFT JOIN projects ON projects.id = tasks.project_id").
+		Joins("LEFT JOIN project_groups ON project_groups.id = projects.group_id")
+	projectModeQuery = applyTaskHistoryFilter(projectModeQuery, filter, true)
+	if err := projectModeQuery.
+		Select(
+			"COALESCE(tasks.project_id, '') AS project_id, " +
+				"COALESCE(projects.name, '未绑定项目') AS project_name, " +
+				"COALESCE(projects.group_id, '') AS group_id, " +
+				"COALESCE(project_groups.name, '未分组') AS group_name, " +
+				"tasks.automation_mode AS mode, COUNT(*) AS count",
+		).
+		Group("tasks.project_id, projects.name, projects.group_id, project_groups.name, tasks.automation_mode").
+		Scan(&projectModeRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range projectModeRows {
+		pid := strings.TrimSpace(row.ProjectID)
+		pname := strings.TrimSpace(row.ProjectName)
+		gid := strings.TrimSpace(row.GroupID)
+		gname := strings.TrimSpace(row.GroupName)
+		if pname == "" {
+			pname = "未绑定项目"
+		}
+		if gname == "" {
+			gname = "未分组"
+		}
+		key := projectKey(pid, pname, gid, gname)
+		entry, ok := projectByKey[key]
+		if !ok {
+			entry = &TaskHistoryStatsProject{
+				ProjectID:   pid,
+				ProjectName: pname,
+				GroupID:     gid,
+				GroupName:   gname,
+				ByStatus:    map[string]int64{},
+				ByMode:      map[string]int64{},
+			}
+			projectByKey[key] = entry
+		}
+		mode := strings.TrimSpace(row.Mode)
+		if mode == "" {
+			mode = "cli"
+		}
+		entry.ByMode[mode] += row.Count
+	}
+
+	for _, entry := range projectByKey {
+		stats.ByProject = append(stats.ByProject, *entry)
+	}
+	sort.Slice(stats.ByProject, func(i, j int) bool {
+		if stats.ByProject[i].Total == stats.ByProject[j].Total {
+			return stats.ByProject[i].ProjectName < stats.ByProject[j].ProjectName
+		}
+		return stats.ByProject[i].Total > stats.ByProject[j].Total
+	})
+
+	return stats, nil
+}
+
+// ListTaskHistory 获取任务历史清单（任务+工作流状态+最新CLI执行）
+func (ctrl *TaskController) ListTaskHistory(c *fiber.Ctx) error {
+	projectID := strings.TrimSpace(c.Query("project_id"))
+	groupID := strings.TrimSpace(c.Query("project_group_id"))
+	if groupID == "" {
+		groupID = strings.TrimSpace(c.Query("group_id"))
+	}
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	status := strings.TrimSpace(c.Query("status"))
+	automationMode := strings.TrimSpace(c.Query("automation_mode"))
+
+	if status != "" {
+		normalizedStatus, ok := normalizeTaskStatus(status)
+		if !ok {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid status"})
+		}
+		status = normalizedStatus
+	}
+	if automationMode != "" {
+		normalizedMode, ok := normalizeAutomationMode(automationMode)
+		if !ok {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid automation_mode"})
+		}
+		automationMode = normalizedMode
+	}
+
+	limit := parseBoundedInt(c.Query("limit"), 100, 1, 500)
+	offset := parseBoundedInt(c.Query("offset"), 0, 0, 1000000)
+
+	filter := taskHistoryFilter{
+		ProjectID:      projectID,
+		GroupID:        groupID,
+		Keyword:        keyword,
+		Status:         status,
+		AutomationMode: automationMode,
+	}
+
+	query := applyTaskHistoryFilter(model.DB.Model(&model.Task{}), filter, false)
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query tasks"})
+	}
+
+	var tasks []model.Task
+	if err := query.Order("tasks.updated_at DESC").Offset(offset).Limit(limit).Find(&tasks).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
+	}
+
+	items, err := enrichTasks(tasks)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list tasks"})
+	}
+
+	taskIDs := make([]string, 0, len(items))
+	sessionIDSet := map[string]struct{}{}
+	for _, item := range items {
+		taskID := strings.TrimSpace(item.ID)
+		if taskID != "" {
+			taskIDs = append(taskIDs, taskID)
+		}
+		sid := strings.TrimSpace(item.AgentSessionID)
+		if sid != "" {
+			sessionIDSet[sid] = struct{}{}
+		}
+	}
+
+	sessionIDs := make([]string, 0, len(sessionIDSet))
+	for sid := range sessionIDSet {
+		sessionIDs = append(sessionIDs, sid)
+	}
+
+	sessionByID, err := loadWorkflowSessionsByID(sessionIDs)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to load workflow sessions"})
+	}
+
+	latestExecByTaskID, err := loadLatestExecutionByTaskID(taskIDs)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to load CLI executions"})
+	}
+
+	stats, err := buildTaskHistoryStats(filter)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to build task history stats"})
+	}
+
+	rows := make([]TaskHistoryItem, 0, len(items))
+	for _, item := range items {
+		row := TaskHistoryItem{
+			Task: item,
+		}
+		if sid := strings.TrimSpace(item.AgentSessionID); sid != "" {
+			row.WorkflowSession = sessionByID[sid]
+		}
+		if exec, ok := latestExecByTaskID[item.ID]; ok {
+			row.LatestExecution = exec
+		}
+		rows = append(rows, row)
+	}
+
+	return c.JSON(fiber.Map{
+		"items":            rows,
+		"count":            len(rows),
+		"total":            total,
+		"limit":            limit,
+		"offset":           offset,
+		"project_id":       projectID,
+		"project_group_id": groupID,
+		"status":           status,
+		"automation_mode":  automationMode,
+		"keyword":          keyword,
+		"stats":            stats,
+	})
+}
+
 // StartTask 启动自动化任务
 func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -961,22 +1449,24 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": "Target server is required (local must be configured in Servers)"})
 		}
 
-		// 幂等：任务进行中/暂停且已有会话时直接返回（防止历史数据出现 status=in_progress 但 session 为空导致无法启动）
-		sessionID := strings.TrimSpace(taskModel.AgentSessionID)
-		if (taskModel.Status == "in_progress" || taskModel.Status == "paused") && sessionID != "" {
+		// 幂等：任务进行中/暂停时直接返回已有会话
+		if taskModel.Status == "in_progress" || taskModel.Status == "paused" {
+			sessionID := strings.TrimSpace(taskModel.AgentSessionID)
 			needsUserAction := taskModel.Status == "paused"
 			userHint := ""
 			terminalID := ""
 			terminalIDs := []string{}
 
-			if session, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && session != nil {
-				if strings.EqualFold(strings.TrimSpace(session.Status), "paused") {
-					needsUserAction = true
-					userHint = strings.TrimSpace(session.Summary)
-				}
-				if session.Context != nil {
-					if v, ok := session.Context["terminal_id"].(string); ok {
-						terminalID = strings.TrimSpace(v)
+			if sessionID != "" {
+				if session, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && session != nil {
+					if strings.EqualFold(strings.TrimSpace(session.Status), "paused") {
+						needsUserAction = true
+						userHint = strings.TrimSpace(session.Summary)
+					}
+					if session.Context != nil {
+						if v, ok := session.Context["terminal_id"].(string); ok {
+							terminalID = strings.TrimSpace(v)
+						}
 					}
 				}
 			}
@@ -996,6 +1486,7 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 				"message":           "Task already running",
 				"task":              taskModel,
 				"agent_session_id":  sessionID,
+				"execution_id":      findLatestExecutionID(id, sessionID),
 				"terminal_id":       terminalID,
 				"terminal_ids":      terminalIDs,
 				"work_dir":          taskModel.WorkDir,
@@ -1033,6 +1524,7 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 			"message":           "Task started",
 			"task":              taskModel,
 			"agent_session_id":  session.ID,
+			"execution_id":      findLatestExecutionID(id, session.ID),
 			"terminal_id":       terminalID,
 			"terminal_ids":      terminalIDs,
 			"work_dir":          taskModel.WorkDir,
@@ -1129,6 +1621,7 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 				return c.JSON(fiber.Map{
 					"message":           "Task already running",
 					"task":              taskModel,
+					"execution_id":      findLatestExecutionID(id, strings.TrimSpace(taskModel.AgentSessionID)),
 					"terminal_id":       ordered[0],
 					"terminal_ids":      ordered,
 					"work_dir":          taskModel.WorkDir,
@@ -1158,11 +1651,16 @@ func (ctrl *TaskController) StartTask(c *fiber.Ctx) error {
 		terminalID = result.Terminal.ID()
 		terminalIDs = []string{terminalID}
 	}
+	executionID := strings.TrimSpace(result.ExecutionID)
+	if executionID == "" {
+		executionID = findLatestExecutionID(taskModel.ID, strings.TrimSpace(taskModel.AgentSessionID))
+	}
 
 	return c.JSON(fiber.Map{
 		"message":           "Task started",
 		"task":              result.Task,
 		"agent_session_id":  strings.TrimSpace(result.Task.AgentSessionID),
+		"execution_id":      executionID,
 		"terminal_id":       terminalID,
 		"terminal_ids":      terminalIDs,
 		"work_dir":          result.WorkDir,
@@ -1182,571 +1680,18 @@ func (ctrl *TaskController) GetTaskTerminals(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": terminals})
 }
 
-// ListTaskAISessions lists tracked AI CLI sessions (AISession) under a task.
-func (ctrl *TaskController) ListTaskAISessions(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id").First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	limit := c.QueryInt("limit", 50)
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
-
-	var sessions []model.AISession
-	if err := model.DB.Where("task_id = ?", taskID).Order("updated_at desc").Limit(limit).Find(&sessions).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to list AI sessions"})
-	}
-
-	return c.JSON(fiber.Map{"items": sessions})
-}
-
-type DiscoveredTaskAISession struct {
-	clisession.DiscoveredSession
-	Imported    bool   `json:"imported"`
-	AISessionID string `json:"ai_session_id,omitempty"`
-}
-
-// DiscoverTaskAISessions scans native Claude/Codex CLI session files and returns candidates under this task.
-func (ctrl *TaskController) DiscoverTaskAISessions(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id", "server_id", "work_dir", "cli_type").First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	tool := strings.TrimSpace(c.Query("tool"))
-	if tool == "" {
-		tool = strings.TrimSpace(taskModel.CLIType)
-	}
-	scope := strings.TrimSpace(c.Query("scope"))
-	if scope == "" {
-		scope = "task"
-	}
-
-	limit := c.QueryInt("limit", 50)
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
-
-	serverID := ""
-	if taskModel.ServerID != nil {
-		serverID = strings.TrimSpace(*taskModel.ServerID)
-	}
-
-	var exec clisession.SSHExecutor
-	if serverID != "" {
-		mgr, err := ctrl.getSSHManager()
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-		}
-		exec = mgr
-	}
-
-	found, err := clisession.DiscoverSessions(serverID, exec, clisession.DiscoverOptions{
-		Tool:    tool,
-		WorkDir: strings.TrimSpace(taskModel.WorkDir),
-		Scope:   scope,
-		Limit:   limit,
-	})
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to discover sessions"})
-	}
-
-	var existing []model.AISession
-	if err := model.DB.Select("id", "ai_type", "session_id").Where("task_id = ?", taskID).Find(&existing).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to query existing sessions"})
-	}
-	existingMap := make(map[string]string, len(existing))
-	for _, s := range existing {
-		key := strings.ToLower(strings.TrimSpace(s.AIType)) + "|" + strings.TrimSpace(s.SessionID)
-		if strings.TrimSpace(s.SessionID) == "" {
-			continue
-		}
-		existingMap[key] = s.ID
-	}
-
-	items := make([]DiscoveredTaskAISession, 0, len(found))
-	for _, s := range found {
-		key := strings.ToLower(strings.TrimSpace(s.AIType)) + "|" + strings.TrimSpace(s.SessionID)
-		item := DiscoveredTaskAISession{DiscoveredSession: s}
-		if id, ok := existingMap[key]; ok && strings.TrimSpace(id) != "" {
-			item.Imported = true
-			item.AISessionID = id
-		}
-		items = append(items, item)
-	}
-
-	return c.JSON(fiber.Map{"items": items})
-}
-
-type ImportTaskAISessionRequest struct {
-	Tool        string `json:"tool"`
-	AIType      string `json:"ai_type"`
-	SessionID   string `json:"session_id"`
-	SessionFile string `json:"session_file"`
-}
-
-func canonicalAISessionType(tool, aiType string) (string, error) {
-	t := strings.ToLower(strings.TrimSpace(aiType))
-	switch t {
-	case "claude-code", "claude", "claude_code", "claude-code-cli":
-		return "claude-code", nil
-	case "codex", "openai-codex":
-		return "codex", nil
-	case "":
-		// fall through
-	default:
-		return "", errors.New("unsupported ai_type: " + aiType)
-	}
-
-	rawTool := strings.ToLower(strings.TrimSpace(tool))
-	switch rawTool {
-	case "claude":
-		return "claude-code", nil
-	case "codex":
-		return "codex", nil
-	case "":
-		return "", errors.New("tool is required")
-	default:
-		return "", errors.New("unsupported tool: " + tool)
-	}
-}
-
-func importAISession(taskID string, aiType string, sessionID string, sessionFile string, updatedAt time.Time) (*model.AISession, bool, error) {
-	taskID = strings.TrimSpace(taskID)
-	aiType = strings.TrimSpace(aiType)
-	sessionID = strings.TrimSpace(sessionID)
-	sessionFile = strings.TrimSpace(sessionFile)
-	if taskID == "" {
-		return nil, false, errors.New("task id is required")
-	}
-	if aiType == "" {
-		return nil, false, errors.New("ai_type is required")
-	}
-	if sessionID == "" {
-		return nil, false, errors.New("session_id is required")
-	}
-
-	var existing model.AISession
-	err := model.DB.Where("task_id = ? AND ai_type = ? AND session_id = ?", taskID, aiType, sessionID).First(&existing).Error
-	if err == nil {
-		return &existing, false, nil
-	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, false, err
-	}
-
-	now := time.Now()
-	if !updatedAt.IsZero() {
-		now = updatedAt
-	}
-
-	aiSession := &model.AISession{
-		ID:          uuid.NewString(),
-		TerminalID:  "",
-		TaskID:      taskID,
-		AIType:      aiType,
-		State:       "unknown",
-		SessionID:   sessionID,
-		SessionFile: sessionFile,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	if err := model.DB.Create(aiSession).Error; err != nil {
-		return nil, false, err
-	}
-	return aiSession, true, nil
-}
-
-// ImportTaskAISession imports a discovered/native CLI session into this task as an AISession record.
-func (ctrl *TaskController) ImportTaskAISession(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var req ImportTaskAISessionRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-
-	aiType, err := canonicalAISessionType(req.Tool, req.AIType)
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id").First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	aiSession, created, err := importAISession(taskID, aiType, req.SessionID, req.SessionFile, time.Time{})
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to import session"})
-	}
-
-	msg := "AI session imported"
-	if !created {
-		msg = "AI session already imported"
-	}
-	return c.JSON(fiber.Map{"message": msg, "item": aiSession})
-}
-
-// CollectTaskAISessions discovers native CLI sessions and imports them into the task in one-click.
-func (ctrl *TaskController) CollectTaskAISessions(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id", "server_id", "work_dir", "cli_type").First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	tool := strings.TrimSpace(c.Query("tool"))
-	if tool == "" {
-		tool = strings.TrimSpace(taskModel.CLIType)
-	}
-
-	limit := c.QueryInt("limit", 50)
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
-
-	serverID := ""
-	if taskModel.ServerID != nil {
-		serverID = strings.TrimSpace(*taskModel.ServerID)
-	}
-
-	var exec clisession.SSHExecutor
-	if serverID != "" {
-		mgr, err := ctrl.getSSHManager()
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-		}
-		exec = mgr
-	}
-
-	found, err := clisession.DiscoverSessions(serverID, exec, clisession.DiscoverOptions{
-		Tool:    tool,
-		WorkDir: strings.TrimSpace(taskModel.WorkDir),
-		Scope:   "task",
-		Limit:   limit,
-	})
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to discover sessions"})
-	}
-
-	importedCount := 0
-	existingCount := 0
-	importedItems := make([]model.AISession, 0, len(found))
-
-	for _, s := range found {
-		aiType, err := canonicalAISessionType(s.Tool, s.AIType)
-		if err != nil {
-			continue
-		}
-		item, created, err := importAISession(taskID, aiType, s.SessionID, s.SessionFile, s.UpdatedAt)
-		if err != nil || item == nil {
-			continue
-		}
-		if created {
-			importedCount++
-		} else {
-			existingCount++
-		}
-		importedItems = append(importedItems, *item)
-	}
-
-	return c.JSON(fiber.Map{
-		"message":        "AI sessions collected",
-		"imported_count": importedCount,
-		"existing_count": existingCount,
-		"items":          importedItems,
-	})
-}
-
-// ResumeTaskAISession resumes an existing AI CLI session (claude/codex) in a new terminal and binds it as active terminal.
-func (ctrl *TaskController) ResumeTaskAISession(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	aiSessionID := strings.TrimSpace(c.Params("aiSessionId"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-	if aiSessionID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "AI session id is required"})
-	}
-	if ctrl.automationService == nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Automation service not initialized"})
-	}
-
-	result, err := ctrl.automationService.ResumeCLISession(taskID, aiSessionID)
-	if err != nil {
-		msg := strings.TrimSpace(err.Error())
-		if msg == "" {
-			msg = "Resume failed"
-		}
-		status := 500
-		switch {
-		case strings.Contains(msg, "not found"):
-			status = 404
-		case strings.Contains(msg, "unsupported"), strings.Contains(msg, "does not belong"), strings.Contains(msg, "required"):
-			status = 400
-		}
-		return c.Status(status).JSON(fiber.Map{"error": msg, "result": result})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":           "AI session resumed",
-		"task":              result.Task,
-		"terminal_id":       result.TerminalID,
-		"work_dir":          result.WorkDir,
-		"resume_command":    result.ResumeCommand,
-		"cli_started":       result.CLIStarted,
-		"needs_user_action": result.NeedsUserAction,
-		"user_action_hint":  result.UserActionHint,
-	})
-}
-
-// BindTerminal 绑定任务的活跃终端（同任务内允许切换，不允许复用其他任务的终端）
-func (ctrl *TaskController) BindTerminal(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var req struct {
-		TerminalID string `json:"terminal_id"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-
-	terminalID := strings.TrimSpace(req.TerminalID)
-	if terminalID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "terminal_id is required"})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id").First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	var terminalModel model.TerminalSession
-	if err := model.DB.Select("id", "task_id").First(&terminalModel, "id = ?", terminalID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
-	}
-
-	if terminalModel.TaskID != nil {
-		existing := strings.TrimSpace(*terminalModel.TaskID)
-		if existing != "" && existing != taskID {
-			return c.Status(400).JSON(fiber.Map{"error": "Terminal is already bound to another task"})
-		}
-	}
-
-	// 写回终端的 task_id（优先走 terminalManager，保证内存态/审批配置同步）
-	taskIDCopy := taskID
-	if ctrl.terminalManager != nil {
-		_ = ctrl.terminalManager.LinkTask(terminalID, &taskIDCopy)
-	} else {
-		if err := model.DB.Model(&model.TerminalSession{}).
-			Where("id = ?", terminalID).
-			Update("task_id", &taskIDCopy).Error; err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to bind terminal"})
-		}
-	}
-
-	now := time.Now()
-	if err := model.DB.Model(&model.Task{}).
-		Where("id = ?", taskID).
-		Updates(map[string]any{
-			"active_terminal_id": terminalID,
-			"updated_at":         now,
-		}).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to bind terminal"})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":     "Terminal bound",
-		"task_id":     taskID,
-		"terminal_id": terminalID,
-	})
-}
-
-// ResumeAI 恢复任务的 AI 执行（仅更新任务级 AI 状态）
-func (ctrl *TaskController) ResumeAI(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id", "automation_mode", "agent_session_id", "active_terminal_id", "status", "ai_status", "ai_pause_reason").
-		First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	if strings.EqualFold(strings.TrimSpace(taskModel.AutomationMode), "agent") {
-		sessionID := strings.TrimSpace(taskModel.AgentSessionID)
-		if sessionID == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Task has no agent session"})
-		}
-		if ctrl.aiWorkflowEngine == nil {
-			return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
-		}
-
-		// 若已在运行，直接返回成功（避免“不可恢复”报错）
-		if s, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && s != nil {
-			if strings.EqualFold(strings.TrimSpace(s.Status), "running") {
-				now := time.Now()
-				_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-					"status":          "in_progress",
-					"ai_status":       "running",
-					"ai_pause_reason": "",
-					"updated_at":      now,
-				}).Error
-				return c.JSON(fiber.Map{"message": "AI already running", "task_id": taskID, "session_id": sessionID})
-			}
-		}
-
-		// agent 模式：用默认确认语句恢复（也允许用户在右侧输入框中提交自定义内容）
-		if _, err := ctrl.aiWorkflowEngine.ResumeWorkflow(c.Context(), sessionID, "已恢复，请继续执行。"); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		now := time.Now()
-		_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-			"status":          "in_progress",
-			"ai_status":       "running",
-			"ai_pause_reason": "",
-			"updated_at":      now,
-		}).Error
-
-		return c.JSON(fiber.Map{"message": "AI resumed", "task_id": taskID, "session_id": sessionID})
-	}
-
-	if taskModel.ActiveTerminalID == nil || strings.TrimSpace(*taskModel.ActiveTerminalID) == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task has no active terminal"})
-	}
-
-	now := time.Now()
-	if err := model.DB.Model(&model.Task{}).
-		Where("id = ?", taskID).
-		Updates(map[string]any{
-			"ai_status":       "running",
-			"ai_pause_reason": "",
-			"updated_at":      now,
-		}).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to resume AI"})
-	}
-
-	return c.JSON(fiber.Map{
-		"message": "AI resumed",
-		"task_id": taskID,
-	})
-}
-
-// PauseAI 暂停任务的 AI 执行
-func (ctrl *TaskController) PauseAI(c *fiber.Ctx) error {
-	taskID := strings.TrimSpace(c.Params("id"))
-	if taskID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Task id is required"})
-	}
-
-	var taskModel model.Task
-	if err := model.DB.Select("id", "automation_mode", "agent_session_id", "status", "ai_status").
-		First(&taskModel, "id = ?", taskID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Task not found"})
-	}
-
-	if strings.EqualFold(strings.TrimSpace(taskModel.AutomationMode), "agent") {
-		sessionID := strings.TrimSpace(taskModel.AgentSessionID)
-		if sessionID == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Task has no agent session"})
-		}
-		if ctrl.aiWorkflowEngine == nil {
-			return c.Status(500).JSON(fiber.Map{"error": "AI workflow engine not initialized"})
-		}
-
-		// 若已暂停则幂等返回
-		if s, err := ctrl.aiWorkflowEngine.GetSession(sessionID); err == nil && s != nil {
-			if strings.EqualFold(strings.TrimSpace(s.Status), "paused") {
-				return c.JSON(fiber.Map{"message": "AI paused", "task_id": taskID, "session_id": sessionID})
-			}
-		}
-
-		if _, err := ctrl.aiWorkflowEngine.PauseWorkflow(c.Context(), sessionID, "user_paused"); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		now := time.Now()
-		_ = model.DB.Model(&model.Task{}).Where("id = ?", taskID).Updates(map[string]any{
-			"status":          "paused",
-			"ai_status":       "paused",
-			"ai_pause_reason": "user_paused",
-			"updated_at":      now,
-		}).Error
-
-		return c.JSON(fiber.Map{"message": "AI paused", "task_id": taskID, "session_id": sessionID})
-	}
-
-	now := time.Now()
-	if err := model.DB.Model(&model.Task{}).
-		Where("id = ?", taskID).
-		Updates(map[string]any{
-			"ai_status":       "paused",
-			"ai_pause_reason": "user_paused",
-			"updated_at":      now,
-		}).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to pause AI"})
-	}
-
-	return c.JSON(fiber.Map{
-		"message": "AI paused",
-		"task_id": taskID,
-	})
-}
-
 // RegisterRoutes 注册路由
 func (ctrl *TaskController) RegisterRoutes(app fiber.Router) {
 	tasks := app.Group("/tasks")
 	tasks.Get("/", ctrl.ListTasks)
 	tasks.Post("/", ctrl.CreateTask)
 	tasks.Get("/by-status", ctrl.GetTasksByStatus)
+	tasks.Get("/history", ctrl.ListTaskHistory)
 	tasks.Get("/:id", ctrl.GetTask)
 	tasks.Get("/:id/detail", ctrl.GetTaskDetail)
 	tasks.Put("/:id", ctrl.UpdateTask)
 	tasks.Delete("/:id", ctrl.DeleteTask)
 	tasks.Post("/:id/move", ctrl.MoveTask)
 	tasks.Post("/:id/start", ctrl.StartTask)
-	tasks.Post("/:id/resume", ctrl.ResumeAI)
-	tasks.Post("/:id/pause", ctrl.PauseAI)
-	tasks.Post("/:id/bind-terminal", ctrl.BindTerminal)
 	tasks.Get("/:id/terminals", ctrl.GetTaskTerminals)
-	tasks.Get("/:id/ai-sessions", ctrl.ListTaskAISessions)
-	tasks.Get("/:id/ai-sessions/discover", ctrl.DiscoverTaskAISessions)
-	tasks.Post("/:id/ai-sessions/import", ctrl.ImportTaskAISession)
-	tasks.Post("/:id/ai-sessions/collect", ctrl.CollectTaskAISessions)
-	tasks.Post("/:id/ai-sessions/:aiSessionId/resume", ctrl.ResumeTaskAISession)
 }

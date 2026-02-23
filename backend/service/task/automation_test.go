@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-coding-assistant/model"
+	clisvc "github.com/ai-coding-assistant/service/cli"
 )
 
 type fakeTerminalSession struct {
@@ -310,5 +312,148 @@ func TestAutomationService_StartTask_ReturnsErrorWhenRemoteMkdirFails(t *testing
 	}
 	if tm.sshSessionsCreated != 1 {
 		t.Fatalf("expected ssh session created, got %d", tm.sshSessionsCreated)
+	}
+}
+
+func TestAutomationService_StartTask_TracksCLIExecution(t *testing.T) {
+	initTestDB(t)
+
+	if err := model.DB.Create(&model.SSHServer{
+		ID:   "srv-track",
+		Name: "track-host",
+	}).Error; err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+
+	serverID := "srv-track"
+	taskModel := model.Task{
+		ID:            "task-track-1",
+		Title:         "Track Execution",
+		Status:        "todo",
+		ServerID:      &serverID,
+		WorkDir:       "/tmp/track-execution",
+		CLIType:       "codex",
+		AutoCreateDir: true,
+	}
+	if err := model.DB.Create(&taskModel).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	session := &fakeTerminalSession{id: "ssh-track-1"}
+	tm := &fakeTerminalManager{nextSession: session}
+	svc := &AutomationService{terminalManager: tm}
+
+	origSleep := sleep
+	sleep = func(d time.Duration) { time.Sleep(time.Millisecond) }
+	t.Cleanup(func() { sleep = origSleep })
+
+	result, err := svc.StartTask(&taskModel)
+	if err != nil {
+		t.Fatalf("StartTask error: %v", err)
+	}
+	if strings.TrimSpace(result.ExecutionID) == "" {
+		t.Fatalf("expected execution_id in StartTask result")
+	}
+
+	var execRow model.CLIExecution
+	if err := model.DB.First(&execRow, "id = ?", strings.TrimSpace(result.ExecutionID)).Error; err != nil {
+		t.Fatalf("query execution failed: %v", err)
+	}
+	if execRow.TaskID == nil || *execRow.TaskID != taskModel.ID {
+		t.Fatalf("expected execution task_id %q, got %v", taskModel.ID, execRow.TaskID)
+	}
+	if execRow.Source != "task-automation" {
+		t.Fatalf("expected source %q, got %q", "task-automation", execRow.Source)
+	}
+	if execRow.Tool != "codex" {
+		t.Fatalf("expected tool %q, got %q", "codex", execRow.Tool)
+	}
+
+	events, err := clisvc.ListExecutionEvents(execRow.ID, 0, 100)
+	if err != nil {
+		t.Fatalf("ListExecutionEvents failed: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatalf("expected execution events")
+	}
+	foundStarted := false
+	foundProgress := false
+	for _, evt := range events {
+		if evt.EventType == clisvc.EventTypeStarted {
+			foundStarted = true
+		}
+		if evt.EventType == clisvc.EventTypeProgress {
+			foundProgress = true
+		}
+	}
+	if !foundStarted {
+		t.Fatalf("expected started event in execution timeline")
+	}
+	if !foundProgress {
+		t.Fatalf("expected progress event in execution timeline")
+	}
+}
+
+func TestAutomationService_UpdateTaskStatus_FinalizesRunningExecution(t *testing.T) {
+	initTestDB(t)
+
+	taskModel := model.Task{
+		ID:     "task-track-2",
+		Title:  "Finalize Execution",
+		Status: "in_progress",
+	}
+	if err := model.DB.Create(&taskModel).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	tracker := clisvc.NewExecutionTracker(model.DB)
+	if tracker == nil {
+		t.Fatalf("expected execution tracker")
+	}
+
+	taskID := taskModel.ID
+	terminalID := "term-track-2"
+	rec, err := tracker.Start(clisvc.StartExecutionInput{
+		TaskID:     &taskID,
+		TerminalID: &terminalID,
+		Tool:       "claude",
+		Mode:       "execute",
+		Source:     "task-automation",
+		Prompt:     "implement x",
+	})
+	if err != nil {
+		t.Fatalf("Start execution failed: %v", err)
+	}
+	if err := tracker.AppendEvent(rec.ID, clisvc.EventTypeStarted, map[string]any{"stage": "bootstrap"}); err != nil {
+		t.Fatalf("AppendEvent failed: %v", err)
+	}
+
+	svc := &AutomationService{}
+	svc.updateTaskStatus(taskModel.ID, "done", "任务完成")
+
+	var updated model.CLIExecution
+	if err := model.DB.First(&updated, "id = ?", rec.ID).Error; err != nil {
+		t.Fatalf("query updated execution failed: %v", err)
+	}
+	if updated.Status != clisvc.StatusCompleted {
+		t.Fatalf("expected status %q, got %q", clisvc.StatusCompleted, updated.Status)
+	}
+	if updated.CompletedAt == nil {
+		t.Fatalf("expected completed_at to be set")
+	}
+
+	events, err := clisvc.ListExecutionEvents(rec.ID, 0, 100)
+	if err != nil {
+		t.Fatalf("ListExecutionEvents failed: %v", err)
+	}
+	foundCompleted := false
+	for _, evt := range events {
+		if evt.EventType == clisvc.EventTypeCompleted {
+			foundCompleted = true
+			break
+		}
+	}
+	if !foundCompleted {
+		t.Fatalf("expected completed event after task status update")
 	}
 }

@@ -1,24 +1,18 @@
 package api
 
 import (
-	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ai-coding-assistant/config"
 	"github.com/ai-coding-assistant/middleware"
 	"github.com/ai-coding-assistant/model"
-	"github.com/ai-coding-assistant/service/ai"
-	"github.com/ai-coding-assistant/service/detector"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -43,6 +37,11 @@ type CreateTerminalRequest struct {
 	ServerID string  `json:"server_id"`
 }
 
+type RecoverTerminalRequest struct {
+	Mode  string `json:"mode"`  // auto, resume, continue
+	Title string `json:"title"` // optional title override for continue
+}
+
 type TerminalResponse struct {
 	ID        string                    `json:"id"`
 	Title     string                    `json:"title"`
@@ -52,6 +51,38 @@ type TerminalResponse struct {
 	PID       int                       `json:"pid"`
 	Metadata  *terminal.SessionMetadata `json:"metadata"`
 	CreatedAt int64                     `json:"created_at"`
+}
+
+func normalizeRecoverMode(value string) (string, bool) {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	if mode == "" {
+		return "auto", true
+	}
+	switch mode {
+	case "auto", "resume", "continue":
+		return mode, true
+	default:
+		return "", false
+	}
+}
+
+func terminalResponseFromSession(session *terminal.Session, hidden bool) TerminalResponse {
+	meta := session.Metadata()
+	taskID := session.TaskID()
+	if taskID == nil && meta != nil && meta.TaskID != nil {
+		taskID = meta.TaskID
+	}
+
+	return TerminalResponse{
+		ID:        session.ID(),
+		Title:     session.Title(),
+		TaskID:    taskID,
+		Status:    session.Status(),
+		Hidden:    hidden,
+		PID:       meta.PID,
+		Metadata:  meta,
+		CreatedAt: session.CreatedAt().Unix(),
+	}
 }
 
 // CreateTerminal 创建终端
@@ -83,16 +114,7 @@ func (ctrl *TerminalController) CreateTerminal(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"item": TerminalResponse{
-			ID:        session.ID(),
-			Title:     session.Title(),
-			TaskID:    session.TaskID(),
-			Status:    session.Status(),
-			Hidden:    false,
-			PID:       session.Metadata().PID,
-			Metadata:  session.Metadata(),
-			CreatedAt: session.CreatedAt().Unix(),
-		},
+		"item": terminalResponseFromSession(session, false),
 	})
 }
 
@@ -218,11 +240,12 @@ func (ctrl *TerminalController) ListTerminals(c *fiber.Ctx) error {
 			merged = append(merged, mem.resp)
 		} else {
 			meta := &terminal.SessionMetadata{
-				Title:    dbs.Title,
-				PID:      dbs.PID,
-				Status:   dbs.Status,
-				TaskID:   dbs.TaskID,
-				ServerID: dbs.ServerID,
+				Title:       dbs.Title,
+				PID:         dbs.PID,
+				Status:      dbs.Status,
+				TaskID:      dbs.TaskID,
+				ServerID:    dbs.ServerID,
+				TmuxSession: dbs.TmuxSession,
 			}
 			merged = append(merged, TerminalResponse{
 				ID:        id,
@@ -276,26 +299,18 @@ func (ctrl *TerminalController) GetTerminal(c *fiber.Ctx) error {
 
 	if session != nil {
 		return c.JSON(fiber.Map{
-			"item": TerminalResponse{
-				ID:        session.ID(),
-				Title:     session.Title(),
-				TaskID:    session.TaskID(),
-				Status:    session.Status(),
-				Hidden:    dbSession.Hidden,
-				PID:       session.Metadata().PID,
-				Metadata:  session.Metadata(),
-				CreatedAt: session.CreatedAt().Unix(),
-			},
+			"item": terminalResponseFromSession(session, dbSession.Hidden),
 		})
 	}
 
 	// Session is not active (e.g., SSH session after restart). Still return DB snapshot for logs/UX.
 	meta := &terminal.SessionMetadata{
-		Title:    dbSession.Title,
-		PID:      dbSession.PID,
-		Status:   dbSession.Status,
-		TaskID:   dbSession.TaskID,
-		ServerID: dbSession.ServerID,
+		Title:       dbSession.Title,
+		PID:         dbSession.PID,
+		Status:      dbSession.Status,
+		TaskID:      dbSession.TaskID,
+		ServerID:    dbSession.ServerID,
+		TmuxSession: dbSession.TmuxSession,
 	}
 	return c.JSON(fiber.Map{
 		"item": TerminalResponse{
@@ -311,6 +326,116 @@ func (ctrl *TerminalController) GetTerminal(c *fiber.Ctx) error {
 	})
 }
 
+// RecoverTerminal 恢复或延续终端
+func (ctrl *TerminalController) RecoverTerminal(c *fiber.Ctx) error {
+	if ctrl.manager == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
+	}
+
+	id := strings.TrimSpace(c.Params("id"))
+	if id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
+	}
+
+	var req RecoverTerminalRequest
+	if err := c.BodyParser(&req); err != nil {
+		req = RecoverTerminalRequest{}
+	}
+
+	mode, ok := normalizeRecoverMode(req.Mode)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid mode"})
+	}
+
+	var dbSession model.TerminalSession
+	if err := model.DB.First(&dbSession, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query terminal"})
+	}
+
+	tryResume := func() (*terminal.Session, error) {
+		if session := ctrl.manager.GetSession(id); session != nil {
+			return session, nil
+		}
+		return ctrl.manager.GetOrResumeSession(id)
+	}
+
+	if mode == "auto" || mode == "resume" {
+		session, err := tryResume()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to resume terminal"})
+		}
+		if session != nil {
+			return c.JSON(fiber.Map{
+				"message":            "Terminal resumed",
+				"action":             "resumed",
+				"source_terminal_id": id,
+				"item":               terminalResponseFromSession(session, dbSession.Hidden),
+			})
+		}
+		if mode == "resume" {
+			return c.Status(409).JSON(fiber.Map{
+				"error":              "Terminal cannot be resumed. Use continue mode to create a new terminal.",
+				"action":             "resume_unavailable",
+				"source_terminal_id": id,
+			})
+		}
+	}
+
+	if mode != "auto" && mode != "continue" {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid mode"})
+	}
+
+	newTitle := strings.TrimSpace(req.Title)
+	if newTitle == "" {
+		base := strings.TrimSpace(dbSession.Title)
+		if base == "" {
+			base = "Terminal"
+		}
+		newTitle = base + " (续)"
+	}
+
+	var (
+		newSession *terminal.Session
+		err        error
+	)
+	serverID := ""
+	if dbSession.ServerID != nil {
+		serverID = strings.TrimSpace(*dbSession.ServerID)
+	}
+	if serverID != "" {
+		newSession, err = ctrl.manager.CreateSSHSession(serverID)
+	} else {
+		newSession, err = ctrl.manager.CreateSession(newTitle, dbSession.TaskID)
+	}
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create continuation terminal"})
+	}
+
+	if strings.TrimSpace(newTitle) != "" {
+		_ = ctrl.manager.RenameSession(newSession.ID(), newTitle)
+	}
+	if dbSession.TaskID != nil && strings.TrimSpace(*dbSession.TaskID) != "" {
+		_ = ctrl.manager.LinkTask(newSession.ID(), dbSession.TaskID)
+	}
+	updates := map[string]any{
+		"continued_from_id": id,
+	}
+	if dbSession.Hidden {
+		updates["hidden"] = false
+	}
+	_ = model.DB.Model(&model.TerminalSession{}).Where("id = ?", newSession.ID()).Updates(updates).Error
+
+	return c.JSON(fiber.Map{
+		"message":            "Terminal continued",
+		"action":             "continued",
+		"source_terminal_id": id,
+		"item":               terminalResponseFromSession(newSession, false),
+	})
+}
+
 // CloseTerminal 关闭终端
 func (ctrl *TerminalController) CloseTerminal(c *fiber.Ctx) error {
 	id := c.Params("id")
@@ -318,30 +443,6 @@ func (ctrl *TerminalController) CloseTerminal(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to close terminal"})
 	}
 	return c.JSON(fiber.Map{"message": "Terminal closed"})
-}
-
-// RestartTerminal 重启终端（关闭旧会话并创建新会话，保留任务绑定）
-func (ctrl *TerminalController) RestartTerminal(c *fiber.Ctx) error {
-	id := strings.TrimSpace(c.Params("id"))
-	if id == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
-	}
-	if ctrl.manager == nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
-	}
-
-	session, err := ctrl.manager.RestartSession(id)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to restart terminal"})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":           "Terminal restarted",
-		"old_terminal_id":   id,
-		"new_terminal_id":   session.ID(),
-		"terminal_id":       session.ID(),
-		"terminal_metadata": session.Metadata(),
-	})
 }
 
 // HideTerminal 隐藏/显示终端
@@ -441,10 +542,6 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		c.WriteJSON(WSMessage{Type: "error", Message: "Missing sessionId"})
 		return
 	}
-	if ctrl.manager == nil {
-		c.WriteJSON(WSMessage{Type: "error", Message: "Terminal manager not configured"})
-		return
-	}
 
 	sessionID = strings.TrimSpace(sessionID)
 	session := ctrl.manager.GetSession(sessionID)
@@ -458,119 +555,22 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 		session = resumed
 	}
 	if session == nil {
-		// History-only mode: allow viewing persisted logs even when the live session is gone.
-		if model.DB == nil {
-			c.WriteJSON(WSMessage{Type: "error", Message: "Database not initialized"})
-			return
-		}
-
-		var dbSession model.TerminalSession
-		if err := model.DB.First(&dbSession, "id = ?", sessionID).Error; err != nil {
-			c.WriteJSON(WSMessage{Type: "error", Message: "Session not found"})
-			return
-		}
-
-		meta := &terminal.SessionMetadata{
-			Title:       dbSession.Title,
-			PID:         dbSession.PID,
-			Status:      dbSession.Status,
-			TaskID:      dbSession.TaskID,
-			ServerID:    dbSession.ServerID,
-			TmuxSession: dbSession.TmuxSession,
-		}
-
-		c.WriteJSON(WSMessage{
-			Type:     "ready",
-			Metadata: meta,
-		})
-
-		maxBytes := config.Load().Terminal.ScrollbackBytes
-		snapshot, _ := terminal.BuildTranscriptSnapshotFromLogs(sessionID, maxBytes)
-		if len(snapshot) > 0 {
-			c.WriteJSON(WSMessage{
-				Type: "data",
-				Data: base64.StdEncoding.EncodeToString(snapshot),
-			})
-		}
-
-		// Keep the socket open so the UI doesn't enter a reconnect loop; reject inputs.
-		for {
-			var msg WSMessage
-			if err := c.ReadJSON(&msg); err != nil {
-				return
-			}
-			switch msg.Type {
-			case "close":
-				return
-			case "input", "key_action":
-				_ = c.WriteJSON(WSMessage{Type: "error", Message: "Session is not running (history-only)"})
-			default:
-				// ignore
-			}
-		}
+		c.WriteJSON(WSMessage{Type: "error", Message: "Session not found"})
+		return
 	}
 
-	// 更新连接状态为 connected
-	ctrl.updateConnectionStatus(sessionID, "connected", "")
-
-	// 确保断开时更新状态
-	defer ctrl.updateConnectionStatus(sessionID, "disconnected", "websocket_closed")
-
 	// 发送ready消息
-	meta := session.Metadata()
 	c.WriteJSON(WSMessage{
 		Type:     "ready",
-		Metadata: meta,
+		Metadata: session.Metadata(),
 	})
 
 	// 发送历史输出
-	maxBytes := session.ScrollbackLimitBytes()
-	if maxBytes <= 0 {
-		maxBytes = config.Load().Terminal.ScrollbackBytes
-	}
-
-	var snapshot []byte
-	if session.RecoveredFromTmux() && meta != nil && strings.TrimSpace(meta.TmuxSession) != "" {
-		if captured, err := terminal.CaptureTmuxSnapshot(strings.TrimSpace(meta.TmuxSession), maxBytes); err == nil && len(captured) > 0 {
-			snapshot = captured
-		}
-	}
-	if len(snapshot) == 0 {
-		scrollback := session.Scrollback()
-		if len(scrollback) > 0 {
-			scrollback = terminal.FilterInternalMarkers(scrollback)
-		}
-		snapshot = scrollback
-	}
-	if len(snapshot) == 0 {
-		if rebuilt, err := terminal.BuildTranscriptSnapshotFromLogs(sessionID, maxBytes); err == nil && len(rebuilt) > 0 {
-			snapshot = rebuilt
-		}
-	}
-	if len(snapshot) > 0 {
+	scrollback := session.Scrollback()
+	if len(scrollback) > 0 {
 		c.WriteJSON(WSMessage{
 			Type: "data",
-			Data: base64.StdEncoding.EncodeToString(snapshot),
-		})
-	}
-
-	// If the terminal is currently waiting for approval, replay the prompt once for this connection
-	// so the UI can rehydrate pending approvals after reconnect/page refresh.
-	if meta != nil && meta.AIAssistant != nil &&
-		meta.AIAssistant.State == string(detector.StateWaitingApproval) &&
-		strings.TrimSpace(meta.AIAssistant.ApprovalPrompt) != "" {
-		_ = c.WriteJSON(WSMessage{
-			Type:    "approval",
-			Message: strings.TrimSpace(meta.AIAssistant.ApprovalPrompt),
-			ApprovalResult: &terminal.ApprovalEvent{
-				Action:      "wait",
-				Input:       "",
-				Reasoning:   "reconnect_replay",
-				Confidence:  1,
-				RuleMatched: "",
-				AIDecision:  false,
-				AutoHandled: false,
-			},
+			Data: base64.StdEncoding.EncodeToString(scrollback),
 		})
 	}
 
@@ -628,12 +628,6 @@ func (ctrl *TerminalController) HandleWebSocket(c *websocket.Conn) {
 			Message:        event.Message,
 			ApprovalResult: event.ApprovalResult,
 			AILog:          event.AILog,
-		}
-		if event.Type == terminal.StreamEventData && strings.TrimSpace(event.Data) != "" {
-			if raw, err := base64.StdEncoding.DecodeString(event.Data); err == nil && len(raw) > 0 {
-				filtered := terminal.FilterInternalMarkers(raw)
-				wsMsg.Data = base64.StdEncoding.EncodeToString(filtered)
-			}
 		}
 		if err := c.WriteJSON(wsMsg); err != nil {
 			utils.Debug("WebSocket write error", zap.Error(err))
@@ -725,326 +719,6 @@ func (ctrl *TerminalController) SendKeyAction(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "Key action sent"})
 }
 
-// EmitAILog 写入并广播 AI 日志（用于“仅记录”模式下记录用户指令/备注）
-func (ctrl *TerminalController) EmitAILog(c *fiber.Ctx) error {
-	id := strings.TrimSpace(c.Params("id"))
-	if id == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
-	}
-
-	var req struct {
-		Type    string  `json:"type"`
-		Message string  `json:"message"`
-		TaskID  *string `json:"task_id"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
-	}
-
-	logType := strings.TrimSpace(req.Type)
-	if logType == "" {
-		logType = "info"
-	}
-	text := strings.TrimSpace(req.Message)
-	if text == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Empty message"})
-	}
-
-	// clamp to avoid huge payloads
-	const maxRunes = 8000
-	runes := []rune(text)
-	if len(runes) > maxRunes {
-		text = string(runes[:maxRunes]) + "…(truncated)…"
-	}
-
-	var taskIDPtr *string
-	if req.TaskID != nil && strings.TrimSpace(*req.TaskID) != "" {
-		copied := strings.Clone(strings.TrimSpace(*req.TaskID))
-		taskIDPtr = &copied
-	}
-
-	// Try to resolve task_id from session/db when not provided.
-	var session *terminal.Session
-	if ctrl.manager != nil {
-		if s, err := ctrl.manager.GetOrResumeSession(id); err == nil && s != nil {
-			session = s
-			if taskIDPtr == nil {
-				if tid := s.TaskID(); tid != nil && strings.TrimSpace(*tid) != "" {
-					copied := strings.Clone(strings.TrimSpace(*tid))
-					taskIDPtr = &copied
-				}
-			}
-		}
-	}
-	if taskIDPtr == nil && model.DB != nil {
-		var row model.TerminalSession
-		if err := model.DB.Select("task_id").First(&row, "id = ?", id).Error; err == nil {
-			if row.TaskID != nil && strings.TrimSpace(*row.TaskID) != "" {
-				copied := strings.Clone(strings.TrimSpace(*row.TaskID))
-				taskIDPtr = &copied
-			}
-		}
-	}
-
-	// Persist as system log, keeping the existing "[AI][type]" format for UI parsing.
-	if model.DB != nil {
-		now := time.Now()
-		terminalCopy := id
-		content := fmt.Sprintf("[AI][%s] %s", logType, text)
-		if !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
-		_ = model.DB.Create(&model.Log{
-			ID:         uuid.New().String(),
-			TerminalID: &terminalCopy,
-			TaskID:     taskIDPtr,
-			LogType:    "system",
-			Content:    content,
-			CreatedAt:  now,
-		}).Error
-	}
-
-	// Real-time broadcast to connected clients (AI log panel).
-	if session == nil && ctrl.manager != nil {
-		session = ctrl.manager.GetSession(id)
-	}
-	if session != nil {
-		session.BroadcastAILog(logType, text)
-	}
-
-	return c.JSON(fiber.Map{"message": "AI log recorded"})
-}
-
-// ConfirmAIAssistant allows user/AI to manually confirm whether the terminal is currently inside an AI CLI.
-func (ctrl *TerminalController) ConfirmAIAssistant(c *fiber.Ctx) error {
-	id := strings.TrimSpace(c.Params("id"))
-	if id == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
-	}
-	if ctrl.manager == nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
-	}
-
-	session := ctrl.manager.GetSession(id)
-	if session == nil {
-		if s, err := ctrl.manager.GetOrResumeSession(id); err == nil {
-			session = s
-		}
-	}
-	if session == nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
-	}
-
-	var req struct {
-		Decision      string `json:"decision"`       // yes / no / unknown
-		AssistantType string `json:"assistant_type"` // optional: claude/codex/gemini
-		TTLSeconds    int    `json:"ttl_seconds"`    // optional
-	}
-	if err := c.BodyParser(&req); err != nil {
-		req = struct {
-			Decision      string `json:"decision"`
-			AssistantType string `json:"assistant_type"`
-			TTLSeconds    int    `json:"ttl_seconds"`
-		}{}
-	}
-
-	ttl := 2 * time.Minute
-	if req.TTLSeconds > 0 {
-		ttl = time.Duration(req.TTLSeconds) * time.Second
-	}
-
-	if err := session.ConfirmCLIState(req.Decision, req.AssistantType, ttl); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-	}
-
-	return c.JSON(fiber.Map{"message": "Confirmed"})
-}
-
-// EvaluateAIAssistant returns a best-effort guess about whether the terminal is currently inside an AI CLI.
-// It prefers deterministic heuristics, and optionally uses the configured AI provider when available.
-func (ctrl *TerminalController) EvaluateAIAssistant(c *fiber.Ctx) error {
-	id := strings.TrimSpace(c.Params("id"))
-	if id == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing terminal id"})
-	}
-	if ctrl.manager == nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Terminal manager not configured"})
-	}
-
-	session := ctrl.manager.GetSession(id)
-	if session == nil {
-		if s, err := ctrl.manager.GetOrResumeSession(id); err == nil {
-			session = s
-		}
-	}
-	if session == nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Terminal not found"})
-	}
-
-	var req struct {
-		UseAI     bool `json:"use_ai"`
-		MaxLines  int  `json:"max_lines"`
-		MaxRunes  int  `json:"max_runes"`
-		TimeoutMs int  `json:"timeout_ms"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		req = struct {
-			UseAI     bool `json:"use_ai"`
-			MaxLines  int  `json:"max_lines"`
-			MaxRunes  int  `json:"max_runes"`
-			TimeoutMs int  `json:"timeout_ms"`
-		}{}
-	}
-
-	lines := req.MaxLines
-	if lines <= 0 {
-		lines = 80
-	}
-	if lines > 200 {
-		lines = 200
-	}
-
-	maxRunes := req.MaxRunes
-	if maxRunes <= 0 {
-		maxRunes = 1200
-	}
-	if maxRunes > 4000 {
-		maxRunes = 4000
-	}
-
-	ctxTimeout := 1500
-	if req.TimeoutMs > 0 {
-		ctxTimeout = req.TimeoutMs
-	}
-	if ctxTimeout < 200 {
-		ctxTimeout = 200
-	}
-	if ctxTimeout > 5000 {
-		ctxTimeout = 5000
-	}
-
-	// Deterministic heuristics based on scrollback + detector.
-	scrollback := session.Scrollback()
-	contextText := detector.GetRecentContext(scrollback, lines)
-	d := detector.NewDetector()
-
-	meta := session.Metadata()
-	if meta != nil && meta.AIAssistant != nil && meta.AIAssistant.Detected {
-		// Already confirmed by output anchors/manual.
-		ev := strings.TrimSpace(contextText)
-		if ev != "" {
-			runes := []rune(ev)
-			if len(runes) > maxRunes {
-				ev = string(runes[len(runes)-maxRunes:])
-			}
-		}
-		return c.JSON(fiber.Map{
-			"present":      "yes",
-			"confidence":   1,
-			"type":         meta.AIAssistant.Type,
-			"display_name": meta.AIAssistant.DisplayName,
-			"reason":       "already_confirmed",
-			"evidence":     ev,
-		})
-	}
-
-	state, _ := d.DetectState(contextText)
-	agent := d.DetectAgent(contextText)
-
-	present := "unknown"
-	confidence := 0.3
-	reason := "insufficient_signal"
-	agentType := ""
-	displayName := ""
-
-	if agent != nil {
-		present = "yes"
-		confidence = 0.7
-		reason = "output_anchor_matched"
-		agentType = string(agent.Type)
-		displayName = agent.DisplayName
-	} else if state == detector.StateIdle {
-		present = "no"
-		confidence = 0.7
-		reason = "shell_prompt_idle"
-	} else if state == detector.StateWaitingApproval {
-		present = "unknown"
-		confidence = 0.5
-		reason = "waiting_approval"
-	} else if state == detector.StateWaitingInput || state == detector.StateWorking {
-		present = "unknown"
-		confidence = 0.4
-		reason = "interactive_but_untyped"
-	}
-
-	evidence := strings.TrimSpace(contextText)
-	if evidence != "" {
-		runes := []rune(evidence)
-		if len(runes) > maxRunes {
-			evidence = string(runes[len(runes)-maxRunes:])
-		}
-	}
-
-	// Optional AI assist (best effort). Only used when explicitly requested and configured.
-	if req.UseAI {
-		if model.DB != nil {
-			provider := ai.NewAIProvider()
-			if cfg, err := provider.GetDefaultConfig(); err == nil && cfg != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(ctxTimeout)*time.Millisecond)
-				defer cancel()
-
-				systemPrompt := "You are a terminal interaction classifier. Decide if the terminal is currently inside an AI CLI (Claude Code/Codex/Gemini) interactive session.\n" +
-					"Return JSON only: {\"present\":\"yes|no|unknown\",\"type\":\"claude-code|codex|gemini|unknown\",\"confidence\":0-1,\"reason\":\"...\"}.\n" +
-					"Be conservative: if unclear, use unknown."
-				userMsg := "Recent terminal context:\n\n" + evidence
-
-				if raw, err := provider.ChatSimple(ctx, cfg, systemPrompt, userMsg); err == nil {
-					parsed := map[string]any{}
-					if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(raw)), &parsed); jsonErr == nil {
-						if v, ok := parsed["present"].(string); ok && strings.TrimSpace(v) != "" {
-							present = strings.ToLower(strings.TrimSpace(v))
-						}
-						if v, ok := parsed["type"].(string); ok && strings.TrimSpace(v) != "" {
-							agentType = strings.TrimSpace(v)
-						}
-						if v, ok := parsed["confidence"].(float64); ok {
-							confidence = v
-						}
-						if v, ok := parsed["reason"].(string); ok && strings.TrimSpace(v) != "" {
-							reason = strings.TrimSpace(v)
-						} else {
-							reason = "ai_judgement"
-						}
-						// Display name best effort
-						switch strings.ToLower(strings.TrimSpace(agentType)) {
-						case string(detector.AIAgentClaudeCode), "claude":
-							displayName = "Claude Code"
-							agentType = string(detector.AIAgentClaudeCode)
-						case string(detector.AIAgentCodex):
-							displayName = "OpenAI Codex"
-							agentType = string(detector.AIAgentCodex)
-						case string(detector.AIAgentGemini):
-							displayName = "Gemini CLI"
-							agentType = string(detector.AIAgentGemini)
-						default:
-							// keep existing
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return c.JSON(fiber.Map{
-		"present":      present,
-		"confidence":   confidence,
-		"type":         agentType,
-		"display_name": displayName,
-		"reason":       reason,
-		"evidence":     evidence,
-	})
-}
-
 // GetTerminalStats 获取终端统计
 func (ctrl *TerminalController) GetTerminalStats(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
@@ -1058,17 +732,14 @@ func (ctrl *TerminalController) RegisterRoutes(app fiber.Router) {
 	terminals.Get("/", ctrl.ListTerminals)
 	terminals.Post("/", ctrl.CreateTerminal)
 	terminals.Get("/stats", ctrl.GetTerminalStats)
+	terminals.Post("/:id/recover", ctrl.RecoverTerminal)
 	terminals.Get("/:id", ctrl.GetTerminal)
 	terminals.Post("/:id/close", ctrl.CloseTerminal)
-	terminals.Post("/:id/restart", ctrl.RestartTerminal)
 	terminals.Post("/:id/hide", ctrl.HideTerminal)
 	terminals.Post("/:id/rename", ctrl.RenameTerminal)
 	terminals.Post("/:id/link-task", ctrl.LinkTask)
 	terminals.Post("/:id/input", ctrl.SendInput)
 	terminals.Post("/:id/key-action", ctrl.SendKeyAction)
-	terminals.Post("/:id/ai-log", ctrl.EmitAILog)
-	terminals.Post("/:id/ai-assistant/confirm", ctrl.ConfirmAIAssistant)
-	terminals.Post("/:id/ai-assistant/evaluate", ctrl.EvaluateAIAssistant)
 	terminals.Get("/:id/logs", ctrl.GetLogs)
 	terminals.Delete("/:id/logs", ctrl.ClearLogs)
 	terminals.Delete("/:id/logs/:logId", ctrl.DeleteLog)
@@ -1091,16 +762,48 @@ func (ctrl *TerminalController) GetLogs(c *fiber.Ctx) error {
 	id := c.Params("id")
 	limit := c.QueryInt("limit", 1000)
 	offset := c.QueryInt("offset", 0)
-	logType := c.Query("type")                         // input, output, 或空表示全部
+	logType := c.Query("type")                                         // input, output, 或空表示全部
+	logSource := strings.ToLower(strings.TrimSpace(c.Query("source"))) // all, native, pty
+	includeRaw := strings.EqualFold(strings.TrimSpace(c.Query("include_raw")), "true") || strings.TrimSpace(c.Query("include_raw")) == "1"
 	order := strings.ToLower(c.Query("order", "desc")) // asc/desc，默认返回最新日志
 	if order != "asc" && order != "desc" {
 		order = "desc"
 	}
 
 	query := model.DB.Model(&model.Log{}).Where("terminal_id = ?", id)
+	nativeTypes := []string{"ai_input_native", "ai_output_native"}
+	rawTypes := []string{"input_raw", "output_raw"}
+	ptyTypes := []string{"input", "output", "system", "input_raw", "output_raw"}
 
 	if logType != "" {
 		query = query.Where("log_type = ?", logType)
+	} else {
+		switch logSource {
+		case "native":
+			query = query.Where("log_type IN ?", nativeTypes)
+		case "pty":
+			if includeRaw {
+				query = query.Where("log_type IN ?", ptyTypes)
+			} else {
+				query = query.Where("log_type IN ?", []string{"input", "output", "system"})
+			}
+		default:
+			if includeRaw {
+				break
+			}
+			// 默认原生优先：若存在 ai_native 日志，则返回 ai_native + system；
+			// 否则保持原行为（过滤 raw）。
+			var nativeCount int64
+			_ = model.DB.Model(&model.Log{}).
+				Where("terminal_id = ?", id).
+				Where("log_type IN ?", nativeTypes).
+				Count(&nativeCount).Error
+			if nativeCount > 0 {
+				query = query.Where("log_type IN ?", []string{"ai_input_native", "ai_output_native", "system"})
+			} else {
+				query = query.Where("log_type NOT IN ?", rawTypes)
+			}
+		}
 	}
 
 	var total int64
@@ -1116,9 +819,10 @@ func (ctrl *TerminalController) GetLogs(c *fiber.Ctx) error {
 	query.Offset(offset).Limit(limit).Find(&logs)
 
 	return c.JSON(fiber.Map{
-		"items": logs,
-		"total": total,
-		"order": order,
+		"items":  logs,
+		"total":  total,
+		"order":  order,
+		"source": logSource,
 	})
 }
 
@@ -1146,15 +850,35 @@ func (ctrl *TerminalController) ListAllLogs(c *fiber.Ctx) error {
 	offset := c.QueryInt("offset", 0)
 	terminalID := c.Query("terminal_id")
 	logType := c.Query("type")
+	logSource := strings.ToLower(strings.TrimSpace(c.Query("source")))
 	keyword := c.Query("keyword")
+	includeRaw := strings.EqualFold(strings.TrimSpace(c.Query("include_raw")), "true") || strings.TrimSpace(c.Query("include_raw")) == "1"
 
 	query := model.DB.Model(&model.Log{}).Order("created_at desc")
+	nativeTypes := []string{"ai_input_native", "ai_output_native"}
+	rawTypes := []string{"input_raw", "output_raw"}
+	ptyTypes := []string{"input", "output", "system", "input_raw", "output_raw"}
 
 	if terminalID != "" {
 		query = query.Where("terminal_id = ?", terminalID)
 	}
 	if logType != "" {
 		query = query.Where("log_type = ?", logType)
+	} else {
+		switch logSource {
+		case "native":
+			query = query.Where("log_type IN ?", nativeTypes)
+		case "pty":
+			if includeRaw {
+				query = query.Where("log_type IN ?", ptyTypes)
+			} else {
+				query = query.Where("log_type IN ?", []string{"input", "output", "system"})
+			}
+		default:
+			if !includeRaw {
+				query = query.Where("log_type NOT IN ?", rawTypes)
+			}
+		}
 	}
 	if keyword != "" {
 		query = query.Where("content LIKE ?", "%"+keyword+"%")
@@ -1228,100 +952,4 @@ func GetDBSessions(c *fiber.Ctx) error {
 	var sessions []model.TerminalSession
 	model.DB.Order("created_at desc").Find(&sessions)
 	return c.JSON(fiber.Map{"items": sessions})
-}
-
-// updateConnectionStatus 更新终端连接状态，并处理关联任务的AI状态
-func (ctrl *TerminalController) updateConnectionStatus(terminalID, status, reason string) {
-	if model.DB == nil {
-		return
-	}
-
-	now := time.Now()
-	updates := map[string]interface{}{
-		"connection_status": status,
-	}
-
-	if status == "disconnected" {
-		updates["last_disconnect_at"] = now
-		if reason != "" {
-			updates["close_reason"] = reason
-		}
-	}
-
-	if err := model.DB.Model(&model.TerminalSession{}).
-		Where("id = ?", terminalID).
-		Updates(updates).Error; err != nil {
-		utils.Warn("Failed to update terminal connection status",
-			zap.String("terminal_id", terminalID),
-			zap.String("status", status),
-			zap.Error(err))
-		return
-	}
-
-	// 查找关联的任务，更新AI状态
-	var terminal model.TerminalSession
-	if err := model.DB.Select("task_id").First(&terminal, "id = ?", terminalID).Error; err != nil {
-		return
-	}
-
-	if terminal.TaskID == nil {
-		return
-	}
-
-	// 更新任务的AI状态
-	ctrl.updateTaskAIStatus(terminalID, *terminal.TaskID, status)
-}
-
-// updateTaskAIStatus 根据终端连接状态更新任务的AI状态
-func (ctrl *TerminalController) updateTaskAIStatus(terminalID, taskID, connectionStatus string) {
-	if model.DB == nil {
-		return
-	}
-
-	var task model.Task
-	if err := model.DB.Select("id", "active_terminal_id", "ai_status", "ai_pause_reason").
-		First(&task, "id = ?", taskID).Error; err != nil {
-		return
-	}
-
-	// 只处理当前活跃终端的状态变化
-	if task.ActiveTerminalID == nil || *task.ActiveTerminalID != terminalID {
-		return
-	}
-
-	now := time.Now()
-	updates := map[string]interface{}{}
-
-	if connectionStatus == "disconnected" {
-		// 终端断开，暂停AI
-		if task.AIStatus == "running" {
-			updates["ai_status"] = "paused"
-			updates["ai_pause_reason"] = "terminal_disconnected"
-			updates["updated_at"] = now
-		}
-	} else if connectionStatus == "connected" {
-		// 终端重连，恢复AI（如果之前是因为终端断开而暂停）
-		if task.AIStatus == "paused" && task.AIPauseReason == "terminal_disconnected" {
-			updates["ai_status"] = "running"
-			updates["ai_pause_reason"] = ""
-			updates["updated_at"] = now
-		}
-	}
-
-	if len(updates) > 0 {
-		if err := model.DB.Model(&model.Task{}).
-			Where("id = ?", taskID).
-			Updates(updates).Error; err != nil {
-			utils.Warn("Failed to update task AI status",
-				zap.String("task_id", taskID),
-				zap.String("connection_status", connectionStatus),
-				zap.Error(err))
-		} else {
-			utils.Info("Task AI status updated",
-				zap.String("task_id", taskID),
-				zap.String("terminal_id", terminalID),
-				zap.String("connection_status", connectionStatus),
-				zap.Any("updates", updates))
-		}
-	}
 }

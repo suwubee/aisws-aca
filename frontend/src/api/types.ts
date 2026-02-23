@@ -82,9 +82,31 @@ export interface ChangePasswordRequest {
   new_password: string
 }
 
+// ===== Runtime Version =====
+
+export interface RuntimeVersionInfo {
+  app_name: string
+  version: string
+  git_branch: string
+  git_commit: string
+  git_dirty: boolean
+  build_time: string
+  go_version: string
+  binary_path: string
+  pid: number
+  started_at: ISODateTimeString
+  server_host: string
+  server_port: string
+  server_addr: string
+  static_source: string
+  static_index_assets: string[]
+}
+
+export type RuntimeVersionResponse = ApiItemResponse<RuntimeVersionInfo>
+
 // ===== Tasks =====
 
-export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived'
+export type TaskStatus = 'todo' | 'in_progress' | 'paused' | 'done' | 'failed' | 'timeout' | 'archived'
 
 export interface TaskServer {
   id: string
@@ -136,11 +158,6 @@ export interface Task {
   ai_prompt: string
   ai_end_condition: string
   ai_error_handling: string
-
-  // AI任务绑定与终端管理
-  active_terminal_id?: string | null
-  ai_status?: string
-  ai_pause_reason?: string
 }
 
 export interface ListTasksParams {
@@ -149,6 +166,12 @@ export interface ListTasksParams {
   keyword?: string
   project_id?: string
   project_group_id?: string
+}
+
+export interface ListTaskHistoryParams extends ListTasksParams {
+  automation_mode?: string
+  limit?: number
+  offset?: number
 }
 
 export type ListTasksResponse = ApiItemsResponse<Task>
@@ -224,60 +247,11 @@ export interface MoveTaskRequest {
 export interface StartTaskResponse {
   message: string
   task: Task
+  agent_session_id?: string
+  execution_id?: string
   terminal_id: string
   terminal_ids?: string[]
   work_dir: string
-  cli_started: boolean
-  needs_user_action?: boolean
-  user_action_hint?: string
-}
-
-export interface AISession {
-  id: string
-  terminal_id: string
-  task_id: string
-  ai_type: string
-  state: string
-  session_id: string
-  session_file: string
-  created_at: ISODateTimeString
-  updated_at: ISODateTimeString
-}
-
-export type ListTaskAISessionsResponse = ApiItemsResponse<AISession>
-
-export interface DiscoveredTaskAISession {
-  tool: string
-  ai_type: string
-  session_id: string
-  session_file: string
-  project_key?: string
-  cwd?: string
-  updated_at: ISODateTimeString
-  imported: boolean
-  ai_session_id?: string
-}
-
-export type DiscoverTaskAISessionsResponse = ApiItemsResponse<DiscoveredTaskAISession>
-
-export interface ImportTaskAISessionResponse {
-  message: string
-  item: AISession
-}
-
-export interface CollectTaskAISessionsResponse {
-  message: string
-  imported_count: number
-  existing_count: number
-  items: AISession[]
-}
-
-export interface ResumeAISessionResponse {
-  message: string
-  task: Task
-  terminal_id: string
-  work_dir: string
-  resume_command: string
   cli_started: boolean
   needs_user_action?: boolean
   user_action_hint?: string
@@ -317,9 +291,6 @@ export interface TerminalAIAssistant {
   detected: boolean
   version?: string
   approval_prompt?: string
-  ai_session_id?: string
-  session_id?: string
-  session_file?: string
 }
 
 export interface TerminalSessionMetadata {
@@ -352,6 +323,18 @@ export interface CreateTerminalRequest {
   server_id: string
   title?: string
   task_id?: string
+}
+
+export interface RecoverTerminalRequest {
+  mode?: 'auto' | 'resume' | 'continue'
+  title?: string
+}
+
+export interface RecoverTerminalResponse {
+  message: string
+  action: 'resumed' | 'continued' | 'resume_unavailable' | string
+  source_terminal_id: string
+  item?: Terminal
 }
 
 export type ListTerminalsResponse = ApiItemsResponse<Terminal>
@@ -395,6 +378,8 @@ export interface TerminalLogsParams {
   limit?: number
   offset?: number
   type?: string
+  source?: 'all' | 'native' | 'pty' | string
+  include_raw?: boolean
   order?: OrderDirection
 }
 
@@ -712,3 +697,168 @@ export interface AgentConfig {
 
 export type GetAgentConfigsResponse = ApiItemsResponse<AgentConfig>
 export type UpdateAgentConfigsRequest = { items: AgentConfig[] }
+
+// ===== CLI Executions =====
+
+export type CLIExecutionRole = 'primary' | 'review' | 'replay' | 'audit' | string
+export type CLIExecutionStatus = 'running' | 'completed' | 'error' | 'timeout' | 'cancelled' | string
+
+export interface CLIExecution {
+  id: string
+  task_id: string | null
+  terminal_id: string | null
+  workflow_run_id: string | null
+  workflow_session_id: string | null
+  parent_execution_id: string | null
+  role: CLIExecutionRole
+  tool: string
+  mode: string
+  source: string
+  prompt_preview: string
+  status: CLIExecutionStatus
+  exit_code?: number | null
+  error_message: string
+  metadata: string
+  started_at: ISODateTimeString
+  completed_at: ISODateTimeString | null
+  updated_at: ISODateTimeString
+}
+
+export interface CLIExecutionEvent {
+  seq: number
+  event_type: string
+  payload: any
+  created_at: ISODateTimeString
+}
+
+export interface ListCLIExecutionsParams {
+  status?: string
+  task_id?: string
+  workflow_session_id?: string
+  parent_id?: string
+  role?: string
+  mode?: string
+  source?: string
+  tool?: string
+  limit?: number
+}
+
+export interface ListCLIExecutionsResponse {
+  items: CLIExecution[]
+  count: number
+  status?: string
+  task_id?: string
+  workflow_session_id?: string
+  parent_id?: string
+  role?: string
+  mode?: string
+  source?: string
+  tool?: string
+}
+
+export type GetCLIExecutionResponse = ApiItemResponse<CLIExecution>
+
+export interface ListCLIExecutionEventsParams {
+  after?: number
+  limit?: number
+}
+
+export interface ListCLIExecutionEventsResponse {
+  items: CLIExecutionEvent[]
+  count: number
+  after: number
+  hasMore: boolean
+}
+
+export interface ListCLIExecutionChildrenResponse {
+  items: CLIExecution[]
+  count: number
+  parent_id: string
+}
+
+export interface ResumeCLIExecutionRequest {
+  strategy?: 'auto' | 'native' | 'prompt_concat' | string
+  session_id?: string
+  work_dir?: string
+  server_id?: string
+  cli_type?: string
+  prompt?: string
+  title?: string
+}
+
+export interface ResumeCLIExecutionResponse {
+  message: string
+  strategy: string
+  execution_id?: string
+  parent_execution_id: string
+  terminal_id: string
+  command: string
+  session_id?: string
+  server_id?: string
+  work_dir?: string
+}
+
+export interface TaskHistoryWorkflowSession {
+  id: string
+  status: string
+  workflow_id: string
+  started_at: ISODateTimeString
+  completed_at: ISODateTimeString | null
+}
+
+export interface TaskHistoryItem {
+  task: Task
+  workflow_session?: TaskHistoryWorkflowSession | null
+  latest_execution?: CLIExecution | null
+}
+
+export interface TaskHistoryStatsOverview {
+  total: number
+  by_status: Record<string, number>
+  by_mode: Record<string, number>
+}
+
+export interface TaskHistoryStatsGroupItem {
+  group_id: string
+  group_name: string
+  total: number
+  by_status: Record<string, number>
+  by_mode: Record<string, number>
+}
+
+export interface TaskHistoryStatsProjectItem {
+  project_id: string
+  project_name: string
+  group_id: string
+  group_name: string
+  total: number
+  by_status: Record<string, number>
+  by_mode: Record<string, number>
+}
+
+export interface TaskHistoryStats {
+  overview: TaskHistoryStatsOverview
+  by_group: TaskHistoryStatsGroupItem[]
+  by_project: TaskHistoryStatsProjectItem[]
+}
+
+export interface ListTaskHistoryResponse {
+  items: TaskHistoryItem[]
+  count: number
+  total: number
+  limit: number
+  offset: number
+  project_id?: string
+  project_group_id?: string
+  status?: string
+  automation_mode?: string
+  keyword?: string
+  stats?: TaskHistoryStats
+}
+
+export type CLIExecutionSSEEventType = 'ready' | 'message' | 'done' | 'timeout' | 'error' | 'unknown'
+
+export interface CLIExecutionSSEEnvelope {
+  event: CLIExecutionSSEEventType
+  data: any
+}

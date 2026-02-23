@@ -38,7 +38,6 @@ func setupSSHServerTestApp(t *testing.T) (*fiber.App, *SSHServerController) {
 	app := fiber.New()
 	apiGroup := app.Group("/api", func(c *fiber.Ctx) error {
 		c.Locals("username", "tester")
-		c.Locals("userID", "u-1")
 		c.Locals("role", "admin")
 		return c.Next()
 	})
@@ -66,25 +65,9 @@ func (s *stubTerminalCreator) CreateSSHSession(serverID string) (*terminal.Sessi
 }
 
 func TestSSHServerController_CreateServerTerminal_ReturnsSessionID(t *testing.T) {
-	dsn := fmt.Sprintf("file:ssh_server_terminal_%d?mode=memory&cache=shared", time.Now().UnixNano())
-	if err := model.InitDB(dsn); err != nil {
-		t.Fatalf("InitDB failed: %v", err)
-	}
-	if err := model.DB.Create(&model.SSHServer{
-		ID:       "srv-1",
-		Name:     "srv-1",
-		Host:     "127.0.0.1",
-		Port:     22,
-		Username: "root",
-		AuthType: "password",
-	}).Error; err != nil {
-		t.Fatalf("create server failed: %v", err)
-	}
-
 	app := fiber.New()
 	apiGroup := app.Group("/api", func(c *fiber.Ctx) error {
 		c.Locals("username", "tester")
-		c.Locals("userID", "u-1")
 		c.Locals("role", "admin")
 		return c.Next()
 	})

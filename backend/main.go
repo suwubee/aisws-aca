@@ -57,48 +57,18 @@ func main() {
 	}
 
 	// 确保数据目录存在
-	if cfg.Database.Type == "" || cfg.Database.Type == "sqlite" {
-		if cfg.Database.DSN != "" &&
-			cfg.Database.DSN != ":memory:" &&
-			!strings.HasPrefix(cfg.Database.DSN, "file:") &&
-			!strings.Contains(cfg.Database.DSN, "://") {
-			dataDir := filepath.Dir(cfg.Database.DSN)
-			if err := os.MkdirAll(dataDir, 0755); err != nil {
-				utils.Error("Failed to create data directory", zap.Error(err))
-				log.Fatal(err)
-			}
-		}
+	dataDir := filepath.Dir(cfg.Database.DSN)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		utils.Error("Failed to create data directory", zap.Error(err))
+		log.Fatal(err)
 	}
 
-	// 初始化主数据库
-	dbCfg := model.DBConfig{
-		Type: cfg.Database.Type,
-		DSN:  cfg.Database.DSN,
+	// 初始化数据库
+	if err := model.InitDB(cfg.Database.DSN); err != nil {
+		utils.Error("Failed to initialize database", zap.Error(err))
+		log.Fatal(err)
 	}
-	mainDB, err := model.InitDatabase(dbCfg)
-	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
-	}
-	model.DB = mainDB
-	utils.Info("Database initialized", zap.String("type", cfg.Database.Type))
-
-	// 初始化日志数据库（如果启用）
-	if cfg.Database.LogDB.Enabled && cfg.Database.LogDB.DSN != "" {
-		logDBCfg := model.DBConfig{
-			Type: cfg.Database.LogDB.Type,
-			DSN:  cfg.Database.LogDB.DSN,
-		}
-		logDB, err := model.InitLogDatabase(logDBCfg)
-		if err != nil {
-			log.Printf("Warning: Failed to initialize log database: %v, using main database for logs", err)
-			model.LogDB = mainDB
-		} else {
-			model.LogDB = logDB
-			utils.Info("Log database initialized", zap.String("type", cfg.Database.LogDB.Type))
-		}
-	} else {
-		model.LogDB = mainDB
-	}
+	utils.Info("Database initialized", zap.String("dsn", cfg.Database.DSN))
 
 	// Ensure builtin defaults exist (prompt templates / key bindings / settings).
 	if err := promptsvc.EnsureDefaults(); err != nil {
@@ -116,6 +86,15 @@ func main() {
 
 	// 创建终端管理器
 	terminalManager := terminal.NewManager(&cfg.Terminal)
+	binaryPath, _ := os.Executable()
+	runtimeController := api.NewRuntimeVersionController(api.RuntimeVersionOptions{
+		AppName:    "AISWS-ACA",
+		ServerHost: cfg.Server.Host,
+		ServerPort: cfg.Server.Port,
+		BinaryPath: binaryPath,
+		PID:        os.Getpid(),
+		StartedAt:  time.Now().UTC(),
+	})
 
 	// 创建Fiber应用
 	app := fiber.New(fiber.Config{
@@ -146,14 +125,9 @@ func main() {
 	// API路由组
 	apiGroup := app.Group("/api")
 
-	// 健康检查（不需要认证）
-	apiGroup.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":    "ok",
-			"version":   "1.0.0",
-			"demo_mode": cfg.App.DemoMode,
-		})
-	})
+	// 公共版本/健康接口（不需要认证）
+	app.Get("/api/health", runtimeController.Health)
+	app.Get("/api/runtime/version", runtimeController.GetVersion)
 
 	// 认证API - login不需要认证
 	authController := api.NewAuthController(&cfg.Auth)
@@ -214,6 +188,10 @@ func main() {
 	logExportController := api.NewLogExportController()
 	logExportController.RegisterRoutes(apiGroup)
 
+	// CLI 执行事件API（迁移阶段：统一发起/监控/记录查询）
+	cliExecutionController := api.NewCLIExecutionController(terminalManager)
+	cliExecutionController.RegisterRoutes(apiGroup)
+
 	// 凭据管理API（仅管理员）
 	secretController := api.NewSecretController(cfg.Auth.JWTSecret)
 	secretController.RegisterRoutes(apiGroup)
@@ -242,8 +220,12 @@ func main() {
 	taskController.SetAIWorkflowEngine(aiWorkflowEngine)
 	aiWorkflowGroup := apiGroup.Group("/ai-workflow")
 	aiWorkflowGroup.Post("/start", api.StartAIWorkflow)
+	aiWorkflowGroup.Get("/session/by-terminal/:terminalId", api.GetLatestAIWorkflowSessionByTerminal)
 	aiWorkflowGroup.Get("/session/:id", api.GetAIWorkflowSession)
+	aiWorkflowGroup.Get("/session/:id/events", api.GetAIWorkflowSessionEvents)
+	aiWorkflowGroup.Get("/session/:id/logs", api.GetAIWorkflowSessionLogs)
 	aiWorkflowGroup.Post("/session/:id/message", api.PostAIWorkflowMessage)
+	aiWorkflowGroup.Post("/session/:id/pause", api.PostAIWorkflowPause)
 	aiWorkflowGroup.Get("/sessions", api.ListAIWorkflowSessions)
 
 	// 计划任务调度器（cron/定时运行任务或 AI 工作流）
@@ -284,6 +266,7 @@ func main() {
 			staticSource = "embedded"
 		}
 	}
+	runtimeController.SetStaticDetails(staticSource, detectStaticIndexAssets(staticSource, embeddedStaticFS))
 
 	registerStaticRoutes(app, staticRoot)
 
@@ -365,4 +348,50 @@ func listLocalIPv4() []string {
 	}
 	sort.Strings(ips)
 	return ips
+}
+
+func detectStaticIndexAssets(staticSource string, embeddedStaticFS fs.FS) []string {
+	names := make([]string, 0, 2)
+	if strings.HasPrefix(staticSource, "disk:") {
+		diskDir := strings.TrimPrefix(staticSource, "disk:")
+		if diskDir == "" {
+			return nil
+		}
+		if entries, err := os.ReadDir(filepath.Join(diskDir, "assets")); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if isIndexAsset(name) {
+					names = append(names, name)
+				}
+			}
+		}
+	} else if staticSource == "embedded" && embeddedStaticFS != nil {
+		if entries, err := fs.ReadDir(embeddedStaticFS, "assets"); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if isIndexAsset(name) {
+					names = append(names, name)
+				}
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return names
+}
+
+func isIndexAsset(name string) bool {
+	if !(strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".css")) {
+		return false
+	}
+	return strings.HasPrefix(name, "index-")
 }

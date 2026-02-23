@@ -92,14 +92,14 @@
                     ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Backend (Go)                             │
-│  Fiber/Gin + GORM + SQLite/PostgreSQL + PTY + WebSocket     │
+│  Fiber/Gin + GORM + SQLite + PTY + WebSocket               │
 └───────────────────┬─────────────────────────────────────────┘
                     │
     ┌───────────────┼───────────────┬───────────────┐
     ▼               ▼               ▼               ▼
 ┌────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐
-│   DB   │   │ Terminal │   │ AI Agent │   │ Auto Approve │
-│(SQL/PG)│   │ Manager  │   │ Detector │   │   Engine     │
+│ SQLite │   │ Terminal │   │ AI Agent │   │ Auto Approve │
+│   DB   │   │ Manager  │   │ Detector │   │   Engine     │
 └────────┘   └──────────┘   └──────────┘   └──────────────┘
 ```
 
@@ -113,7 +113,7 @@
 | 状态管理 | Pinia | Vue 3官方推荐 |
 | 后端框架 | Go + Fiber | 高性能、单文件部署 |
 | ORM | GORM | Go生态成熟ORM |
-| 数据库 | SQLite（默认）/ PostgreSQL（可选） | SQLite 轻量免部署；PostgreSQL 适合多用户/并发/审计留存 |
+| 数据库 | SQLite | 轻量、无需额外部署 |
 | PTY管理 | creack/pty | Go PTY库 |
 | 实时通信 | WebSocket | 双向实时通信 |
 

@@ -6,14 +6,19 @@ import type {
   CreateTaskCommentRequest,
   CreateTaskRequest,
   CreateTerminalRequest,
+  ListCLIExecutionEventsParams,
+  ListCLIExecutionsParams,
   ListApprovalRecordsParams,
   ListLoginRecordsParams,
   ListMessagesParams,
+  ListTaskHistoryParams,
   ListTasksParams,
   LogExportParams,
   LogListParams,
   MoveTaskRequest,
   RegisterUserRequest,
+  RecoverTerminalRequest,
+  ResumeCLIExecutionRequest,
   RuleSetRequest,
   RuleSetsImportRequest,
   TerminalLogsParams,
@@ -78,28 +83,15 @@ export const taskApi = {
   list: (params?: ListTasksParams) =>
     api.get('/tasks', { params }),
   getByStatus: () => api.get('/tasks/by-status'),
+  history: (params?: ListTaskHistoryParams) => api.get('/tasks/history', { params }),
   get: (id: string) => api.get(`/tasks/${id}`),
   getDetail: (id: string) => api.get(`/tasks/${id}/detail`),
   getTerminals: (id: string) => api.get(`/tasks/${id}/terminals`),
-  listAISessions: (id: string, params?: { limit?: number }) =>
-    api.get(`/tasks/${id}/ai-sessions`, { params: params || {} }),
-  discoverAISessions: (id: string, params?: { tool?: string; scope?: string; limit?: number }) =>
-    api.get(`/tasks/${id}/ai-sessions/discover`, { params: params || {} }),
-  importAISession: (id: string, data: { tool?: string; ai_type?: string; session_id: string; session_file?: string }) =>
-    api.post(`/tasks/${id}/ai-sessions/import`, data),
-  collectAISessions: (id: string, params?: { tool?: string; limit?: number }) =>
-    api.post(`/tasks/${id}/ai-sessions/collect`, null, { params: params || {} }),
-  resumeAISession: (taskId: string, aiSessionId: string) =>
-    api.post(`/tasks/${taskId}/ai-sessions/${aiSessionId}/resume`),
   create: (data: CreateTaskRequest) => api.post('/tasks', data),
   update: (id: string, data: UpdateTaskRequest) => api.put(`/tasks/${id}`, data),
   delete: (id: string) => api.delete(`/tasks/${id}`),
   move: (id: string, data: MoveTaskRequest) => api.post(`/tasks/${id}/move`, data),
-  start: (id: string) => api.post(`/tasks/${id}/start`),
-  bindTerminal: (id: string, terminalId: string) =>
-    api.post(`/tasks/${id}/bind-terminal`, { terminal_id: terminalId }),
-  pauseAI: (id: string) => api.post(`/tasks/${id}/pause`),
-  resumeAI: (id: string) => api.post(`/tasks/${id}/resume`)
+  start: (id: string) => api.post(`/tasks/${id}/start`)
 }
 
 // Comment API
@@ -117,22 +109,13 @@ export const terminalApi = {
     api.get('/terminals', { params: params || {} }),
   get: (id: string) => api.get(`/terminals/${id}`),
   create: (data: CreateTerminalRequest) => api.post('/terminals', data),
+  recover: (id: string, data?: RecoverTerminalRequest) => api.post(`/terminals/${id}/recover`, data || {}),
   close: (id: string) => api.post(`/terminals/${id}/close`),
   hide: (id: string, hidden: boolean) => api.post(`/terminals/${id}/hide`, { hidden }),
   rename: (id: string, title: string) =>
     api.post(`/terminals/${id}/rename`, { title }),
   linkTask: (id: string, taskId: string | null) =>
     api.post(`/terminals/${id}/link-task`, { task_id: taskId }),
-  emitAILog: (id: string, data: { type?: string; message: string; task_id?: string }) =>
-    api.post(`/terminals/${id}/ai-log`, data),
-  confirmAIAssistant: (
-    id: string,
-    payload: { decision: 'yes' | 'no' | 'unknown'; assistant_type?: string; ttl_seconds?: number }
-  ) => api.post(`/terminals/${id}/ai-assistant/confirm`, payload),
-  evaluateAIAssistant: (
-    id: string,
-    payload?: { use_ai?: boolean; max_lines?: number; max_runes?: number; timeout_ms?: number }
-  ) => api.post(`/terminals/${id}/ai-assistant/evaluate`, payload || {}),
   stats: () => api.get('/terminals/stats'),
   logs: (id: string, params?: TerminalLogsParams) => api.get(`/terminals/${id}/logs`, { params }),
   clearLogs: (id: string) => api.delete(`/terminals/${id}/logs`),
@@ -235,6 +218,11 @@ export const terminalDefaultsApi = {
   update: (payload: { default_login_dir: string }) => api.put('/terminal-defaults', payload)
 }
 
+export const runtimeApi = {
+  health: () => api.get('/health'),
+  getVersion: () => api.get('/runtime/version')
+}
+
 export const scheduleApi = {
   list: () => api.get('/schedules'),
   get: (id: string) => api.get(`/schedules/${encodeURIComponent(id)}`),
@@ -244,6 +232,17 @@ export const scheduleApi = {
   runNow: (id: string) => api.post(`/schedules/${encodeURIComponent(id)}/run`),
   listRuns: (id: string, params?: { limit?: number; offset?: number }) =>
     api.get(`/schedules/${encodeURIComponent(id)}/runs`, { params })
+}
+
+export const cliExecutionApi = {
+  list: (params?: ListCLIExecutionsParams) => api.get('/cli-executions', { params }),
+  get: (id: string) => api.get(`/cli-executions/${encodeURIComponent(id)}`),
+  listEvents: (id: string, params?: ListCLIExecutionEventsParams) =>
+    api.get(`/cli-executions/${encodeURIComponent(id)}/events`, { params }),
+  listChildren: (id: string, params?: { limit?: number }) =>
+    api.get(`/cli-executions/${encodeURIComponent(id)}/children`, { params }),
+  resume: (id: string, data?: ResumeCLIExecutionRequest) =>
+    api.post(`/cli-executions/${encodeURIComponent(id)}/resume`, data || {})
 }
 
 export type * from './types'

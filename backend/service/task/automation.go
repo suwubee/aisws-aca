@@ -1,8 +1,6 @@
 package task
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ai-coding-assistant/model"
-	"github.com/ai-coding-assistant/service/ai"
+	clisvc "github.com/ai-coding-assistant/service/cli"
 	promptsvc "github.com/ai-coding-assistant/service/prompt"
 	"github.com/ai-coding-assistant/service/terminal"
 	"github.com/ai-coding-assistant/utils"
@@ -94,6 +92,58 @@ func GetCLIConfig(cliType string) *CLIConfig {
 		return &CLIConfig{Type: "gemini", Command: "gemini"}
 	default:
 		return &CLIConfig{Type: "claude", Command: "claude"}
+	}
+}
+
+func cliReadyWaitDuration(cliType string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(cliType)) {
+	case "codex":
+		// Codex 初次启动可能较慢（模型/上下文初始化），给更长探测窗口。
+		return 180 * time.Second
+	case "claude", "gemini":
+		return 120 * time.Second
+	default:
+		return 90 * time.Second
+	}
+}
+
+func containsAnyMarker(text string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func cliScrollbackLooksReady(cliType, scrollback string) bool {
+	text := strings.ToLower(strings.TrimSpace(scrollback))
+	if text == "" {
+		return false
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(cliType))
+	switch kind {
+	case "codex":
+		return containsAnyMarker(text,
+			"openai codex",
+			"/model to change",
+			"context left",
+			"directory:",
+		)
+	case "claude":
+		return containsAnyMarker(text,
+			"claude code",
+			"/help",
+			"esc to interrupt",
+		)
+	case "gemini":
+		return containsAnyMarker(text,
+			"gemini cli",
+			"google gemini",
+		)
+	default:
+		return false
 	}
 }
 
@@ -187,63 +237,12 @@ type StartTaskResult struct {
 	Task            *model.Task  `json:"task"`
 	Terminal        taskTerminal `json:"terminal"`
 	TerminalIDs     []string     `json:"terminal_ids,omitempty"`
+	ExecutionID     string       `json:"execution_id,omitempty"`
 	WorkDir         string       `json:"work_dir"`
 	CLIStarted      bool         `json:"cli_started"`
 	NeedsUserAction bool         `json:"needs_user_action,omitempty"`
 	UserActionHint  string       `json:"user_action_hint,omitempty"`
 	Error           string       `json:"error,omitempty"`
-}
-
-// ResumeCLISessionResult 恢复 CLI 会话结果（用于 claude/codex）
-type ResumeCLISessionResult struct {
-	Task            *model.Task `json:"task"`
-	TerminalID      string      `json:"terminal_id"`
-	WorkDir         string      `json:"work_dir"`
-	ResumeCommand   string      `json:"resume_command"`
-	CLIStarted      bool        `json:"cli_started"`
-	NeedsUserAction bool        `json:"needs_user_action,omitempty"`
-	UserActionHint  string      `json:"user_action_hint,omitempty"`
-	Error           string      `json:"error,omitempty"`
-}
-
-func normalizeResumeTool(taskCLIType, aiType string) string {
-	v := strings.ToLower(strings.TrimSpace(aiType))
-	switch v {
-	case "claude-code", "claude", "claude_code", "claude-code-cli":
-		return "claude"
-	case "codex", "openai-codex":
-		return "codex"
-	case "gemini":
-		return "gemini"
-	}
-
-	taskCLIType = strings.ToLower(strings.TrimSpace(taskCLIType))
-	switch taskCLIType {
-	case "claude", "codex", "gemini":
-		return taskCLIType
-	default:
-		return ""
-	}
-}
-
-func buildResumeCommand(tool string, sessionID string) (string, error) {
-	tool = strings.ToLower(strings.TrimSpace(tool))
-	sessionID = strings.TrimSpace(sessionID)
-
-	switch tool {
-	case "claude":
-		if sessionID != "" {
-			return "claude --resume " + sessionID, nil
-		}
-		return "claude --continue", nil
-	case "codex":
-		if sessionID != "" {
-			return "codex resume " + sessionID, nil
-		}
-		return "codex resume --last", nil
-	default:
-		return "", fmt.Errorf("unsupported resume tool: %s", tool)
-	}
 }
 
 // StartTask 启动自动化任务
@@ -350,17 +349,34 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		_ = s.terminalManager.RenameSession(session.ID(), terminalTitle)
 	}
 
+	// 5. 如果有初始提示或AI托管模式，等待 CLI 启动后输入
+	promptToSend := strings.TrimSpace(task.InitialPrompt)
+	if task.AIManaged {
+		promptToSend = strings.TrimSpace(buildManagedPrompt(task))
+	}
+
+	result.ExecutionID = s.startTaskExecution(task, session.ID(), task.CLIType, "task-automation", promptToSend, map[string]any{
+		"server_id":       strings.TrimSpace(serverID),
+		"work_dir":        strings.TrimSpace(workDir),
+		"automation_mode": strings.TrimSpace(task.AutomationMode),
+		"terminal_title":  strings.TrimSpace(terminalTitle),
+		"ai_managed":      task.AIManaged,
+	})
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeStarted, map[string]any{
+		"stage":       "session_ready",
+		"terminal_id": session.ID(),
+		"server_id":   strings.TrimSpace(serverID),
+		"work_dir":    strings.TrimSpace(workDir),
+		"cli_type":    strings.TrimSpace(task.CLIType),
+	})
+
 	// 立即设置任务状态为 in_progress，防止重复启动（幂等性保证）
-	now := time.Now()
 	model.DB.Model(task).Updates(map[string]interface{}{
-		"status":             "in_progress",
-		"active_terminal_id": session.ID(),
-		"ai_status":          "running",
-		"ai_pause_reason":    "",
-		"expect_disconnect":  false,
-		"reconnect_attempts": 0,
-		"last_reconnect_at":  nil,
-		"updated_at":         now,
+		"status":     "in_progress",
+		"updated_at": time.Now(),
+	})
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+		"stage": "task_in_progress",
 	})
 
 	// 创建远程目录（如果需要）
@@ -368,18 +384,38 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 		mkdirCmd := fmt.Sprintf("mkdir -p %s\r", workDir)
 		if err := session.Write([]byte(mkdirCmd)); err != nil {
 			result.Error = fmt.Sprintf("Failed to create remote work directory: %v", err)
+			s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+				"stage":   "mkdir",
+				"command": strings.TrimSpace(mkdirCmd),
+				"error":   result.Error,
+			})
+			s.completeTaskExecution(result.ExecutionID, clisvc.StatusError, result.Error)
 			return result, err
 		}
 		sleep(300 * time.Millisecond)
 		utils.Info("Created remote work directory", zap.String("path", workDir), zap.String("server_id", serverID))
+		s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+			"stage":   "mkdir_done",
+			"command": strings.TrimSpace(mkdirCmd),
+		})
 	}
 
 	// 3. 进入工作目录
 	cdCmd := fmt.Sprintf("cd %s\r", workDir)
 	if err := session.Write([]byte(cdCmd)); err != nil {
 		result.Error = fmt.Sprintf("Failed to change directory: %v", err)
+		s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+			"stage":   "chdir",
+			"command": strings.TrimSpace(cdCmd),
+			"error":   result.Error,
+		})
+		s.completeTaskExecution(result.ExecutionID, clisvc.StatusError, result.Error)
 		return result, err
 	}
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+		"stage":   "chdir_done",
+		"command": strings.TrimSpace(cdCmd),
+	})
 
 	// 等待命令执行
 	sleep(300 * time.Millisecond)
@@ -389,9 +425,20 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 	cliCmd := cliConfig.Command + "\r"
 	if err := session.Write([]byte(cliCmd)); err != nil {
 		result.Error = fmt.Sprintf("Failed to start CLI: %v", err)
+		s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+			"stage":   "cli_start",
+			"command": strings.TrimSpace(cliCmd),
+			"error":   result.Error,
+		})
+		s.completeTaskExecution(result.ExecutionID, clisvc.StatusError, result.Error)
 		return result, err
 	}
 	result.CLIStarted = true
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+		"stage":   "cli_started",
+		"command": strings.TrimSpace(cliCmd),
+		"tool":    strings.TrimSpace(cliConfig.Type),
+	})
 
 	// 广播AI日志
 	if termSession, ok := session.(*terminal.Session); ok {
@@ -411,6 +458,10 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			termSession.BroadcastAILog("warning", text)
 		}
 
+		s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+			"stage":  "waiting_user",
+			"reason": text,
+		})
 		s.updateTaskStatus(task.ID, "paused", text)
 		s.createTaskMessage(task.ID, session.ID(), "approval_needed", "需要确认：CLI 启动方式", text)
 	}
@@ -432,15 +483,15 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			default:
 				hint += "请确认 CLI 已安装并可直接执行。"
 			}
+			s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+				"stage":   "cli_not_found",
+				"command": strings.TrimSpace(cliCmd),
+				"hint":    strings.TrimSpace(hint),
+			})
+			s.completeTaskExecution(result.ExecutionID, clisvc.StatusError, "CLI command not found")
 			pauseForUserAction(hint)
 			return result, nil
 		}
-	}
-
-	// 5. 如果有初始提示或AI托管模式，等待 CLI 启动后输入
-	promptToSend := task.InitialPrompt
-	if task.AIManaged {
-		promptToSend = buildManagedPrompt(task)
 	}
 
 	if promptToSend != "" {
@@ -450,18 +501,27 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			promptWithEnter := promptToSend + "\r"
 			if err := session.Write([]byte(promptWithEnter)); err != nil {
 				utils.Warn("Failed to send prompt via PTY fallback", zap.Error(err))
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+					"stage":  "prompt_send_fallback",
+					"method": "pty",
+					"error":  err.Error(),
+				})
 			}
 			utils.Info("Prompt sent via PTY fallback (no terminal metadata)")
+			s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+				"stage":      "prompt_sent",
+				"method":     "pty",
+				"prompt_len": len([]rune(promptToSend)),
+			})
 			goto PROMPT_SENT
 		}
 
-		// 使用detector检测CLI是否准备好
-		maxWait := 30 * time.Second
+		// 使用 detector + scrollback 启发式双通道检测 CLI 就绪，降低误判暂停概率。
+		maxWait := cliReadyWaitDuration(cliConfig.Type)
 		checkInterval := 500 * time.Millisecond
 		startTime := time.Now()
 		cliReady := false
-		sawApproval := false
-		lastApprovalPrompt := ""
+		readySource := ""
 
 		utils.Info("Waiting for CLI ready", zap.String("task_id", task.ID), zap.String("prompt_len", fmt.Sprintf("%d", len(promptToSend))))
 
@@ -476,30 +536,31 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 					state := meta.AIAssistant.State
 					if state == "waiting_input" || state == "working" {
 						cliReady = true
+						readySource = "detector:" + state
 						utils.Info("CLI ready detected", zap.String("state", state))
 						break
 					}
-					if state == "waiting_approval" {
-						sawApproval = true
-						if p := strings.TrimSpace(meta.AIAssistant.ApprovalPrompt); p != "" {
-							lastApprovalPrompt = p
-						}
-					}
 				}
+			}
+
+			if cliScrollbackLooksReady(cliConfig.Type, string(termSession.Scrollback())) {
+				cliReady = true
+				readySource = "scrollback"
+				utils.Info("CLI ready detected by scrollback heuristic",
+					zap.String("cli_type", strings.TrimSpace(cliConfig.Type)))
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+					"stage":     "cli_ready_heuristic",
+					"source":    "scrollback",
+					"cli_type":  strings.TrimSpace(cliConfig.Type),
+					"waited_ms": time.Since(startTime).Milliseconds(),
+				})
+				break
 			}
 		}
 
 		if !cliReady {
 			utils.Warn("CLI ready timeout, pausing task instead of sending prompt")
-			hint := ""
-			if sawApproval {
-				hint = "CLI 当前停留在需要确认/选择的提示（waiting_approval），未能进入可输入态，已暂停任务以避免误把提示词输入到确认框。\n"
-				if lastApprovalPrompt != "" {
-					hint += "\n检测到的提示片段：\n" + lastApprovalPrompt + "\n\n"
-				}
-			} else {
-				hint = "CLI 就绪检测超时：未能确认已进入 AI CLI 交互界面，已暂停任务以避免误操作。\n"
-			}
+			hint := "CLI 就绪检测超时：未能确认已进入 AI CLI 交互界面，已暂停任务以避免误操作。\n"
 			switch strings.ToLower(strings.TrimSpace(cliConfig.Type)) {
 			case "claude":
 				hint += "请打开终端确认已进入 Claude Code（可尝试执行 claude 或 npx claude），然后再继续。"
@@ -510,9 +571,23 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			default:
 				hint += "请打开终端确认已进入目标 CLI，然后再继续。"
 			}
+			s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+				"stage":       "cli_ready_timeout",
+				"hint":        strings.TrimSpace(hint),
+				"waited_sec":  int(maxWait.Seconds()),
+				"check_every": int(checkInterval / time.Millisecond),
+			})
+			s.completeTaskExecution(result.ExecutionID, clisvc.StatusTimeout, "cli ready timeout")
 			pauseForUserAction(hint)
 			return result, nil
 		}
+
+		s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+			"stage":      "cli_ready",
+			"source":     readySource,
+			"waited_ms":  time.Since(startTime).Milliseconds(),
+			"prompt_len": len([]rune(promptToSend)),
+		})
 
 		termSession.BroadcastAILog("info", "CLI已就绪，准备发送提示")
 
@@ -531,11 +606,22 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 				if termSession, ok := session.(*terminal.Session); ok {
 					termSession.BroadcastAILog("error", fmt.Sprintf("发送提示失败: %v", err))
 				}
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+					"stage":  "prompt_send",
+					"method": "tmux",
+					"error":  err.Error(),
+				})
 			} else {
 				utils.Info("Prompt sent via tmux", zap.String("target", target))
 				if termSession, ok := session.(*terminal.Session); ok {
+					termSession.RecordInputForLog(promptToSend + "\r")
 					termSession.BroadcastAILogWithInput("action", "发送提示内容", "text", promptToSend)
 				}
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+					"stage":      "prompt_sent",
+					"method":     "tmux",
+					"prompt_len": len([]rune(promptToSend)),
+				})
 			}
 
 			sleep(300 * time.Millisecond)
@@ -549,16 +635,29 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 					if termSession, ok := session.(*terminal.Session); ok {
 						termSession.BroadcastAILog("error", "发送回车失败")
 					}
+					s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+						"stage":  "prompt_enter",
+						"method": "pty",
+						"error":  err.Error(),
+					})
 				} else {
 					if termSession, ok := session.(*terminal.Session); ok {
 						termSession.BroadcastAILogWithInput("action", "发送回车(PTY)", "key", "Enter")
 					}
+					s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+						"stage":  "prompt_enter_sent",
+						"method": "pty",
+					})
 				}
 			} else {
 				utils.Info("Enter (C-m) sent via tmux")
 				if termSession, ok := session.(*terminal.Session); ok {
 					termSession.BroadcastAILogWithInput("action", "发送回车，任务开始执行", "key", "Ctrl+M")
 				}
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+					"stage":  "prompt_enter_sent",
+					"method": "tmux",
+				})
 			}
 		} else {
 			// 回退：直接写入 PTY
@@ -566,6 +665,17 @@ func (s *AutomationService) StartTask(task *model.Task) (*StartTaskResult, error
 			promptWithEnter := promptToSend + "\r"
 			if err := session.Write([]byte(promptWithEnter)); err != nil {
 				utils.Warn("Failed to send via PTY", zap.Error(err))
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+					"stage":  "prompt_send_fallback",
+					"method": "pty",
+					"error":  err.Error(),
+				})
+			} else {
+				s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+					"stage":      "prompt_sent",
+					"method":     "pty",
+					"prompt_len": len([]rune(promptToSend)),
+				})
 			}
 		}
 	}
@@ -580,182 +690,144 @@ PROMPT_SENT:
 
 	// 7. 启动后台任务监控
 	go s.monitorTaskCompletion(task.ID, session.ID())
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+		"stage":       "monitor_started",
+		"terminal_id": session.ID(),
+	})
 
 	result.TerminalIDs = []string{session.ID()}
 
 	return result, nil
 }
 
-// ResumeCLISession creates a new terminal and resumes an existing CLI session (claude/codex).
-//
-// Behavior (MVP):
-// - Always creates a new terminal session for the task to avoid "resume command sent inside CLI" edge cases.
-// - Updates task.active_terminal_id and sets status=in_progress.
-// - Starts task monitor loop on the new terminal.
-func (s *AutomationService) ResumeCLISession(taskID string, aiSessionID string) (*ResumeCLISessionResult, error) {
-	result := &ResumeCLISessionResult{}
+func firstTerminalID(ids []string) string {
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
 
-	taskID = strings.TrimSpace(taskID)
-	aiSessionID = strings.TrimSpace(aiSessionID)
+func (s *AutomationService) startTaskExecution(task *model.Task, terminalID, tool, source, prompt string, metadata map[string]any) string {
+	if model.DB == nil || task == nil {
+		return ""
+	}
+
+	tracker := clisvc.NewExecutionTracker(model.DB)
+	if tracker == nil {
+		return ""
+	}
+
+	taskID := strings.TrimSpace(task.ID)
 	if taskID == "" {
-		result.Error = "Task id is required"
-		return result, errors.New("task id is required")
+		return ""
 	}
-	if aiSessionID == "" {
-		result.Error = "AI session id is required"
-		return result, errors.New("ai session id is required")
+	taskIDPtr := &taskID
+
+	var terminalIDPtr *string
+	if tid := strings.TrimSpace(terminalID); tid != "" {
+		terminalIDPtr = &tid
 	}
+
+	mode := "execute"
+	if strings.TrimSpace(source) == "task-script" {
+		mode = "execute"
+	}
+
+	rec, err := tracker.Start(clisvc.StartExecutionInput{
+		TaskID:     taskIDPtr,
+		TerminalID: terminalIDPtr,
+		Role:       clisvc.ExecutionRolePrimary,
+		Tool:       strings.TrimSpace(tool),
+		Mode:       mode,
+		Source:     strings.TrimSpace(source),
+		Prompt:     strings.TrimSpace(prompt),
+		Metadata:   metadata,
+	})
+	if err != nil || rec == nil {
+		return ""
+	}
+
+	return strings.TrimSpace(rec.ID)
+}
+
+func (s *AutomationService) appendTaskExecutionEvent(executionID, eventType string, payload map[string]any) {
+	id := strings.TrimSpace(executionID)
+	if id == "" || model.DB == nil {
+		return
+	}
+	tracker := clisvc.NewExecutionTracker(model.DB)
+	if tracker == nil {
+		return
+	}
+	_ = tracker.AppendEvent(id, eventType, payload)
+}
+
+func (s *AutomationService) completeTaskExecution(executionID, status, errMsg string) {
+	id := strings.TrimSpace(executionID)
+	if id == "" || model.DB == nil {
+		return
+	}
+	tracker := clisvc.NewExecutionTracker(model.DB)
+	if tracker == nil {
+		return
+	}
+	_ = tracker.Complete(id, strings.TrimSpace(status), nil, strings.TrimSpace(errMsg))
+}
+
+func mapTaskStatusToExecutionStatus(taskStatus string) string {
+	switch strings.ToLower(strings.TrimSpace(taskStatus)) {
+	case "done", "completed", "success":
+		return clisvc.StatusCompleted
+	case "failed", "error":
+		return clisvc.StatusError
+	case "timeout":
+		return clisvc.StatusTimeout
+	case "paused", "cancelled", "canceled", "archived":
+		return clisvc.StatusCancelled
+	default:
+		return clisvc.StatusCancelled
+	}
+}
+
+func (s *AutomationService) finalizeRunningTaskExecution(taskID, taskStatus, reason string) {
 	if model.DB == nil {
-		result.Error = "Database not initialized"
-		return result, errors.New("database not initialized")
+		return
+	}
+	tid := strings.TrimSpace(taskID)
+	if tid == "" {
+		return
 	}
 
-	var task model.Task
-	if err := model.DB.First(&task, "id = ?", taskID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			result.Error = "Task not found"
-			return result, errors.New("task not found")
-		}
-		result.Error = "Failed to query task"
-		return result, err
-	}
-	result.Task = &task
-
-	var aiSession model.AISession
-	if err := model.DB.First(&aiSession, "id = ?", aiSessionID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			result.Error = "AI session not found"
-			return result, errors.New("ai session not found")
-		}
-		result.Error = "Failed to query AI session"
-		return result, err
-	}
-	if strings.TrimSpace(aiSession.TaskID) != taskID {
-		result.Error = "AI session does not belong to task"
-		return result, errors.New("ai session does not belong to task")
+	var exec model.CLIExecution
+	if err := model.DB.
+		Where("task_id = ? AND status = ?", tid, clisvc.StatusRunning).
+		Where("source IN ?", []string{"task-automation", "task-script"}).
+		Order("updated_at desc").
+		First(&exec).Error; err != nil {
+		return
 	}
 
-	tool := normalizeResumeTool(task.CLIType, aiSession.AIType)
-	resumeCmd, err := buildResumeCommand(tool, aiSession.SessionID)
-	if err != nil {
-		result.Error = err.Error()
-		return result, err
-	}
-	result.ResumeCommand = resumeCmd
-
-	serverID := ""
-	if task.ServerID != nil {
-		serverID = strings.TrimSpace(*task.ServerID)
+	executionStatus := mapTaskStatusToExecutionStatus(taskStatus)
+	eventType := clisvc.EventTypeCompleted
+	errMsg := ""
+	trimmedReason := strings.TrimSpace(reason)
+	if executionStatus != clisvc.StatusCompleted {
+		eventType = clisvc.EventTypeError
+		errMsg = trimmedReason
 	}
 
-	// 1) Ensure work_dir exists (remote default: ~/.aca/tasks/<id>)
-	workDir := strings.TrimSpace(task.WorkDir)
-	if workDir == "" {
-		workDir = defaultTaskWorkDir(task.ID, serverID != "")
-		task.WorkDir = workDir
-		_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
-			"work_dir":   workDir,
-			"updated_at": time.Now(),
-		}).Error
+	payload := map[string]any{
+		"task_status": strings.TrimSpace(taskStatus),
 	}
-	result.WorkDir = workDir
-
-	// 2) Create a new terminal session (prefer SSH when server_id is present)
-	terminalTitle := fmt.Sprintf("[%s] %s (resume)", tool, task.Title)
-	if serverLabel := resolveServerLabel(serverID); serverLabel != "" {
-		terminalTitle = fmt.Sprintf("%s @ %s", terminalTitle, serverLabel)
+	if trimmedReason != "" {
+		payload["reason"] = trimmedReason
 	}
 
-	var session taskTerminal
-	if serverID != "" {
-		session, err = s.terminalManager.CreateSSHSession(serverID)
-	} else {
-		// Backward compatible / test-friendly: allow local PTY when server_id is empty.
-		session, err = s.terminalManager.CreateSession(terminalTitle, &task.ID)
-	}
-	if err != nil {
-		result.Error = fmt.Sprintf("Failed to create terminal: %v", err)
-		return result, err
-	}
-	terminalID := session.ID()
-	result.TerminalID = terminalID
-
-	if serverID != "" {
-		_ = s.terminalManager.LinkTask(terminalID, &task.ID)
-		_ = s.terminalManager.RenameSession(terminalID, terminalTitle)
-	}
-
-	// 3) Update task state to reflect the new active terminal.
-	now := time.Now()
-	_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
-		"status":             "in_progress",
-		"completed_at":       nil,
-		"active_terminal_id": terminalID,
-		"ai_status":          "running",
-		"ai_pause_reason":    "",
-		"expect_disconnect":  false,
-		"reconnect_attempts": 0,
-		"last_reconnect_at":  nil,
-		"updated_at":         now,
-	}).Error
-	task.Status = "in_progress"
-	task.CompletedAt = nil
-	task.ActiveTerminalID = &terminalID
-	task.AIStatus = "running"
-	task.AIPauseReason = ""
-
-	// 4) Prepare working directory
-	if task.AutoCreateDir && workDir != "" {
-		if serverID != "" {
-			_ = session.Write([]byte(fmt.Sprintf("mkdir -p %s\r", workDir)))
-		} else {
-			_ = os.MkdirAll(workDir, 0755)
-		}
-	}
-	if workDir != "" {
-		_ = session.Write([]byte(fmt.Sprintf("cd %s\r", workDir)))
-	}
-
-	// 5) Start CLI with resume command
-	if err := session.Write([]byte(resumeCmd + "\r")); err != nil {
-		result.Error = fmt.Sprintf("Failed to resume CLI: %v", err)
-		return result, err
-	}
-	result.CLIStarted = true
-
-	if termSession, ok := session.(*terminal.Session); ok {
-		termSession.BroadcastAILog("action", fmt.Sprintf("恢复会话：%s", resumeCmd))
-	}
-
-	// Quick check (async): command not found
-	if termSession, ok := session.(*terminal.Session); ok {
-		go func() {
-			sleep(800 * time.Millisecond)
-			scroll := strings.ToLower(string(termSession.Scrollback()))
-			var hint string
-			switch tool {
-			case "claude":
-				if strings.Contains(scroll, "claude: command not found") || strings.Contains(scroll, "claude: not found") || strings.Contains(scroll, "command not found: claude") {
-					hint = "未检测到 claude 命令可用：请在目标服务器安装 Claude Code CLI 或确认 PATH 后重试。"
-				}
-			case "codex":
-				if strings.Contains(scroll, "codex: command not found") || strings.Contains(scroll, "codex: not found") || strings.Contains(scroll, "command not found: codex") {
-					hint = "未检测到 codex 命令可用：请在目标服务器安装 Codex CLI 或确认 PATH 后重试。"
-				}
-			}
-			if strings.TrimSpace(hint) == "" {
-				return
-			}
-			s.updateTaskStatus(task.ID, "paused", hint)
-			s.createTaskMessage(task.ID, terminalID, "approval_needed", "需要确认：CLI 安装/启动方式", hint)
-			termSession.BroadcastAILog("warning", hint)
-		}()
-	}
-
-	// 6) Start monitor loop on the new active terminal.
-	go s.monitorTaskCompletion(task.ID, terminalID)
-
-	return result, nil
+	s.appendTaskExecutionEvent(exec.ID, eventType, payload)
+	s.completeTaskExecution(exec.ID, executionStatus, errMsg)
 }
 
 const (
@@ -845,21 +917,37 @@ func (s *AutomationService) startScriptTask(task *model.Task) (*StartTaskResult,
 	}
 
 	// 设置任务为进行中，防止重复启动
-	updates := map[string]interface{}{
+	model.DB.Model(task).Updates(map[string]interface{}{
 		"status":     "in_progress",
 		"updated_at": time.Now(),
-	}
-	if result.Terminal != nil {
-		if id := strings.TrimSpace(result.Terminal.ID()); id != "" {
-			updates["active_terminal_id"] = id
-		}
-	}
-	model.DB.Model(task).Updates(updates)
+	})
+
+	result.ExecutionID = s.startTaskExecution(task, firstTerminalID(result.TerminalIDs), "shell", "task-script", script, map[string]any{
+		"target_server_ids": append([]string(nil), targetServerIDs...),
+		"work_dir":          strings.TrimSpace(workDir),
+		"automation_mode":   strings.TrimSpace(task.AutomationMode),
+		"target_count":      len(targetServerIDs),
+	})
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeStarted, map[string]any{
+		"stage":        "script_dispatch",
+		"terminal_ids": append([]string(nil), result.TerminalIDs...),
+		"work_dir":     strings.TrimSpace(workDir),
+	})
 
 	// 写入并执行脚本
 	for _, session := range sessions {
+		s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+			"stage":       "script_target_start",
+			"terminal_id": session.ID(),
+		})
 		if err := runScriptInTerminal(session, workDir, script, task.AutoCreateDir, isRemote); err != nil {
 			result.Error = fmt.Sprintf("Failed to start script: %v", err)
+			s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeError, map[string]any{
+				"stage":       "script_target_start",
+				"terminal_id": session.ID(),
+				"error":       result.Error,
+			})
+			s.completeTaskExecution(result.ExecutionID, clisvc.StatusError, result.Error)
 			s.updateTaskStatus(task.ID, "failed", "脚本下发失败")
 			return result, err
 		}
@@ -867,6 +955,9 @@ func (s *AutomationService) startScriptTask(task *model.Task) (*StartTaskResult,
 
 	// 后台监控脚本执行结果（多终端聚合）
 	go s.monitorScriptTask(task.ID, targets)
+	s.appendTaskExecutionEvent(result.ExecutionID, clisvc.EventTypeProgress, map[string]any{
+		"stage": "script_monitor_started",
+	})
 
 	return result, nil
 }
@@ -1188,11 +1279,6 @@ func containsScriptNeedsUserSignal(logText string) bool {
 		strings.Contains(text, "restart")
 }
 
-// StartMonitoring 启动任务完成状态监控（用于中途启用AI托管的情况）
-func (s *AutomationService) StartMonitoring(taskID, terminalID string) {
-	go s.monitorTaskCompletion(taskID, terminalID)
-}
-
 // monitorTaskCompletion 后台监控任务完成状态
 func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 	monitor := NewTaskMonitor()
@@ -1225,13 +1311,10 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 
 			// 如果任务状态已经变化（例如终端关闭触发的自动完成），不要覆盖现有结果
 			var current model.Task
-			if err := model.DB.Select("id", "status", "active_terminal_id").First(&current, "id = ?", taskID).Error; err != nil {
+			if err := model.DB.Select("id", "status").First(&current, "id = ?", taskID).Error; err != nil {
 				return
 			}
 			if strings.TrimSpace(current.Status) != "in_progress" {
-				return
-			}
-			if current.ActiveTerminalID == nil || strings.TrimSpace(*current.ActiveTerminalID) != terminalID {
 				return
 			}
 
@@ -1261,12 +1344,6 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 			utils.Info("Task status changed, stopping monitor",
 				zap.String("task_id", taskID),
 				zap.String("status", task.Status))
-			return
-		}
-		if task.ActiveTerminalID == nil || strings.TrimSpace(*task.ActiveTerminalID) != terminalID {
-			utils.Info("Task active terminal changed, stopping monitor",
-				zap.String("task_id", taskID),
-				zap.String("terminal_id", terminalID))
 			return
 		}
 
@@ -1299,38 +1376,10 @@ func (s *AutomationService) monitorTaskCompletion(taskID, terminalID string) {
 				zap.String("task_id", taskID),
 				zap.String("reason", decision.Reason))
 			if task.AIManaged {
-				// AI托管模式下，先用AI判断是否真的需要人工审批
-				aiDecision, err := s.judgeAIApproval(taskID, terminalID, decision.Reason)
-				if err != nil {
-					utils.Error("AI approval judgment failed",
-						zap.String("task_id", taskID),
-						zap.Error(err))
-					// AI判断失败，降级为暂停等待人工处理
-					s.updateTaskStatus(taskID, "paused", decision.Reason)
-					s.createTaskMessage(taskID, terminalID, "approval_needed", "任务需要用户干预", decision.Reason)
-					return
-				}
-
-				// 根据AI判断结果处理
-				if aiDecision.IsCompleted {
-					// AI判断任务已完成
-					s.updateTaskStatus(taskID, "done", aiDecision.Reasoning)
-					utils.Info("Task completed by AI judgment",
-						zap.String("task_id", taskID),
-						zap.String("reasoning", aiDecision.Reasoning))
-					return
-				} else if aiDecision.NeedsApproval {
-					// AI判断确实需要人工审批
-					s.updateTaskStatus(taskID, "paused", aiDecision.Reasoning)
-					s.createTaskMessage(taskID, terminalID, "approval_needed", "AI判断需要人工审批", aiDecision.Reasoning)
-					return
-				} else {
-					// AI判断不需要审批，继续监控
-					utils.Info("AI judgment: continue monitoring",
-						zap.String("task_id", taskID),
-						zap.String("reasoning", aiDecision.Reasoning))
-					// 继续下一轮监控
-				}
+				// AI托管模式下，暂停任务等待用户干预
+				s.updateTaskStatus(taskID, "paused", decision.Reason)
+				s.createTaskMessage(taskID, terminalID, "approval_needed", "任务需要用户干预", decision.Reason)
+				return
 			}
 
 		case MonitorActionRetry:
@@ -1390,6 +1439,10 @@ func (s *AutomationService) updateTaskStatus(taskID, status, reason string) {
 			Where("id = ? AND (remark IS NULL OR remark = '')", taskID).
 			Update("remark", trimmed)
 	}
+
+	if strings.ToLower(strings.TrimSpace(status)) != "in_progress" {
+		s.finalizeRunningTaskExecution(taskID, status, reason)
+	}
 }
 
 // createTaskMessage 创建任务消息通知
@@ -1406,115 +1459,4 @@ func (s *AutomationService) createTaskMessage(taskID, terminalID, msgType, title
 		UpdatedAt:  time.Now(),
 	}
 	model.DB.Create(&msg)
-}
-
-// aiApprovalDecision AI审批决策结果
-type aiApprovalDecision struct {
-	NeedsApproval bool   `json:"needs_approval"` // 是否需要人工审批
-	IsCompleted   bool   `json:"is_completed"`   // 任务是否已完成
-	Reasoning     string `json:"reasoning"`      // 决策理由
-	Confidence    float64 `json:"confidence"`    // 置信度 0-1
-}
-
-// judgeAIApproval 使用AI判断是否需要人工审批
-// 在AI托管模式下，当监控判断需要用户干预时，先用AI分析是否真的需要审批
-func (s *AutomationService) judgeAIApproval(taskID, terminalID string, alertReason string) (*aiApprovalDecision, error) {
-	// 获取任务信息
-	var task model.Task
-	if err := model.DB.First(&task, "id = ?", taskID).Error; err != nil {
-		return nil, fmt.Errorf("task not found: %w", err)
-	}
-
-	// 获取最近的终端输出（最后500行）
-	var logs []model.Log
-	if err := model.DB.Where("terminal_id = ?", terminalID).
-		Order("created_at desc").
-		Limit(500).
-		Find(&logs).Error; err != nil {
-		return nil, fmt.Errorf("failed to get logs: %w", err)
-	}
-
-	// 反转日志顺序（从旧到新）
-	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
-		logs[i], logs[j] = logs[j], logs[i]
-	}
-
-	// 构建终端输出文本
-	var outputBuilder strings.Builder
-	for _, log := range logs {
-		if log.LogType == "output" {
-			outputBuilder.WriteString(log.Content)
-		}
-	}
-	terminalOutput := outputBuilder.String()
-
-	// 构建AI分析提示词
-	prompt := fmt.Sprintf(`你是一个AI任务管理助手。当前任务的监控系统检测到可能需要用户干预，但在AI托管模式下，你需要判断是否真的需要人工审批。
-
-任务信息：
-- 任务标题：%s
-- 任务描述：%s
-- 监控告警原因：%s
-
-最近的终端输出（最后500行）：
-%s
-
-请分析以下情况并给出判断：
-1. 是否存在明确的审批提示（如 yes/no, y/n, confirm 等）？
-2. 任务是否已经完成（看到成功标志、完成消息等）？
-3. 是否只是正常的进度输出或信息提示，不需要人工干预？
-
-请以JSON格式返回你的判断：
-{
-  "needs_approval": true/false,  // 是否需要人工审批
-  "is_completed": true/false,    // 任务是否已完成
-  "reasoning": "你的分析理由",
-  "confidence": 0.0-1.0          // 判断的置信度
-}`, task.Title, task.Description, alertReason, terminalOutput)
-
-	// 调用AI进行分析
-	aiProvider := ai.NewAIProvider()
-	config, err := aiProvider.GetDefaultConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get AI config: %w", err)
-	}
-
-	ctx := context.Background()
-	aiResponse, err := aiProvider.ChatSimple(ctx, config, "你是一个AI任务管理助手", prompt)
-	if err != nil {
-		return nil, fmt.Errorf("AI analysis failed: %w", err)
-	}
-
-	// 解析AI响应
-	var decision aiApprovalDecision
-	if err := parseJSONFromText(aiResponse, &decision); err != nil {
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
-	}
-
-	utils.Info("AI approval judgment",
-		zap.String("task_id", taskID),
-		zap.Bool("needs_approval", decision.NeedsApproval),
-		zap.Bool("is_completed", decision.IsCompleted),
-		zap.Float64("confidence", decision.Confidence),
-		zap.String("reasoning", decision.Reasoning))
-
-	return &decision, nil
-}
-
-// parseJSONFromText 从文本中提取并解析JSON
-func parseJSONFromText(text string, v any) error {
-	// 尝试直接解析
-	if err := json.Unmarshal([]byte(text), v); err == nil {
-		return nil
-	}
-
-	// 尝试提取JSON代码块
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end == -1 || start >= end {
-		return fmt.Errorf("no JSON found in text")
-	}
-
-	jsonStr := text[start : end+1]
-	return json.Unmarshal([]byte(jsonStr), v)
 }

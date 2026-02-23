@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
@@ -13,7 +13,6 @@ import { useApprovalStore } from '@/stores/approval'
 
 const props = defineProps<{
   sessionId: string
-  autoScrollSeconds?: number
 }>()
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
@@ -33,6 +32,7 @@ let fitAddon: FitAddon | null = null
 let ws: WebSocket | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeRaf: number | null = null
+let openRaf: number | null = null
 let decoder = new TextDecoder('utf-8')
 let didInitialScroll = false
 let didOpen = false
@@ -41,10 +41,8 @@ let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let didReportDisconnect = false
 let didShowDemoNotice = false
-let didShowReadOnlyNotice = false
-let autoScrollTimer: number | null = null
-let pendingScrollback = false
-const isReadOnly = ref(false)
+let acaNoiseCarry = ''
+const ACA_INTERNAL_LINE_RE = /(^|[\r\n])[^\r\n]*(?:__ACA_CMD_BEGIN_[0-9a-f]+__|__ACA_CMD_END_[0-9a-f]+__:[0-9]*|ACA_CODE=\$\?;\s*echo\s+['"]__ACA_CMD_END_[0-9a-f]+__|echo\s+['"]__ACA_CMD_BEGIN_[0-9a-f]+__|bash\s+<<'ACA_EOF_[0-9a-f]+'|ACA_EOF_[0-9a-f]+)[^\r\n]*(?=\r?\n|$)/gi
 
 onMounted(() => {
   initTerminal()
@@ -75,13 +73,13 @@ onUnmounted(() => {
     cancelAnimationFrame(resizeRaf)
     resizeRaf = null
   }
+  if (openRaf) {
+    cancelAnimationFrame(openRaf)
+    openRaf = null
+  }
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
-  }
-  if (autoScrollTimer) {
-    window.clearInterval(autoScrollTimer)
-    autoScrollTimer = null
   }
   if (ws) {
     ws.onopen = null
@@ -95,13 +93,6 @@ onUnmounted(() => {
     terminal.dispose()
   }
 })
-
-watch(
-  () => props.autoScrollSeconds,
-  () => {
-    configureAutoScroll()
-  }
-)
 
 function initTerminal() {
   terminal = new Terminal({
@@ -135,19 +126,6 @@ function initTerminal() {
   openIfPossible()
 }
 
-function configureAutoScroll() {
-  if (autoScrollTimer) {
-    window.clearInterval(autoScrollTimer)
-    autoScrollTimer = null
-  }
-  const seconds = Number(props.autoScrollSeconds || 0)
-  if (!Number.isFinite(seconds) || seconds <= 0) return
-  const ms = Math.max(1000, Math.floor(seconds * 1000))
-  autoScrollTimer = window.setInterval(() => {
-    scrollToBottom({ alsoFit: false })
-  }, ms)
-}
-
 function connectWebSocket() {
   if (destroyed) return
   emit('connection-change', 'connecting')
@@ -178,12 +156,9 @@ function connectWebSocket() {
     didReportDisconnect = false
     reconnectAttempts = 0
     decoder = new TextDecoder('utf-8')
-    pendingScrollback = true
-    isReadOnly.value = false
-    didShowReadOnlyNotice = false
+    acaNoiseCarry = ''
     // 确保在可见尺寸下先 fit，再同步到后端（避免光标/换行错位）
     handleResize()
-    configureAutoScroll()
   }
 
   ws.onmessage = (event) => {
@@ -193,6 +168,12 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     console.log('WebSocket disconnected')
+    if (terminal) {
+      const residual = flushACANoiseCarry()
+      if (residual) {
+        terminal.write(residual)
+      }
+    }
     emit('connection-change', 'disconnected')
     scheduleReconnect()
   }
@@ -224,23 +205,61 @@ function scheduleReconnect() {
   }, delayMs)
 }
 
+function stripACAInternalNoise(text: string) {
+  if (!text) return ''
+  return text.replace(ACA_INTERNAL_LINE_RE, '$1')
+}
+
+function isPotentialACAInternalFragment(text: string) {
+  const candidate = text.trim()
+  if (!candidate) return false
+  return candidate.includes('__ACA_CMD_')
+    || candidate.includes('ACA_CODE=$?')
+    || candidate.includes('ACA_EOF_')
+    || candidate.includes("echo '__ACA_CMD_BEGIN_")
+    || candidate.includes("bash <<'ACA_EOF_")
+}
+
+function consumeSanitizedACAChunk(chunk: string) {
+  if (!chunk) return ''
+  const merged = acaNoiseCarry + chunk
+  acaNoiseCarry = ''
+
+  const lines = merged.split('\n')
+  const tail = lines.pop() ?? ''
+
+  let out = ''
+  for (const line of lines) {
+    out += stripACAInternalNoise(line + '\n')
+  }
+
+  if (isPotentialACAInternalFragment(tail)) {
+    acaNoiseCarry = tail
+  } else {
+    out += stripACAInternalNoise(tail)
+  }
+
+  if (acaNoiseCarry.length > 512) {
+    out += stripACAInternalNoise(acaNoiseCarry)
+    acaNoiseCarry = ''
+  }
+
+  return out
+}
+
+function flushACANoiseCarry() {
+  if (!acaNoiseCarry) return ''
+  const out = stripACAInternalNoise(acaNoiseCarry)
+  acaNoiseCarry = ''
+  return out
+}
+
 function handleMessage(msg: any) {
   switch (msg.type) {
     case 'ready':
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
-        const status = String(msg.metadata?.status || '').trim()
-        if (status && status !== 'running') {
-          isReadOnly.value = true
-          if (terminal && !didShowReadOnlyNotice) {
-            terminal.write('\r\n\x1b[33m[只读] 会话未运行，当前为历史回放模式（输入已禁用）。\x1b[0m\r\n')
-            didShowReadOnlyNotice = true
-          }
-        }
       }
-      // Server sends a scrollback snapshot right after ready. On reconnect, avoid duplicating output:
-      // clear local buffer and rehydrate from the snapshot (keeps "log context" while staying deterministic).
-      pendingScrollback = true
       if (isDemoMode.value && terminal && !didShowDemoNotice) {
         terminal.write('\r\n\x1b[33m[演示模式] 终端只读，已禁用输入。\x1b[0m\r\n')
         didShowDemoNotice = true
@@ -251,19 +270,14 @@ function handleMessage(msg: any) {
       if (terminal && msg.data) {
         // 使用 TextDecoder stream 模式，避免 UTF-8 分片导致乱码
         const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))
-        const text = decoder.decode(bytes, { stream: true })
-        if (pendingScrollback) {
-          pendingScrollback = false
-          try {
-            terminal.clear()
-          } catch {
-            // ignore
-          }
+        const decoded = decoder.decode(bytes, { stream: true })
+        const sanitized = consumeSanitizedACAChunk(decoded)
+        if (!sanitized) {
+          return
         }
-        terminal.write(text, () => {
-          const shouldAutoScroll = Number(props.autoScrollSeconds || 0) > 0
-          if (shouldAutoScroll || !didInitialScroll) {
-            scrollToBottom({ alsoFit: false })
+        terminal.write(sanitized, () => {
+          if (!didInitialScroll) {
+            terminal?.scrollToBottom()
             didInitialScroll = true
           }
         })
@@ -273,14 +287,6 @@ function handleMessage(msg: any) {
     case 'metadata':
       if (msg.metadata) {
         emit('metadata-update', msg.metadata)
-        const status = String(msg.metadata?.status || '').trim()
-        if (status && status !== 'running') {
-          isReadOnly.value = true
-          if (terminal && !didShowReadOnlyNotice) {
-            terminal.write('\r\n\x1b[33m[只读] 会话未运行，当前为历史回放模式（输入已禁用）。\x1b[0m\r\n')
-            didShowReadOnlyNotice = true
-          }
-        }
       }
       break
 
@@ -334,7 +340,6 @@ function handleMessage(msg: any) {
 
 function sendInput(data: string) {
   if (isDemoMode.value) return
-  if (isReadOnly.value) return
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
       // 使用 TextEncoder 正确编码 UTF-8，并避免长粘贴触发展开参数上限
@@ -351,28 +356,8 @@ function sendInput(data: string) {
   }
 }
 
-function scrollToBottom(options?: { alsoFit?: boolean }) {
-  if (!terminal) return
-  if (options?.alsoFit) {
-    handleResize()
-  }
-  terminal.scrollToBottom()
-}
-
-function forceReconnect() {
-  if (destroyed) return
-  if (reconnectTimer) {
-    window.clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  reconnectAttempts = 0
-  didReportDisconnect = false
-  connectWebSocket()
-}
-
 function sendKeyAction(action: string) {
   if (isDemoMode.value) return
-  if (isReadOnly.value) return
   if (!action) return
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
@@ -405,11 +390,10 @@ function handleResize() {
     resizeRaf = null
     const { clientWidth, clientHeight } = terminalRef.value!
     if (clientWidth === 0 || clientHeight === 0) return
-    fitAddon?.fit()
     try {
-      terminal?.refresh(0, Math.max(0, (terminal?.rows || 1) - 1))
+      fitAddon?.fit()
     } catch {
-      // ignore
+      // xterm 在容器尺寸突变时可能短暂抛错，忽略并等待下一次 resize。
     }
   })
 }
@@ -423,9 +407,21 @@ function openIfPossible() {
   didOpen = true
 
   // 先 fit 一次再聚焦，减少初次渲染/输入错位
-  fitAddon?.fit()
+  try {
+    fitAddon?.fit()
+  } catch {
+    // Ignore transient fit errors during mount/layout.
+  }
   // 布局/字体渲染在某些浏览器上可能晚一帧稳定，补一次 fit
-  requestAnimationFrame(() => fitAddon?.fit())
+  openRaf = requestAnimationFrame(() => {
+    openRaf = null
+    if (destroyed || !didOpen) return
+    try {
+      fitAddon?.fit()
+    } catch {
+      // Ignore transient fit errors during mount/layout.
+    }
+  })
   focusTerminal()
 }
 
@@ -447,9 +443,7 @@ defineExpose({
   sendInput,
   sendKeyAction,
   focus: focusTerminal,
-  fit: handleResize,
-  scrollToBottom: () => scrollToBottom({ alsoFit: true }),
-  reconnect: forceReconnect
+  fit: handleResize
 })
 </script>
 
@@ -457,7 +451,6 @@ defineExpose({
 .terminal {
   height: 100%;
   padding: 4px;
-  box-sizing: border-box;
 }
 
 :deep(.xterm) {

@@ -27,11 +27,14 @@ AISWS-ACA 是 AISWS（AI SUPER WORKSTATION / AI超站）品牌下的开源项目
 ## 3) 运维与工作流（Ops）
 
 - `docs/ops/ops-workflow-design.md`：Runbook / 工作流节点设计（含 WeDo 风格组合节点）
+- `docs/ops/GITHUB_INIT_ITERATION_PLAN.md`：`github-init` 门禁迭代总计划（S0-S7）
+- `docs/ops/GITHUB_INIT_RISK_REGISTER.md`：`github-init` 风险台账（含缓解策略与状态）
+- `docs/ops/GITHUB_INIT_ITERATION_LOG.md`：`github-init` 分步迭代日志（承上启下记录）
+- `docs/ops/GITHUB_INIT_DEPLOYMENT_TRACE.md`：`34007` 部署追踪记录（版本核对）
 
 ## 4) 研发与交付（Engineering）
 
 - `docs/engineering/ARCHITECTURE.md`：系统架构与关键流程概览
-- `docs/engineering/CLI_SESSION_MANAGEMENT.md`：Claude/Codex CLI 会话（session/resume）统一管理 MVP 方案
 - `docs/engineering/DEVELOPMENT.md`：本地开发/构建/调试指南
 - `docs/engineering/DEPLOYMENT.md`：部署、升级与备份指南
 - `docs/engineering/SCRIPTS.md`：脚本使用说明（Quickstart/开发启动等）

@@ -99,7 +99,7 @@ func TestResetData_ClearsBusinessTablesButKeepsUsersAndBuiltinTemplates(t *testi
 	aiSession := model.AISession{
 		ID:         aiSessionID,
 		TerminalID: terminalID,
-		TaskID:     taskID,
+		TaskID:     &taskID,
 		AIType:     "claude-code",
 		State:      "waiting_approval",
 		CreatedAt:  now,

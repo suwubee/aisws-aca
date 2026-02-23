@@ -1,7 +1,7 @@
 <template>
   <div class="dashboard">
     <!-- Top Row: Quick Stats -->
-    <div class="dashboard-row stats-row" v-if="!isMobile">
+    <div class="dashboard-row stats-row">
       <!-- Task Stats -->
       <n-card class="stat-card" size="small" @click="$router.push('/tasks')">
         <div class="stat-content">
@@ -87,7 +87,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useTaskStore } from '@/stores/task'
 import { useServerStore } from '@/stores/server'
 import { useTerminalStore } from '@/stores/terminal'
-import { useIsMobile } from '@/utils/useIsMobile'
+import { ensureWorkbenchTerminal } from '@/utils/workbenchTerminal'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import TaskForm from '@/components/TaskForm.vue'
 
@@ -99,7 +99,6 @@ const taskStore = useTaskStore()
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()
 const isDemoMode = computed(() => authStore.isDemoMode)
-const { isMobile } = useIsMobile()
 
 const showCreateTask = ref(false)
 const newTask = reactive({
@@ -158,14 +157,6 @@ watch(
   }
 )
 
-watch(
-  () => route.query.create_task,
-  () => {
-    void applyCreateTaskQuery()
-  },
-  { immediate: true }
-)
-
 async function applyTerminalQuery() {
   const terminalId = String(route.query.terminal || '').trim()
   if (!terminalId) return
@@ -207,16 +198,6 @@ async function applyTerminalQuery() {
   router.replace({ path: route.path, query: nextQuery })
 }
 
-async function applyCreateTaskQuery() {
-  const flag = String(route.query.create_task || '').trim()
-  if (!flag) return
-  showCreateTask.value = true
-
-  const nextQuery = { ...route.query }
-  delete (nextQuery as any).create_task
-  router.replace({ path: route.path, query: nextQuery })
-}
-
 async function handleCreateTask() {
   if (isDemoMode.value) {
     message.warning('演示模式：只读')
@@ -238,6 +219,12 @@ async function handleCreateTask() {
   }
 
   try {
+    const taskDraft = {
+      title: newTask.title,
+      automation_mode: newTask.automation_mode,
+      server_id: newTask.server_id,
+      target_server_ids: [...newTask.target_server_ids]
+    }
     const task = await taskStore.createAutomationTask({
       title: newTask.title,
       description: newTask.description,
@@ -261,6 +248,7 @@ async function handleCreateTask() {
     message.success('任务创建成功')
     showCreateTask.value = false
 
+    let startedTerminalId = ''
     const canAutoStart = newTask.auto_start && (() => {
       if (newTask.automation_mode === 'none') return false
       if (newTask.automation_mode === 'script') return Boolean(newTask.script?.trim())
@@ -272,6 +260,7 @@ async function handleCreateTask() {
       try {
         const result = await taskStore.startTask(task.id)
         if (result.terminal_id) {
+          startedTerminalId = String(result.terminal_id || '').trim()
           await terminalStore.fetchTerminals()
           terminalStore.setActiveTerminal(result.terminal_id)
         }
@@ -283,6 +272,29 @@ async function handleCreateTask() {
       } catch {
         message.warning('任务创建成功，但自动启动失败')
       }
+    }
+
+    if (newTask.return_to_workbench && !startedTerminalId) {
+      try {
+        const fallbackTerminalId = await ensureWorkbenchTerminal({
+          taskId: task.id,
+          title: taskDraft.title,
+          automationMode: taskDraft.automation_mode,
+          serverId: taskDraft.server_id,
+          targetServerIds: taskDraft.target_server_ids,
+          createTerminal: terminalStore.createTerminal
+        })
+        if (fallbackTerminalId) {
+          startedTerminalId = fallbackTerminalId
+          message.success('已创建工作台终端')
+        }
+      } catch {
+        message.warning('任务已创建，但工作台终端创建失败')
+      }
+    }
+
+    if (startedTerminalId) {
+      terminalStore.setActiveTerminal(startedTerminalId)
     }
 
     // 重置表单
@@ -340,10 +352,6 @@ async function handleCreateTask() {
     padding: 8px;
     gap: 8px;
     overflow: auto;
-  }
-
-  .stats-row {
-    display: none;
   }
 
   .stats-row {

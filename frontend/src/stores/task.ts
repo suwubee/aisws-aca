@@ -33,12 +33,6 @@ export interface Task {
   ai_prompt?: string
   ai_end_condition?: string
   ai_error_handling?: string
-  // AI运行状态
-  ai_status?: string
-  ai_pause_reason?: string
-
-  // AI任务绑定与终端管理
-  active_terminal_id?: string | null
 }
 
 export interface TerminalSession {
@@ -60,18 +54,6 @@ export interface TaskDetail {
   terminals: TerminalSession[]
   logs: any[]
   approvals: any[]
-}
-
-export interface AISession {
-  id: string
-  terminal_id: string
-  task_id: string
-  ai_type: string
-  state: string
-  session_id: string
-  session_file: string
-  created_at: string
-  updated_at: string
 }
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived'
@@ -129,43 +111,8 @@ export const useTaskStore = defineStore('task', () => {
     return data
   }
 
-  async function listAISessions(taskId: string): Promise<AISession[]> {
-    const { data } = await taskApi.listAISessions(taskId)
-    return data.items || []
-  }
-
-  async function resumeAISession(taskId: string, aiSessionId: string) {
-    const { data } = await taskApi.resumeAISession(taskId, aiSessionId)
-    await fetchTasks()
-    return data
-  }
-
-  async function collectAISessions(taskId: string, params?: { tool?: string; limit?: number }) {
-    const { data } = await taskApi.collectAISessions(taskId, params || {})
-    await fetchTasks()
-    return data
-  }
-
   async function startTask(id: string) {
     const { data } = await taskApi.start(id)
-    await fetchTasks()
-    return data
-  }
-
-  async function bindTerminal(taskId: string, terminalId: string) {
-    const { data } = await taskApi.bindTerminal(taskId, terminalId)
-    await fetchTasks()
-    return data
-  }
-
-  async function pauseAI(id: string) {
-    const { data } = await taskApi.pauseAI(id)
-    await fetchTasks()
-    return data
-  }
-
-  async function resumeAI(id: string) {
-    const { data } = await taskApi.resumeAI(id)
     await fetchTasks()
     return data
   }
@@ -207,13 +154,7 @@ export const useTaskStore = defineStore('task', () => {
     deleteTask,
     moveTask,
     getTaskDetail,
-    listAISessions,
-    resumeAISession,
-    collectAISessions,
     startTask,
-    bindTerminal,
-    pauseAI,
-    resumeAI,
     createAutomationTask
   }
 })

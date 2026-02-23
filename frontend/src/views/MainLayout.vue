@@ -32,11 +32,11 @@
 
     <!-- 主内容区 -->
     <n-layout>
-	      <n-layout-header class="header">
-	        <div class="header-left">
-	          <n-button
-	            v-if="isMobile"
-	            quaternary
+      <n-layout-header class="header">
+        <div class="header-left">
+          <n-button
+            v-if="isMobile"
+            quaternary
             size="small"
             class="mobile-menu-btn"
             @click="showMobileMenu = true"
@@ -53,29 +53,35 @@
             <n-breadcrumb-item v-if="currentPageName">
               {{ currentPageName }}
             </n-breadcrumb-item>
-	            </n-breadcrumb>
-	        </div>
-	        <div v-if="isMobile && !isDemoMode" class="header-center">
-	          <n-button
-	            quaternary
-	            size="small"
-	            class="mobile-create-task-btn"
-	            title="新建任务"
-	            @click="openCreateTaskFromHeader"
-	          >
-	            ➕
-	          </n-button>
-	        </div>
-	        <div class="header-right">
-	          <n-space align="center">
-	            <n-tag
-	              v-if="isDemoMode"
+          </n-breadcrumb>
+        </div>
+        <div class="header-right">
+          <n-space align="center">
+            <n-tag
+              v-if="isDemoMode"
               size="small"
               type="warning"
               :bordered="false"
             >
               演示模式
             </n-tag>
+            <n-tooltip v-if="runtimeInfo" trigger="hover" placement="bottom-end">
+              <template #trigger>
+                <n-tag size="small" type="info" :bordered="false" class="runtime-tag">
+                  {{ runtimeLabel }}
+                </n-tag>
+              </template>
+              <div class="runtime-popover">
+                <div>版本: {{ runtimeInfo.version }}</div>
+                <div>分支: {{ runtimeInfo.git_branch }}</div>
+                <div>提交: {{ runtimeInfo.git_commit }}</div>
+                <div>构建时间: {{ runtimeInfo.build_time }}</div>
+                <div>进程: {{ runtimeInfo.pid }}</div>
+                <div>静态源: {{ runtimeInfo.static_source || 'unknown' }}</div>
+                <div>主资源: {{ runtimeAssetLabel }}</div>
+                <div>启动时间: {{ formatRuntimeTime(runtimeInfo.started_at) }}</div>
+              </div>
+            </n-tooltip>
             <ProjectContextSelector />
             <ApprovalCenter />
             <n-badge :value="unreadCount" :max="99" :show="unreadCount > 0">
@@ -139,6 +145,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/utils/useIsMobile'
 import ApprovalCenter from '@/components/ApprovalCenter.vue'
 import ProjectContextSelector from '@/components/ProjectContextSelector.vue'
+import type { RuntimeVersionInfo } from '@/api/types'
+import { automationApi, runtimeApi } from '@/api'
 import {
   NLayout,
   NLayoutSider,
@@ -154,10 +162,10 @@ import {
   NDrawerContent,
   NBreadcrumb,
   NBreadcrumbItem,
-  NTag
+  NTag,
+  NTooltip
 } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
-import { automationApi } from '@/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -165,6 +173,7 @@ const authStore = useAuthStore()
 
 const collapsed = ref(false)
 const unreadCount = ref(0)
+const runtimeInfo = ref<RuntimeVersionInfo | null>(null)
 const user = computed(() => authStore.user)
 const isDemoMode = computed(() => authStore.isDemoMode)
 const showMobileMenu = ref(false)
@@ -289,12 +298,27 @@ const baseMenuOptions: MenuOption[] = [
 ]
 
 const menuOptions = computed<MenuOption[]>(() => baseMenuOptions)
+const runtimeLabel = computed(() => {
+  const info = runtimeInfo.value
+  if (!info) return ''
+  const branch = info.git_branch || 'unknown'
+  const commit = info.git_commit && info.git_commit !== 'unknown'
+    ? info.git_commit.slice(0, 8)
+    : 'unknown'
+  return `${branch}@${commit}`
+})
+const runtimeAssetLabel = computed(() => {
+  const assets = runtimeInfo.value?.static_index_assets || []
+  return assets.length > 0 ? assets.join(', ') : '无'
+})
 
-	const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
-	  { key: 'dashboard', label: '工作台', icon: '🏠' },
-	  { key: 'terminals', label: '终端', icon: '🧪' },
-	  { key: 'settings', label: '设置', icon: '⚙️' }
-	]
+const mobileNavItems: Array<{ key: string; label: string; icon: string }> = [
+  { key: 'dashboard', label: '工作台', icon: '🏠' },
+  { key: 'work-items', label: '工作', icon: '📋' },
+  { key: 'kanban', label: '看板', icon: '📊' },
+  { key: 'terminals', label: '终端', icon: '🧪' },
+  { key: 'settings', label: '设置', icon: '⚙️' }
+]
 
 const userOptions = [
   { label: '个人信息', key: 'profile' },
@@ -336,21 +360,16 @@ const currentPageName = computed(() => {
   return null
 })
 
-	function handleMenuChange(key: string) {
-	  const target = leafMenu[key]
-	  if (!target) return
-	  router.push(target.path)
-	}
+function handleMenuChange(key: string) {
+  const target = leafMenu[key]
+  if (!target) return
+  router.push(target.path)
+}
 
-	function openCreateTaskFromHeader() {
-	  if (isDemoMode.value) return
-	  router.push({ path: '/', query: { create_task: '1' } })
-	}
-
-	function handleMobileMenuChange(key: string) {
-	  showMobileMenu.value = false
-	  handleMenuChange(key)
-	}
+function handleMobileMenuChange(key: string) {
+  showMobileMenu.value = false
+  handleMenuChange(key)
+}
 
 function handleUserAction(key: string) {
   if (key === 'logout') {
@@ -372,8 +391,25 @@ async function fetchUnreadCount() {
   }
 }
 
+async function fetchRuntimeInfo() {
+  try {
+    const { data } = await runtimeApi.getVersion()
+    runtimeInfo.value = data?.item || null
+  } catch {
+    runtimeInfo.value = null
+  }
+}
+
+function formatRuntimeTime(raw: string) {
+  if (!raw || raw === 'unknown') return raw || 'unknown'
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw
+  return date.toLocaleString()
+}
+
 onMounted(() => {
   authStore.fetchUser()
+  fetchRuntimeInfo()
   fetchUnreadCount()
   // 定期检查未读消息
   setInterval(fetchUnreadCount, 30000)
@@ -438,16 +474,15 @@ watch(isMobile, (mobile) => {
   color: #18a058;
 }
 
-	.header {
-	  height: var(--app-header-height);
-	  padding: 0 20px;
-	  display: flex;
-	  align-items: center;
-	  justify-content: space-between;
-	  position: relative;
-	  background: rgba(22, 33, 62, 0.95);
-	  border-bottom: 1px solid #334155;
-	}
+.header {
+  height: var(--app-header-height);
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(22, 33, 62, 0.95);
+  border-bottom: 1px solid #334155;
+}
 
 .header-left {
   display: flex;
@@ -474,32 +509,29 @@ watch(isMobile, (mobile) => {
   margin-left: 8px;
 }
 
-	.header-right {
-	  display: flex;
-	  align-items: center;
-	}
+.header-right {
+  display: flex;
+  align-items: center;
+}
 
-	.header-center {
-	  position: absolute;
-	  left: 50%;
-	  top: 50%;
-	  transform: translate(-50%, -50%);
-	  display: flex;
-	  align-items: center;
-	  justify-content: center;
-	  z-index: 1;
-	}
+.runtime-tag {
+  cursor: default;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
 
-	.mobile-create-task-btn {
-	  font-size: 16px;
-	  line-height: 1;
-	}
+.runtime-popover {
+  min-width: 260px;
+  max-width: 440px;
+  font-size: 12px;
+  line-height: 1.55;
+  word-break: break-all;
+}
 
-	.content {
-	  background: #0f1419;
-	  min-height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
-	  padding-bottom: calc(var(--app-bottom-nav-height) + env(safe-area-inset-bottom));
-	}
+.content {
+  background: #0f1419;
+  min-height: calc(100vh - var(--app-header-height) - var(--app-bottom-nav-height));
+  padding-bottom: calc(var(--app-bottom-nav-height) + env(safe-area-inset-bottom));
+}
 
 .mobile-bottom-nav {
   position: fixed;

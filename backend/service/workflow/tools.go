@@ -83,9 +83,14 @@ func GetAvailableTools() []ToolDefinition {
 			Name:        "execute_command",
 			Description: "在服务器上执行命令（不允许隐式本地执行；必须显式选择服务器，本地也需要作为服务器记录配置）",
 			Parameters: map[string]ToolParam{
-				"command":   {Type: "string", Description: "要执行的命令"},
-				"server_id": {Type: "string", Description: "目标服务器ID（可选，不填则使用当前选择的服务器）"},
-				"work_dir":  {Type: "string", Description: "工作目录（可选）"},
+				"command":                 {Type: "string", Description: "要执行的命令"},
+				"server_id":               {Type: "string", Description: "目标服务器ID（可选，不填则使用当前选择的服务器）"},
+				"work_dir":                {Type: "string", Description: "工作目录（可选）"},
+				"run_review":              {Type: "boolean", Description: "是否在主命令后启动并行 review 子执行（可选）", Default: false},
+				"review_command":          {Type: "string", Description: "review 子执行命令（可选）"},
+				"review_command_template": {Type: "string", Description: "review 命令模板，可用变量 {{command}}/{{server_id}}/{{work_dir}}（可选）"},
+				"review_work_dir":         {Type: "string", Description: "review 工作目录（可选，默认沿用 work_dir）"},
+				"review_cli_type":         {Type: "string", Description: "review 执行器标识（claude/codex/gemini/shell，可选）"},
 			},
 			Required: []string{"command"},
 		},
@@ -179,24 +184,22 @@ type CompleteCall struct {
 	Summary string `json:"summary"`
 }
 
-var (
-	thoughtTagRe  = regexp.MustCompile(`(?is)<thought>\s*(.*?)\s*</thought>`)
-	actionTagRe   = regexp.MustCompile(`(?is)<action>\s*(.*?)\s*</action>`)
-	completeTagRe = regexp.MustCompile(`(?is)<complete>\s*(.*?)\s*</complete>`)
-)
-
 // ParseAIResponse parses AI response in ReAct format
 func ParseAIResponse(response string) (*ParsedResponse, error) {
 	result := &ParsedResponse{RawContent: response}
 
-	// Extract thought (case-insensitive, tolerant to whitespace/newlines)
-	if m := thoughtTagRe.FindStringSubmatch(response); len(m) > 1 {
-		result.Thought = strings.TrimSpace(m[1])
+	// Extract thought
+	thoughtStart := strings.Index(response, "<thought>")
+	thoughtEnd := strings.Index(response, "</thought>")
+	if thoughtStart != -1 && thoughtEnd != -1 && thoughtEnd > thoughtStart {
+		result.Thought = strings.TrimSpace(response[thoughtStart+9 : thoughtEnd])
 	}
 
 	// Check for complete tag first
-	if m := completeTagRe.FindStringSubmatch(response); len(m) > 1 {
-		completeBody := strings.TrimSpace(m[1])
+	completeStart := strings.Index(response, "<complete>")
+	completeEnd := strings.Index(response, "</complete>")
+	if completeStart != -1 && completeEnd != -1 && completeEnd > completeStart {
+		completeBody := strings.TrimSpace(response[completeStart+10 : completeEnd])
 		var complete CompleteCall
 
 		// 1) 标准 JSON
@@ -224,85 +227,292 @@ func ParseAIResponse(response string) (*ParsedResponse, error) {
 	}
 
 	// Extract action
-	if m := actionTagRe.FindStringSubmatch(response); len(m) > 1 {
-		actionJSON := strings.TrimSpace(m[1])
-		var action ActionCall
-
-		// 1) 标准 JSON
-		if err := json.Unmarshal([]byte(actionJSON), &action); err == nil {
-			result.Action = &action
-			return result, nil
+	actionStart := strings.Index(response, "<action>")
+	actionEnd := strings.Index(response, "</action>")
+	if actionStart != -1 && actionEnd != -1 && actionEnd > actionStart {
+		actionBody := strings.TrimSpace(response[actionStart+8 : actionEnd])
+		action, err := parseActionCall(actionBody)
+		if err != nil {
+			return result, fmt.Errorf("invalid action JSON: %w", err)
 		}
-
-		// 2) 宽松解析：尝试从文本中提取 JSON 对象（例如 ```json ...``` 或混入多余文本）
-		if obj := extractJSONObject(actionJSON); obj != "" {
-			if err := json.Unmarshal([]byte(obj), &action); err == nil {
-				result.Action = &action
-				return result, nil
-			}
-		}
-
-		return result, fmt.Errorf("invalid action JSON")
-	}
-
-	// Fallback: Some models may output a raw JSON object without <action>/<complete> tags.
-	// Try to interpret it as either an ActionCall or CompleteCall (or a wrapper with "action"/"complete").
-	if obj := extractJSONObject(response); obj != "" {
-		var action ActionCall
-		if err := json.Unmarshal([]byte(obj), &action); err == nil && strings.TrimSpace(action.Tool) != "" {
-			if action.Args == nil {
-				action.Args = map[string]any{}
-			}
-			result.Action = &action
-			return result, nil
-		}
-
-		var complete CompleteCall
-		if err := json.Unmarshal([]byte(obj), &complete); err == nil && (strings.TrimSpace(complete.Status) != "" || strings.TrimSpace(complete.Summary) != "") {
-			if strings.TrimSpace(complete.Status) == "" {
-				complete.Status = "success"
-			}
-			result.Complete = &complete
-			return result, nil
-		}
-
-		var wrapper map[string]any
-		if err := json.Unmarshal([]byte(obj), &wrapper); err == nil {
-			if rawAction, ok := wrapper["action"].(map[string]any); ok {
-				tool, _ := rawAction["tool"].(string)
-				tool = strings.TrimSpace(tool)
-				if tool != "" {
-					args, _ := rawAction["args"].(map[string]any)
-					if args == nil {
-						args = map[string]any{}
-					}
-					result.Action = &ActionCall{Tool: tool, Args: args}
-					return result, nil
-				}
-			}
-			if rawComplete, ok := wrapper["complete"].(map[string]any); ok {
-				status, _ := rawComplete["status"].(string)
-				summary, _ := rawComplete["summary"].(string)
-				status = strings.TrimSpace(status)
-				summary = strings.TrimSpace(summary)
-				if status != "" || summary != "" {
-					if status == "" {
-						status = "success"
-					}
-					result.Complete = &CompleteCall{Status: status, Summary: summary}
-					return result, nil
-				}
-			}
-		}
+		result.Action = action
 	}
 
 	return result, nil
 }
 
+var (
+	trailingCommaJSONRE = regexp.MustCompile(`,(\s*[}\]])`)
+	bareKeyJSONRE       = regexp.MustCompile(`([{\[,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)`)
+	singleQuotedJSONRE  = regexp.MustCompile(`'([^'\\]*(?:\\.[^'\\]*)*)'`)
+	toolLineRE          = regexp.MustCompile(`(?i)\btool\b\s*[:=]\s*["']?([a-zA-Z0-9_]+)["']?`)
+)
+
+func parseActionCall(raw string) (*ActionCall, error) {
+	candidates := collectActionCandidates(raw)
+	var lastErr error
+	for _, candidate := range candidates {
+		if action, err := decodeActionCall(candidate); err == nil {
+			return action, nil
+		} else {
+			lastErr = err
+		}
+
+		normalized := normalizeJSONLike(candidate)
+		if normalized != candidate {
+			if action, err := decodeActionCall(normalized); err == nil {
+				return action, nil
+			} else {
+				lastErr = err
+			}
+		}
+	}
+
+	if action, ok := parseMinimalAction(raw); ok {
+		return action, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unsupported action payload")
+	}
+	return nil, lastErr
+}
+
+func collectActionCandidates(raw string) []string {
+	out := make([]string, 0, 4)
+	seen := map[string]struct{}{}
+	push := func(value string) {
+		v := strings.TrimSpace(value)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	push(raw)
+	stripped := stripMarkdownCodeFence(raw)
+	push(stripped)
+	push(extractJSONObject(raw))
+	push(extractJSONObject(stripped))
+	return out
+}
+
+func decodeActionCall(raw string) (*ActionCall, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty action payload")
+	}
+
+	var direct ActionCall
+	if err := json.Unmarshal([]byte(trimmed), &direct); err == nil && strings.TrimSpace(direct.Tool) != "" {
+		if direct.Args == nil {
+			direct.Args = map[string]any{}
+		}
+		direct.Tool = strings.TrimSpace(direct.Tool)
+		return &direct, nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return nil, err
+	}
+
+	if action, ok := actionCallFromMap(payload); ok {
+		return action, nil
+	}
+	if nested, ok := payload["action"].(map[string]any); ok {
+		if action, ok := actionCallFromMap(nested); ok {
+			return action, nil
+		}
+	}
+
+	return nil, fmt.Errorf("missing tool field")
+}
+
+func actionCallFromMap(payload map[string]any) (*ActionCall, bool) {
+	if payload == nil {
+		return nil, false
+	}
+
+	tool := strings.TrimSpace(getStringFromAnyMap(payload, "tool"))
+	if tool == "" {
+		tool = strings.TrimSpace(getStringFromAnyMap(payload, "name"))
+	}
+	if tool == "" {
+		return nil, false
+	}
+
+	args := map[string]any{}
+	switch rawArgs := payload["args"].(type) {
+	case map[string]any:
+		args = rawArgs
+	case map[string]string:
+		converted := make(map[string]any, len(rawArgs))
+		for k, v := range rawArgs {
+			converted[k] = v
+		}
+		args = converted
+	case string:
+		argText := strings.TrimSpace(rawArgs)
+		if argText != "" {
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(normalizeJSONLike(argText)), &decoded); err == nil {
+				args = decoded
+			}
+		}
+	case nil:
+		// keep empty map
+	default:
+		if m, ok := rawArgs.(map[string]any); ok {
+			args = m
+		}
+	}
+
+	return &ActionCall{
+		Tool: tool,
+		Args: args,
+	}, true
+}
+
+func getStringFromAnyMap(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, ok := m[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", value)
+}
+
+func parseMinimalAction(raw string) (*ActionCall, bool) {
+	trimmed := strings.TrimSpace(stripMarkdownCodeFence(raw))
+	if trimmed == "" {
+		return nil, false
+	}
+
+	match := toolLineRE.FindStringSubmatch(trimmed)
+	if len(match) < 2 {
+		return nil, false
+	}
+	tool := strings.TrimSpace(match[1])
+	if tool == "" {
+		return nil, false
+	}
+
+	args := map[string]any{}
+	lower := strings.ToLower(trimmed)
+	if idx := strings.Index(lower, "args"); idx >= 0 {
+		if obj := extractJSONObject(trimmed[idx:]); obj != "" {
+			var parsed map[string]any
+			if err := json.Unmarshal([]byte(normalizeJSONLike(obj)), &parsed); err == nil {
+				args = parsed
+			}
+		}
+	}
+
+	return &ActionCall{Tool: tool, Args: args}, true
+}
+
+func stripMarkdownCodeFence(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+
+	body := strings.TrimPrefix(trimmed, "```")
+	body = strings.TrimSpace(body)
+	if idx := strings.Index(body, "\n"); idx >= 0 {
+		firstLine := strings.TrimSpace(body[:idx])
+		if !strings.HasPrefix(firstLine, "{") && !strings.HasPrefix(firstLine, "[") {
+			body = body[idx+1:]
+		}
+	}
+
+	if end := strings.LastIndex(body, "```"); end >= 0 {
+		body = body[:end]
+	}
+	return strings.TrimSpace(body)
+}
+
+func normalizeJSONLike(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	trimmed = strings.TrimPrefix(trimmed, "\ufeff")
+	replacer := strings.NewReplacer(
+		"“", "\"",
+		"”", "\"",
+		"‘", "'",
+		"’", "'",
+	)
+	normalized := replacer.Replace(trimmed)
+	normalized = trailingCommaJSONRE.ReplaceAllString(normalized, "$1")
+	normalized = bareKeyJSONRE.ReplaceAllString(normalized, `$1"$2"$3`)
+	normalized = singleQuotedJSONRE.ReplaceAllStringFunc(normalized, func(match string) string {
+		if len(match) < 2 {
+			return match
+		}
+		content := match[1 : len(match)-1]
+		content = strings.ReplaceAll(content, `"`, `\"`)
+		return `"` + content + `"`
+	})
+	normalized = trailingCommaJSONRE.ReplaceAllString(normalized, "$1")
+	return strings.TrimSpace(normalized)
+}
+
 func extractJSONObject(s string) string {
 	start := strings.Index(s, "{")
+	if start < 0 {
+		return ""
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inString = true
+			continue
+		}
+		if ch == '{' {
+			depth++
+			continue
+		}
+		if ch == '}' {
+			depth--
+			if depth == 0 {
+				return strings.TrimSpace(s[start : i+1])
+			}
+		}
+	}
+
+	// fallback: best-effort slice
 	end := strings.LastIndex(s, "}")
-	if start < 0 || end < 0 || end <= start {
+	if end <= start {
 		return ""
 	}
 	return strings.TrimSpace(s[start : end+1])
@@ -328,6 +538,7 @@ func FormatToolsForPrompt() (string, error) {
 
 func FormatToolsForPromptWithTemplate(templateKey string, extraVars map[string]any) (string, error) {
 	tools := GetAvailableTools()
+	tools = filterToolsForPrompt(tools, extraVars)
 
 	type promptParam struct {
 		Name        string
@@ -391,4 +602,94 @@ func FormatToolsForPromptWithTemplate(templateKey string, extraVars map[string]a
 	}
 
 	return promptsvc.RenderTemplate(key, vars)
+}
+
+func filterToolsForPrompt(tools []ToolDefinition, extraVars map[string]any) []ToolDefinition {
+	if len(tools) == 0 || extraVars == nil {
+		return tools
+	}
+
+	allowed := mergeToolNameSets(
+		readToolNameSet(extraVars, "allowed_tools"),
+		readToolNameSet(extraVars, "tool_whitelist"),
+	)
+	disabled := mergeToolNameSets(
+		readToolNameSet(extraVars, "disabled_tools"),
+		readToolNameSet(extraVars, "tool_blacklist"),
+		readToolNameSet(extraVars, "forbidden_tools"),
+	)
+
+	if len(allowed) == 0 && len(disabled) == 0 {
+		return tools
+	}
+
+	filtered := make([]ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		name := strings.ToLower(strings.TrimSpace(tool.Name))
+		if name == "" {
+			continue
+		}
+		if len(allowed) > 0 {
+			if _, ok := allowed[name]; !ok {
+				continue
+			}
+		}
+		if _, denied := disabled[name]; denied {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
+}
+
+func mergeToolNameSets(sets ...map[string]struct{}) map[string]struct{} {
+	merged := map[string]struct{}{}
+	for _, set := range sets {
+		for name := range set {
+			merged[name] = struct{}{}
+		}
+	}
+	return merged
+}
+
+func readToolNameSet(vars map[string]any, key string) map[string]struct{} {
+	out := map[string]struct{}{}
+	if vars == nil {
+		return out
+	}
+	raw, ok := vars[key]
+	if !ok || raw == nil {
+		return out
+	}
+
+	appendName := func(name string) {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized == "" {
+			return
+		}
+		out[normalized] = struct{}{}
+	}
+
+	switch value := raw.(type) {
+	case []string:
+		for _, item := range value {
+			appendName(item)
+		}
+	case []any:
+		for _, item := range value {
+			if s, ok := item.(string); ok {
+				appendName(s)
+			}
+		}
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return out
+		}
+		for _, part := range strings.Split(trimmed, ",") {
+			appendName(part)
+		}
+	}
+
+	return out
 }
